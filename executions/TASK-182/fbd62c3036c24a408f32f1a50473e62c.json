@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "67ab3979beae68695bf596229359f9e9f10fc93e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-182",
+  "execution_id": "fbd62c3036c24a408f32f1a50473e62c",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-182",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Reconcile the embedded CPython LICENSE.txt and pip 26.3 and vendored license files against the compliance snapshots and notices, updating them where needed; verify the new PBS third-party library provenance and license inventory.",
+    "Document the newly observed 3.12.16 ELF and ABI evidence in docs/RELEASE_PACKAGING.md and reconcile the native dependency declarations.",
+    "Exercise the generated Debian artifact with dpkg-deb in an environment where it is available, including relevant Debian negative tests.",
+    "Obtain a successful hosted CI result for the final exact checkpoint, then repeat build/prove and packaging checks on any modified checkpoint."
+  ],
+  "report_artifact": "executions/TASK-182/fbd62c3036c24a408f32f1a50473e62c.md",
+  "report_sha256": "735a2cff5bc0b1dc00fda2d294b600fcb7e18b5b6dae06461f9432720ae66035",
+  "resource_generation": "445de361a53cbaa26aa3ffc86086bd038913a6dc4ae67cb282e829424c3c3b04",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-182",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Reconcile the embedded CPython LICENSE.txt and pip 26.3 and vendored license files against the compliance snapshots and notices, updating them where needed; verify the new PBS third-party library provenance and license inventory.",
+      "Document the newly observed 3.12.16 ELF and ABI evidence in docs/RELEASE_PACKAGING.md and reconcile the native dependency declarations.",
+      "Exercise the generated Debian artifact with dpkg-deb in an environment where it is available, including relevant Debian negative tests.",
+      "Obtain a successful hosted CI result for the final exact checkpoint, then repeat build/prove and packaging checks on any modified checkpoint."
+    ],
+    "report": "This invocation reached its execution resource limit before the newly discovered embedded license inventory could be reconciled; dpkg-deb is unavailable locally and exact-checkpoint hosted CI was still running. Build and prove JSON are retained under /tmp/opencode/task182-standalone; A/B scie SHA-256 is c1de4a8b0ff1352dc363632b3c9dedea7835ce1169dfbe39cef8502f3747716b and wheel SHA-256 is 356fa8321912999f8664845b8897debd5f8dacdb30d73ecf54a48a630f307d3b.",
+    "summary": "Preserved the pinned CPython 3.12.16 standalone implementation and produced reproducible standalone, standalone distribution, Arch, and Debian artifacts. Inspected the embedded ELF payload and identified additional bundled pip 26.3 license material requiring compliance reconciliation."
+  },
+  "workspace_head": "3c130e187ad3a4bf4fd57c16353622bee4244740"
+}
