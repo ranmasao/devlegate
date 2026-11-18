@@ -149,6 +149,17 @@ def test_comparisons_and_report_provenance(tmp_path):
         )
         assert exchange(channel, {**request, "operation": "diff", "path": "../file"})[
             "status"] == "INVALID_PATH"
-        assert exchange(channel, {**request, "operation": "changes", "to": "WORKTREE"})[
-            "status"] == "WORKTREE_UNAVAILABLE"
+        worktree = exchange(channel, {
+            **request, "operation": "changes", "to": "WORKTREE",
+        })
+        assert worktree["status"] == "OK"
+        assert [record["path"] for record in worktree["records"]] == ["file"]
+        (tmp_path / "file").write_text("live\n")
+        (tmp_path / "untracked").write_text("new\n")
+        live = exchange(channel, {**request, "operation": "changes", "from": "HEAD",
+                                  "to": "WORKTREE"})
+        assert {record["path"] for record in live["records"]} == {"file", "untracked"}
+        patch = exchange(channel, {**request, "operation": "diff", "from": "HEAD",
+                                   "to": "WORKTREE", "path": "file"})
+        assert "-last\n" in patch["lines"] and "+live\n" in patch["lines"]
     assert "one explicit file" in comparison_tool(tmp_path / "socket", "token", "diff")
