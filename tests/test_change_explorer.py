@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
+import json
 import subprocess
 
 import pytest
@@ -95,3 +96,34 @@ def test_submodule_and_symlink_are_not_dereferenced(tmp_path):
     with pytest.raises(ObservationError, match="INVALID_PATH"):
         explorer.diff("BASE", "HEAD", "module/file")
     assert "+/outside/secret\n" in explorer.diff("BASE", "HEAD", "link")["lines"]
+
+
+def test_inventory_pages_bound_serialized_metadata(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "commit", "--allow-empty", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    directory = tmp_path
+    for _ in range(8):
+        directory = directory / ("long" * 45)
+        directory.mkdir()
+    for number in range(20):
+        (directory / f"{number:02}").write_text("value\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "checkpoint")
+    head = git(tmp_path, "rev-parse", "HEAD")
+    explorer = ImmutableExplorer(
+        tmp_path, RevisionNamespace(base, (Checkpoint(head, base),)), b"x" * 32
+    )
+    cursor = None
+    paths = []
+    while True:
+        page = explorer.changes("BASE", "HEAD", cursor)
+        encoded = json.dumps(page, ensure_ascii=True, separators=(",", ":")).encode()
+        assert len(encoded) <= 8192
+        paths.extend(record["path"] for record in page["records"])
+        if not page["has_more"]:
+            break
+        cursor = page["next_cursor"]
+    assert len(paths) == len(set(paths)) == 20
