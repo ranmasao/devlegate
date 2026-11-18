@@ -1,0 +1,34 @@
+{
+  "code_base_head": "a1377157695c166eda8e47d9b6a3d36879c7b279",
+  "conclusion": "incomplete",
+  "control_head": "8a7c1643c3875587f1a4224aa5ca655447ddefed",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-180",
+  "execution_id": "b3d9e9bd233b4441bf6caabe8e6190af",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-180",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run exact-checkpoint hosted CI against the implementation checkpoint through Devlegate integration."
+  ],
+  "report_artifact": "executions/TASK-180/b3d9e9bd233b4441bf6caabe8e6190af.md",
+  "report_sha256": "0abab7f7cccc3713eda760199210d4154e1cd1db9f72494e5fff0b7bb3824624",
+  "resource_generation": "cf5c20f3356c52243e486dba8b8847de44bcd1b8be38a4123be0769467e02c12",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-180",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run exact-checkpoint hosted CI against the implementation checkpoint through Devlegate integration."
+    ],
+    "report": "Hosted exact-checkpoint CI requires the Git checkpoint and integration lifecycle owned by Devlegate, which the worker contract prohibits this invocation from creating or managing.",
+    "summary": "Replaced the workspace inspection JSON grid with a grouped, blocker-first inventory of ticket identity, control binding, Git observations, and independent generation proofs. Documented the human view and added coverage for rendering and machine-output preservation."
+  },
+  "workspace_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f"
+}
