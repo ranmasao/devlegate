@@ -53,7 +53,7 @@ from devlegate.agent_protocol import (
     upgrade_project_templates,
 )
 from devlegate.change_channel import RevisionChannel
-from devlegate.change_revisions import RevisionNamespace
+from devlegate.change_revisions import RevisionUnavailable, proven_linear_history
 from devlegate.cleanup_dependency import (
     accepted_integration_dependency_reason,
     snapshot_integration,
@@ -5050,19 +5050,39 @@ class ServiceEngine:
                 # Resumed history needs independent checkpoint provenance; do
                 # not mistake Git parents or replay commits for worker sessions.
                 namespace = None
-                if (directive == WorkDirective.FRESH
-                        and workspace.head == workspace.base_head):
-                    try:
-                        prior = ExecutionReportStore(self.control_worktree).list(
-                            workspace.ticket_id
-                        )
-                        if not prior:
-                            namespace = RevisionNamespace(workspace.base_head, ())
-                    except (ExecutionReportError, OSError):
-                        pass  # Unprovable history stays unavailable.
+                try:
+                    prior = ExecutionReportStore(self.control_worktree).list(
+                        workspace.ticket_id
+                    )
+                    history_base, history_head = workspace.base_head, workspace.head
+                    if isinstance(rework, dict):
+                        previous = rework.get("previous_execution_id")
+                        matched = [report for report in prior
+                                   if report.execution_id == previous]
+                        if (len(matched) != 1
+                                or matched[0].workspace_head
+                                != rework.get("previous_report_checkpoint")
+                                or matched[0].code_base_head
+                                != rework.get("previous_base_head")
+                                or rework.get("admitted_base_head")
+                                != workspace.base_head):
+                            raise RevisionUnavailable("rework provenance unavailable")
+                        history_base = matched[0].code_base_head
+                        history_head = matched[0].workspace_head
+                        if history_head is None:
+                            raise RevisionUnavailable("checkpoint unavailable")
+                    namespace = proven_linear_history(
+                        workspace.path, history_base, history_head,
+                        prior, workspace.ticket_id, workspace.branch,
+                        current_base=workspace.base_head,
+                    )
+                except (ExecutionReportError, RevisionUnavailable, OSError):
+                    pass  # Unprovable history stays unavailable.
                 with tempfile.TemporaryDirectory(prefix="devlegate-explorer-") as root:
-                    with RevisionChannel(Path(root) / "read.sock", namespace,
-                                         explorer_authorized) as revisions:
+                    with RevisionChannel(
+                        Path(root) / "read.sock", namespace, explorer_authorized,
+                        workspace.path,
+                    ) as revisions:
                         worker_run = self._workers.run(
                             workspace,
                             prompt,
