@@ -88,6 +88,31 @@ actual embedded PBS archive, and `readelf -lW`, `-dW`, and `-VW` on the launcher
 `python/bin/python3.12`, `libpython3.12.so.1.0`, and the remaining PBS ELF files.
 Do not infer host dependencies merely from bundled library license records.
 
+For the 0.5.8 refresh, the executable's `SCIE=split` payload was separately
+inspected with PBS CPython 3.12.16 / 20261110 (archive SHA-256
+`6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39`).
+The ten non-symlink ELF files in the extracted PBS runtime were checked with
+`readelf -lW`, `-dW`, and `-VW`. The interpreter requests
+`/lib64/ld-linux-x86-64.so.2`; its direct dependencies are the glibc SONAMEs
+`libpthread.so.0`, `libdl.so.2`, `libutil.so.1`, `libm.so.6`, `librt.so.1`,
+and `libc.so.6`. Across the runtime the highest required glibc symbol is
+`GLIBC_2.17`; `_crypt` alone additionally needs host `libcrypt.so.1`, while
+`_tkinter` needs the included Tcl/Tk libraries. The separate scie-jump launcher
+remains the pinned 1.13.0 GNU asset and supplies the `GCC_4.2.0` requirement.
+These observations do not change the Git capability requirement or native
+dependency declarations below.
+
+An inventory of that split PBS payload also found `lib/python3.12/LICENSE.txt`
+(SHA-256 `3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf`)
+and pip 26.3 under `lib/python3.12/site-packages`. Its dist-info `licenses/`
+contains pip's license and authors file plus licenses for its vendored packages;
+the vendored package directories contain duplicate license texts. These are
+distinct from the PEX-vendored pip 20.3.4 record. The PEX itself contains the
+Devlegate wheel and bootstrap modules, while Science is a build-time input.
+The current compliance snapshot does not yet cover all of these PBS payload
+license files; a successful internal package validation alone is not a complete
+redistribution audit.
+
 | Logical requirement | Verified payload requirement | Arch declaration | Debian declaration |
 | --- | --- | --- | --- |
 | `gcc-unwind` | Launcher needs `libgcc_s.so.1`: `GCC_3.0`, `GCC_3.3`, `GCC_4.2.0` | `gcc-libs>=4.2.0` | `libgcc-s1 (>= 10)` |
