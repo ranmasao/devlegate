@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager, nullcontext
@@ -51,6 +52,8 @@ from devlegate.agent_protocol import (
     render_project,
     upgrade_project_templates,
 )
+from devlegate.change_channel import RevisionChannel
+from devlegate.change_revisions import RevisionNamespace
 from devlegate.cleanup_dependency import (
     accepted_integration_dependency_reason,
     snapshot_integration,
@@ -5001,20 +5004,55 @@ class ServiceEngine:
             try:
                 from devlegate.ticket_reset import ResetStop, poll_worker
 
-                worker_run = self._workers.run(
-                    workspace,
-                    prompt,
-                    execution_id=execution_id,
-                    stop_request=ResetStop(self, selected_ticket.id),
-                    owner_poll=lambda: poll_worker(self),
-                    identity_handler=self._record_worker_identity,
-                    interruption_handler=lambda kind: self._save_state(
-                        "agent_running", execution_interruption_kind=kind
-                    ),
-                    prompt_delivered_handler=lambda: self._record_prompt_delivery(
-                        prompt_artifact, execution_id, prompt_digest
-                    ),
-                )
+                directory = workspace.path.lstat()
+
+                def explorer_authorized():
+                    current = workspace.path.lstat()
+                    return (
+                        not workspace.path.is_symlink()
+                        and (current.st_dev, current.st_ino)
+                        == (directory.st_dev, directory.st_ino)
+                        and self._owned_execution_id == execution_id
+                        and self._state.get("phase") == "agent_running"
+                        and self._state.get("execution_id") == execution_id
+                        and self._state.get("execution_ticket_id")
+                        == workspace.ticket_id
+                        and self._state.get("execution_path") == str(workspace.path)
+                    )
+
+                # Resumed history needs independent checkpoint provenance; do
+                # not mistake Git parents or replay commits for worker sessions.
+                namespace = None
+                if (directive == WorkDirective.FRESH
+                        and workspace.head == workspace.base_head):
+                    try:
+                        prior = ExecutionReportStore(self.control_worktree).list(
+                            workspace.ticket_id
+                        )
+                        if not prior:
+                            namespace = RevisionNamespace(workspace.base_head, ())
+                    except (ExecutionReportError, OSError):
+                        pass  # Unprovable history stays unavailable.
+                with tempfile.TemporaryDirectory(prefix="devlegate-explorer-") as root:
+                    with RevisionChannel(Path(root) / "read.sock", namespace,
+                                         explorer_authorized) as revisions:
+                        worker_run = self._workers.run(
+                            workspace,
+                            prompt,
+                            execution_id=execution_id,
+                            stop_request=ResetStop(self, selected_ticket.id),
+                            owner_poll=lambda: poll_worker(self),
+                            revisions=revisions,
+                            identity_handler=self._record_worker_identity,
+                            interruption_handler=lambda kind: self._save_state(
+                                "agent_running", execution_interruption_kind=kind
+                            ),
+                            prompt_delivered_handler=(
+                                lambda: self._record_prompt_delivery(
+                                    prompt_artifact, execution_id, prompt_digest
+                                )
+                            ),
+                        )
             except WorkerAdmissionClosed:
                 self._execution_generation_binding().finish_operation(
                     "worker", {"admission_closed": True},
