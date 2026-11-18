@@ -60,8 +60,7 @@ def test_rejects_unsafe_paths(comparison, path):
 def test_unavailable_states_and_cursor_authentication(comparison):
     with pytest.raises(ObservationError, match="BINARY_DIFF_UNAVAILABLE"):
         comparison.diff("BASE", "HEAD", "binary")
-    with pytest.raises(ObservationError, match="WORKTREE_UNAVAILABLE"):
-        comparison.changes("HEAD", "WORKTREE")
+    assert comparison.changes("HEAD", "WORKTREE")["records"] == []
     cursor = comparison.changes("BASE", "HEAD")["next_cursor"]
     with pytest.raises(ObservationError, match="INVALID_CURSOR"):
         comparison.changes(
@@ -127,3 +126,72 @@ def test_inventory_pages_bound_serialized_metadata(tmp_path):
             break
         cursor = page["next_cursor"]
     assert len(paths) == len(set(paths)) == 20
+
+
+def test_worktree_index_untracked_and_stale_cursor(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "file").write_text("base\n")
+    (tmp_path / ".gitignore").write_text("ignored\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "file").write_text("staged\n")
+    git(tmp_path, "add", "file")
+    (tmp_path / "file").write_text("unstaged\n")
+    (tmp_path / "ignored").write_text("ignored\n")
+    for number in range(35):
+        (tmp_path / f"new-{number:02}").write_text("new\n")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    first = explorer.changes("HEAD", "WORKTREE")
+    second = explorer.changes("HEAD", "WORKTREE", first["next_cursor"])
+    paths = {item["path"] for item in first["records"] + second["records"]}
+    assert len(paths) == 36 and "ignored" not in paths
+    diff = explorer.diff("BASE", "WORKTREE", "file")
+    assert "-base\n" in diff["lines"] and "+unstaged\n" in diff["lines"]
+    assert "+new\n" in explorer.diff("HEAD", "WORKTREE", "new-00")["lines"]
+    (tmp_path / "file").write_text("changed!\n")
+    with pytest.raises(ObservationError, match="STALE_CURSOR"):
+        explorer.changes("HEAD", "WORKTREE", first["next_cursor"])
+
+
+def test_worktree_does_not_follow_symlinked_parent(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.email", "test@example.invalid")
+    git(repo, "config", "user.name", "Test")
+    (repo / "directory").mkdir()
+    (repo / "directory" / "file").write_text("tracked\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    base = git(repo, "rev-parse", "HEAD")
+    (repo / "directory" / "file").unlink()
+    (repo / "directory").rmdir()
+    (repo / "directory").symlink_to(tmp_path, target_is_directory=True)
+    (tmp_path / "file").write_text("outside secret\n")
+    explorer = ImmutableExplorer(repo, RevisionNamespace(base, ()), b"x" * 32)
+    with pytest.raises(ObservationError, match="WORKTREE_UNAVAILABLE"):
+        explorer.diff("BASE", "WORKTREE", "directory/file")
+
+
+def test_worktree_gitlink_has_explicit_unknown_checkout_status(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    git(tmp_path, "commit", "--allow-empty", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "update-index", "--add", "--cacheinfo", f"160000,{base},module")
+    (tmp_path / "module").mkdir()
+    (tmp_path / "module" / "nested").write_text("do not expose\n")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    records = explorer.changes("HEAD", "WORKTREE")["records"]
+    assert len(records) == 1 and records[0]["path"] == "module"
+    assert records[0]["kind"] == "submodule"
+    assert records[0]["checkout_status"] == "unknown"
+    result = explorer.diff("HEAD", "WORKTREE", "module")
+    assert result["status"] == "SUBMODULE_CONTENT_UNAVAILABLE"
+    assert result["checkout_status"] == "unknown"
+    with pytest.raises(ObservationError, match="INVALID_PATH"):
+        explorer.diff("HEAD", "WORKTREE", "module/nested")
