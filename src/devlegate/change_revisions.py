@@ -11,7 +11,9 @@ This module deliberately does not discover history or expose object identities.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 
 class RevisionUnavailable(ValueError):
@@ -88,3 +90,51 @@ class RevisionNamespace:
         if before.base != after.base:
             raise RevisionUnavailable("cross-base comparison unavailable")
         return before, after
+
+
+def proven_linear_history(repo: Path, base: str, head: str, reports: Sequence,
+                          ticket_id: str, branch: str, *,
+                          current_base: str | None = None) -> RevisionNamespace:
+    """Derive checkpoints only from matching immutable reports and commit trailers.
+
+    The linear walk establishes ordering, not checkpoint attribution. Rewrites,
+    gaps and foreign reports fail closed rather than inventing aliases.
+    """
+    from devlegate.change_explorer import ObservationError, _git
+
+    if not re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", base) or not re.fullmatch(
+        r"[0-9a-f]{40}(?:[0-9a-f]{24})?", head
+    ):
+        raise RevisionUnavailable("invalid history")
+    candidates: dict[str, list] = {}
+    for report in reports:
+        if (report.ticket_id != ticket_id or report.execution_branch != branch
+                or report.code_base_head != base):
+            raise RevisionUnavailable("ambiguous history")
+        if report.workspace_head is not None and report.workspace_head != base:
+            candidates.setdefault(report.workspace_head, []).append(report)
+    try:
+        data = _git(repo, "rev-list", "--first-parent", "--max-count=513",
+                    head, limit=40000).decode("ascii").splitlines()
+        if base not in data or data.index(base) > 512:
+            raise RevisionUnavailable("history unavailable")
+        chain = data[:data.index(base)]
+        if not set(candidates) <= set(chain):
+            raise RevisionUnavailable("history unavailable")
+        if head != base and head not in candidates:
+            raise RevisionUnavailable("current checkpoint unavailable")
+        checkpoints = []
+        for identity in reversed(chain):
+            if identity not in candidates:
+                continue
+            commit = _git(repo, "cat-file", "commit", identity, limit=65536)
+            message = commit.partition(b"\n\n")[2].splitlines()
+            matches = [report for report in candidates[identity]
+                       if ("Devlegate-Execution: " + report.execution_id).encode()
+                       in message]
+            if len(matches) != 1:
+                raise RevisionUnavailable("checkpoint attribution unavailable")
+            checkpoints.append(Checkpoint(identity, base))
+        return RevisionNamespace(current_base or base, tuple(checkpoints))
+    except (ObservationError, UnicodeError) as error:
+        raise RevisionUnavailable("history unavailable") from error
