@@ -1,0 +1,42 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "7b3e7595a999650b318b4296a4c3578b437b065b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "8e15c0f4e29a4c3ab06cb8695bb3fd9e",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete the WORKTREE implementation: preserve inventory access for large repositories and files, establish reliable bounded submodule checkout drift/dirty and uninitialized status, and complete mutable snapshot and security edge-case coverage.",
+    "Implement durable execution-wide response metering and bounded revision inventories across channel restarts.",
+    "Reconstruct owner-proven historical checkpoints across rebases, squashes and non-ancestor history, including independently provable legacy reports.",
+    "Implement bounded large-file low-delta diffs and complete binary, pagination, type-change and submodule coverage.",
+    "Exercise the actual OpenCode adapter, run full project checks, and perform the required source-provenance package verification and isolated installed-package dogfooding."
+  ],
+  "report_artifact": "executions/TASK-154/8e15c0f4e29a4c3ab06cb8695bb3fd9e.md",
+  "report_sha256": "b8d70a302aec5a789cf5f688c5dd77e670fa4e52e644cc7ca69c439190c9ad90",
+  "resource_generation": "3a5b249b921c03648e44ce6f40a8af1e71dc08a40ad8c1f8b8898bf2cd4ee8db",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete the WORKTREE implementation: preserve inventory access for large repositories and files, establish reliable bounded submodule checkout drift/dirty and uninitialized status, and complete mutable snapshot and security edge-case coverage.",
+      "Implement durable execution-wide response metering and bounded revision inventories across channel restarts.",
+      "Reconstruct owner-proven historical checkpoints across rebases, squashes and non-ancestor history, including independently provable legacy reports.",
+      "Implement bounded large-file low-delta diffs and complete binary, pagination, type-change and submodule coverage.",
+      "Exercise the actual OpenCode adapter, run full project checks, and perform the required source-provenance package verification and isolated installed-package dogfooding."
+    ],
+    "report": "The remaining architectural and validation work exceeds the available execution time for this invocation. The full test suite exceeded the 180-second command limit, and the available test environment lacks pytest-xdist; focused tests and lint passed.",
+    "summary": "Added bounded owner-side WORKTREE comparisons for tracked and eligible untracked files, with content-bound stale cursors and symlink-safe reads. Added socket and repository tests for live changes and explicit unknown submodule checkout status."
+  },
+  "workspace_head": "42bb55ef4a894c0ff7eba0010f1c1341112337d5"
+}
