@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 
-from devlegate.change_channel import RevisionChannel, revisions_tool
+from devlegate.change_channel import RevisionChannel, comparison_tool, revisions_tool
 from devlegate.evidence_channel import EvidenceSocket
 from devlegate.evidence_worker import (
     EvidenceWorkspace,
@@ -802,6 +802,10 @@ export default tool({
             (tool_dir / "revisions.ts").write_text(
                 revisions_tool(revisions.path, revisions.token)
             )
+            for operation in ("changes", "diff"):
+                (tool_dir / f"{operation}.ts").write_text(
+                    comparison_tool(revisions.path, revisions.token, operation)
+                )
         config = {
             "$schema": "https://opencode.ai/config.json",
             "permission": {
