@@ -1,0 +1,36 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "1f1b0b04a2df1ed10eca6c57773a54ab5b9c1196",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-182",
+  "execution_id": "d18a68651b0e496bb838bcebc80c749f",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-182",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Reconcile the PBS CPython license and pip 26.3 license and authors files, including vendored components and duplicate texts, into independently hashed snapshots and manifest records; update notices and negative tests.",
+    "Build and inspect new reproducible standalone and native artifacts, including real Debian checks, and obtain exact-checkpoint hosted CI after compliance changes."
+  ],
+  "report_artifact": "executions/TASK-182/d18a68651b0e496bb838bcebc80c749f.md",
+  "report_sha256": "d65558d2bc59d1fbfc81e0f6089009b597aa2133b76eacab4c3a2f94b8bd4561",
+  "resource_generation": "49f88f4a789e0948c122cf4c3bee2e5c7506c5de7a94ced4a99143690b9b4fcc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-182",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Reconcile the PBS CPython license and pip 26.3 license and authors files, including vendored components and duplicate texts, into independently hashed snapshots and manifest records; update notices and negative tests.",
+      "Build and inspect new reproducible standalone and native artifacts, including real Debian checks, and obtain exact-checkpoint hosted CI after compliance changes."
+    ],
+    "report": "This invocation reached its available working-context limit before the license reconciliation could be completed. Direct file-inspection tools also denied access to the retained /tmp/opencode payload paths; no repository changes were retained.",
+    "summary": "Inspected the retained compliance inventory and confirmed the local PBS archive matches the pinned SHA-256. Identified the embedded CPython and pip license paths requiring reconciliation."
+  },
+  "workspace_head": "bcb8ec3588a213f3cb0c454d5eaf2ad1bbfb9f03"
+}
