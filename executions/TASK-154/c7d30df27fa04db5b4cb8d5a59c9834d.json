@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "6c59eae81ec959c140d6712a52bc49f352a87124",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "c7d30df27fa04db5b4cb8d5a59c9834d",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Deliver the authenticated execution-bound worker endpoint and OpenCode tools, sourcing actual durable checkpoint lineage and exact managed workspace identity.",
+    "Implement stable WORKTREE comparisons, submodule checkout status, durable per-execution response metering, complete response/compute limits, and the remaining specified file and pagination behaviors.",
+    "Expand integration and security coverage, rerun the full project suite, and investigate the failure observed before the parallel full-suite run timed out."
+  ],
+  "report_artifact": "executions/TASK-154/c7d30df27fa04db5b4cb8d5a59c9834d.md",
+  "report_sha256": "5e1a4a9ae843e59725e9767a6c5efb3ef919ea9802fb48bf74c41ef3f3655234",
+  "resource_generation": "d1d25cfd5087855e57afc7f9fbb49e00a909efd71909807ce61b4ab85fe80545",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Deliver the authenticated execution-bound worker endpoint and OpenCode tools, sourcing actual durable checkpoint lineage and exact managed workspace identity.",
+      "Implement stable WORKTREE comparisons, submodule checkout status, durable per-execution response metering, complete response/compute limits, and the remaining specified file and pagination behaviors.",
+      "Expand integration and security coverage, rerun the full project suite, and investigate the failure observed before the parallel full-suite run timed out."
+    ],
+    "report": "The implementation remains an unconnected immutable-tree foundation; safe worker exposure requires the missing authorization and provenance integration. The available execution time was exhausted during full-suite validation, which timed out twice; the parallel run showed a failure before timing out without its traceback.",
+    "summary": "Added an owner-side immutable checkpoint comparison component with bounded Git observations, paged path inventories, single-file text diffs, cursor authentication, and structural submodule handling. Added disposable-repository tests for these observations and input rejection."
+  },
+  "workspace_head": "531da71233d8772f809294fb073dbc0301672335"
+}
