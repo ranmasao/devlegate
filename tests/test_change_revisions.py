@@ -5,7 +5,11 @@ import json
 
 import pytest
 
-from devlegate.change_revisions import Checkpoint, RevisionNamespace, RevisionUnavailable
+from devlegate.change_revisions import (
+    Checkpoint,
+    RevisionNamespace,
+    RevisionUnavailable,
+)
 
 
 def test_empty_and_actual_checkpoints_are_bounded_to_task():
@@ -20,7 +24,9 @@ def test_empty_and_actual_checkpoints_are_bounded_to_task():
     assert namespace.resolve("HEAD-1").identity == "secret-one"
     assert namespace.inventory()["checkpoint_count"] == 2
     assert "secret" not in json.dumps(namespace.inventory())
-    for label in ("HEAD-0", "HEAD-2", "HEAD-01", "PREVIOUS", "main", "HEAD-" + "9" * 10000):
+    for label in (
+        "HEAD-0", "HEAD-2", "HEAD-01", "PREVIOUS", "main", "HEAD-" + "9" * 10000
+    ):
         with pytest.raises(RevisionUnavailable):
             namespace.resolve(label)
 
@@ -38,6 +44,8 @@ def test_retained_checkpoint_from_old_base_cannot_be_silently_compared():
 
 def test_duplicate_or_incomplete_provenance_is_rejected():
     with pytest.raises(ValueError):
-        RevisionNamespace("base", (Checkpoint("same", "base"), Checkpoint("same", "base")))
+        RevisionNamespace(
+            "base", (Checkpoint("same", "base"), Checkpoint("same", "base"))
+        )
     with pytest.raises(ValueError):
         RevisionNamespace("base", (Checkpoint("", "base"),))
