@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "00ed320587402dcf0dd1263bc2e7612f793c65f1",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "a4eb404ed16642c7b6fef47777690cec",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement bounded WORKTREE observations, stable mutable cursors, submodule checkout status, and large-file small-diff handling; then enforce durable per-execution response metering across reconnects and restarts.",
+    "Extend checkpoint provenance across multiple historical bases and rewritten or non-ancestor retained checkpoints, including independently provable older reports lacking resource-generation metadata.",
+    "Exercise all three tools through a real contained OpenCode process and complete disposable-repository acceptance coverage, full project checks, and the specified isolated package dogfooding gate."
+  ],
+  "report_artifact": "executions/TASK-154/a4eb404ed16642c7b6fef47777690cec.md",
+  "report_sha256": "3435a23f3cb8363ae67e530d21e1db4ac4c5aade7da3eb070b9392a49f690c62",
+  "resource_generation": "7914c96b0e128ba1ea13056c7664b165ba36e4f5161de3c628b91c5fae7b3a16",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement bounded WORKTREE observations, stable mutable cursors, submodule checkout status, and large-file small-diff handling; then enforce durable per-execution response metering across reconnects and restarts.",
+      "Extend checkpoint provenance across multiple historical bases and rewritten or non-ancestor retained checkpoints, including independently provable older reports lacking resource-generation metadata.",
+      "Exercise all three tools through a real contained OpenCode process and complete disposable-repository acceptance coverage, full project checks, and the specified isolated package dogfooding gate."
+    ],
+    "report": "The remaining implementation and its integration validation could not be completed within this invocation's available execution time. The focused tests and lint passed; the full parallel suite exceeded the local 120-second command limit.",
+    "summary": "Connected the owner-authorized Change Explorer channel to immutable changes and one-file diff tools, and added conservative report-and-checkpoint-based revision discovery for linear histories and owner-bound rework. Added focused coverage of comparison requests, authorization boundaries, checkpoint attribution, and cross-base refusal."
+  },
+  "workspace_head": "3cdbb6ee0b72722df17d34c3f95dd854c7275d5b"
+}
