@@ -16,6 +16,7 @@ import selectors
 import socket
 import struct
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.abandonment_evidence import EvidenceBundle, EvidenceError
@@ -64,10 +65,12 @@ class EvidenceSocket:
         self, bundle: EvidenceBundle, path: Path, *,
         requests: int = MAX_REQUESTS, response_bytes: int = MAX_RESPONSE_TOTAL,
         io_seconds: float = IO_SECONDS, session_seconds: float = SESSION_SECONDS,
+        reply: Callable[[bytes], bytes] | None = None,
     ) -> None:
         if min(requests, response_bytes, io_seconds, session_seconds) <= 0:
             raise EvidenceError("evidence channel budgets must be positive")
         self.bundle = bundle
+        self._reply = reply or (lambda raw: _read_reply(bundle, raw))
         self.path = path
         self._requests = requests
         self._remaining = response_bytes
@@ -152,7 +155,7 @@ class EvidenceSocket:
                 if len(self._input) != length + 4:
                     self._drop_client()
                     return
-                self._output = _read_reply(self.bundle, bytes(self._input[4:]))
+                self._output = self._reply(bytes(self._input[4:]))
                 self._remaining -= len(self._output)
                 if self._remaining < 0:
                     self._drop_client()
