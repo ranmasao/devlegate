@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "754fe5244c172b3d2ae0712ebbf4b111e4cc0115",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "edcbf73f6cdc45f6bd89c76dce8ca7d9",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect proven, durable checkpoint lineage and current base metadata to the revision namespace, including failed and rebased executions.",
+    "Implement and authorize the privileged read-only backend and OpenCode tools, durable execution-wide metering, bounded comparisons and pagination, and submodule handling.",
+    "Add the specified disposable-repository and adapter integration coverage and run focused and full project checks."
+  ],
+  "report_artifact": "executions/TASK-154/edcbf73f6cdc45f6bd89c76dce8ca7d9.md",
+  "report_sha256": "63f5fda44299b23572c509a5e9174dec277b0b6808faf57118aeb039e9a92cdc",
+  "resource_generation": "bcb5dbd010c2474c96fc247a78428db8a60eeb65e94f75e979fef1c822536b99",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect proven, durable checkpoint lineage and current base metadata to the revision namespace, including failed and rebased executions.",
+      "Implement and authorize the privileged read-only backend and OpenCode tools, durable execution-wide metering, bounded comparisons and pagination, and submodule handling.",
+      "Add the specified disposable-repository and adapter integration coverage and run focused and full project checks."
+    ],
+    "report": "The implementation is substantially unfinished and this invocation has reached its available execution scope. Focused pytest execution was also unavailable because pytest is not installed in the environment; Python compilation succeeded.",
+    "summary": "Added a fail-closed virtual revision namespace based on owner-supplied checkpoint records, with explicit rejection of cross-base comparisons and tests for checkpoint boundaries."
+  },
+  "workspace_head": "a27f8f9aaf85900fb827f784b86b1f5a211a7103"
+}
