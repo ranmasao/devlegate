@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "1ffc70bf2300245ce95f42e50964835b5d969955",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "f6489622a90c4230b4b2172d5fcd3f2a",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-proven task checkpoint lineage and an execution-scoped, privileged read-only Change Explorer endpoint, then connect the three OpenCode tools.",
+    "Implement bounded changes and one-path diff operations, submodule handling, stable pagination, durable execution-wide metering, and the required disposable-repository and authorization tests.",
+    "Run focused tests and project lint in an environment with development dependencies, and obtain hosted validation on the new checkpoint."
+  ],
+  "report_artifact": "executions/TASK-154/f6489622a90c4230b4b2172d5fcd3f2a.md",
+  "report_sha256": "6b573d08744c7f53760141604ec89f157408d2cfd1227a249bf9fdc9a4df2576",
+  "resource_generation": "65ee48adfb5854e9088c02b9b79228d799346322dd127001dabe0041c4077864",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-proven task checkpoint lineage and an execution-scoped, privileged read-only Change Explorer endpoint, then connect the three OpenCode tools.",
+      "Implement bounded changes and one-path diff operations, submodule handling, stable pagination, durable execution-wide metering, and the required disposable-repository and authorization tests.",
+      "Run focused tests and project lint in an environment with development dependencies, and obtain hosted validation on the new checkpoint."
+    ],
+    "report": "The invocation's available resources did not permit completing the owner-authorized end-to-end implementation. Local pytest and Ruff are unavailable because the development environment is not installed; git diff --check passed.",
+    "summary": "Corrected import ordering and line-length violations in the retained revision namespace and its tests."
+  },
+  "workspace_head": "e467841a1afa03dcc03881a3f2793583b034b135"
+}
