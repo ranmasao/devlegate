@@ -46,8 +46,8 @@ def provenance_report():
             "science_asset": PACKAGE.SCIENCE_ASSET,
             "science_sha256": PACKAGE.SCIENCE_SHA256,
             "pbs_provider": BUILDER.PBS_PROVIDER,
-            "pbs_release": "20260901",
-            "pbs_python_version": "3.12.14",
+            "pbs_release": "20261110",
+            "pbs_python_version": "3.12.16",
             "scie_jump_version": PACKAGE.SCIE_JUMP_VERSION,
         },
         "target_libc": "glibc",
@@ -135,7 +135,7 @@ def test_notices_are_deterministic_and_classify_build_only():
     assert "PEX vendored runtime libraries" in first
     assert "Science" in first
     assert (
-        "| python-build-standalone build machinery | 20260901 | "
+        "| python-build-standalone build machinery | 20261110 | "
         "build provenance not redistributed |"
     ) in first
     assert "| Science | 0.21.0 | build provenance not redistributed |" in first
