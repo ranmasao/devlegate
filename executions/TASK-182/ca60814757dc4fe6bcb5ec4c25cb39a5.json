@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "147374315730dc6acd18556924c3547eacdf5104",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-182",
+  "execution_id": "ca60814757dc4fe6bcb5ec4c25cb39a5",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-182",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Build the exact checkpoint in a clean worktree and verify reproducible A/B output, embedded interpreter identity, CLI and real Git smoke paths, and hosted full CI.",
+    "Inspect the new payload's complete ELF ABI and linked libraries, and revalidate the native package dependency floors and runtime license/notice inventory against the new PBS build.",
+    "Run the Debian packaging checks in an environment with dpkg-deb and address any issues uncovered by real artifact and compliance validation."
+  ],
+  "report_artifact": "executions/TASK-182/ca60814757dc4fe6bcb5ec4c25cb39a5.md",
+  "report_sha256": "e0284e4654f0f23fe6109a37f6973d72079ef8f2e817fbd3dd394e7f809e6cde",
+  "resource_generation": "4132533b4793e4995eb703bd4d432e3b31eb495739e16cf75092fa1064c83d2b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-182",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Build the exact checkpoint in a clean worktree and verify reproducible A/B output, embedded interpreter identity, CLI and real Git smoke paths, and hosted full CI.",
+      "Inspect the new payload's complete ELF ABI and linked libraries, and revalidate the native package dependency floors and runtime license/notice inventory against the new PBS build.",
+      "Run the Debian packaging checks in an environment with dpkg-deb and address any issues uncovered by real artifact and compliance validation."
+    ],
+    "report": "The builder rejects the uncommitted worktree, while the worker contract prohibits creating the clean commit needed for the exact-checkpoint build. The local host also lacks dpkg-deb; hosted exact-SHA CI is outside the worker's Git lifecycle authority. The focused run passed 87 tests and failed 11 Debian tests due to the missing dpkg-deb; lint and git diff --check passed.",
+    "summary": "Updated the standalone builder, packaging identity, independent protocol fixtures, and distribution documentation to CPython 3.12.16 from immutable PBS release 20261110. Verified the downloaded GNU archive against its published SHA-256 and checked the extracted interpreter version."
+  },
+  "workspace_head": "58193d7a5a4c82fab612989cb60cf5dfe3a9a14b"
+}
