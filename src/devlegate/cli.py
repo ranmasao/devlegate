@@ -587,6 +587,135 @@ def _render_execution_inspection(result: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_workspace_inspection(result: dict) -> str:
+    """Summarize the v2 evidence without interpreting it as disposal authority."""
+    def mapping(value):
+        return value if isinstance(value, dict) else {}
+
+    identity = mapping(result.get("identity"))
+    ticket = mapping(identity.get("ticket"))
+    control = mapping(identity.get("control_resource"))
+    resources = mapping(identity.get("resources"))
+    authority = mapping(identity.get("authority"))
+    lines = ["Workspace inspection", "Values may wrap; exact evidence: --json/--yaml."]
+    width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+
+    def section(title):
+        lines.extend(["", title])
+
+    def field(label, value):
+        if value is None:
+            value = "unknown"
+        elif isinstance(value, bool):
+            value = "yes" if value else "no"
+        text = "".join(c if c.isprintable() else f"\\u{ord(c):04x}"
+                       for c in str(value))
+        wrap_width = width // 2 if any(
+            unicodedata.east_asian_width(c) in "WF" for c in text
+        ) else width
+        lines.extend(textwrap.wrap(
+            text, width=wrap_width, initial_indent=f"  {label}: ",
+            subsequent_indent="    ", break_long_words=True,
+            break_on_hyphens=False, replace_whitespace=False,
+        ) or [f"  {label}: "])
+
+    def fields(data, pairs):
+        for label, key in pairs:
+            field(label, data.get(key))
+
+    section("Snapshot and blockers")
+    fields(result, (("Snapshot complete", "snapshot_complete"),
+                    ("Mutation authorized", "mutation_authorized"),
+                    ("Canonical digest", "digest")))
+    blockers = result.get("blockers")
+    if not isinstance(blockers, list):
+        field("Blockers", "unknown")
+    elif not blockers:
+        field("Blockers", "none reported")
+    else:
+        for blocker in blockers:
+            field("Blocker", blocker)
+
+    section("Ticket and control binding")
+    fields(ticket, (("Ticket ID", "id"), ("State", "state"), ("Type", "type"),
+                    ("Ticket path", "path"), ("Ticket blob", "blob"),
+                    ("Control HEAD", "control")))
+    fields(control, (("Control path", "path"), ("Control common dir", "common"),
+                     ("Control admin dir", "admin")))
+    registration = mapping(control.get("registration"))
+    fields(registration, (("Control registration HEAD", "head"),
+                          ("Control registration branch", "branch")))
+    field("Authority SHA-256", authority.get("sha256"))
+    field("Mutable receipts present", authority.get("mutable_receipts_present"))
+    field("Worker ownership", "see blockers; private authority is hash-bound")
+
+    section("Workspace and Git observations")
+    fields(resources, (("Path", "path"), ("Path state", "path_state"),
+                       ("Workspace HEAD", "head"), ("Dirty", "dirty"),
+                       ("Locked", "locked"), ("Submodules", "submodules"),
+                       ("Local ref", "local_ref"), ("Local state", "local_state"),
+                       ("Local observed", "local_observed"),
+                       ("Symbolic target", "symbolic_target"),
+                       ("Upstream ref", "upstream_ref"),
+                       ("Upstream state", "upstream_state"),
+                       ("Upstream observed", "upstream_observed")))
+    registration = resources.get("registration")
+    field("Registration", "observed" if isinstance(registration, dict) else "unknown")
+    if isinstance(registration, dict):
+        fields(registration, (("Registered path", "path"),
+                              ("Registered HEAD", "head"),
+                              ("Registered branch", "branch"),
+                              ("Prunable", "prunable")))
+    for label, key in (("Administrative locks", "administrative_locks"),
+                       ("Administrative state", "administrative_state")):
+        values = resources.get(key)
+        if isinstance(values, list):
+            field(label, ", ".join(map(str, values)) if values else "none observed")
+        else:
+            field(label, "unknown")
+
+    section("Independent execution generations")
+    executions = identity.get("executions")
+    if not isinstance(executions, list):
+        field("Generations", "unknown")
+    elif not executions:
+        field("Generations", "none reported; unproven")
+    else:
+        for entry in executions:
+            entry = mapping(entry)
+            report = mapping(entry.get("report"))
+            intent = mapping(entry.get("intent"))
+            proof = mapping(entry.get("proof"))
+            review = mapping(entry.get("review"))
+            field("Execution ID", report.get("execution_id"))
+            field("Report path", entry.get("path"))
+            field("Report blob", entry.get("blob"))
+            field("Publication", entry.get("publication"))
+            field("Generation", intent.get("generation") or
+                  report.get("resource_generation"))
+            field("Checkpoint HEAD", report.get("workspace_head"))
+            field("Review state", review.get("state") or
+                  ("proved" if review.get("decision") else "unknown"))
+            field("Review decision", review.get("decision"))
+            fields(proof, (("Proof state", "state"), ("Local proof", "local_state"),
+                           ("Upstream proof", "upstream_state"),
+                           ("Upstream exact", "upstream_exact"),
+                           ("Proof reason", "reason")))
+            if entry.get("unsupported") is not None:
+                field("Unproven evidence", entry["unsupported"])
+            evidence = entry.get("generation_evidence")
+            field("Generation evidence files",
+                  len(evidence) if isinstance(evidence, dict) else "unknown")
+
+    section("Detailed evidence")
+    for label, key in (("Committed artifacts", "artifacts"),
+                       ("Dependency graph entries", "dependency_graph")):
+        value = identity.get(key)
+        field(label, len(value) if isinstance(value, dict) else "unknown")
+    field("Details", "Full identity and evidence are available in --json/--yaml")
+    return "\n".join(lines)
+
+
 def _render_service_inspection(result: dict) -> str:
     """Render only service facts, keeping publication and request time distinct."""
     def mapping(value):
@@ -663,6 +792,8 @@ def _inspect_daemon(env_file: Path, args) -> int:
     elif (args.object_type == "execution"
           and isinstance(result.get("observation"), dict)):
         text = _render_execution_inspection(result)
+    elif args.object_type == "workspace" and isinstance(result.get("identity"), dict):
+        text = _render_workspace_inspection(result)
     else:
         rows = [(key, json.dumps(value, sort_keys=True))
                 for key, value in result.items()]

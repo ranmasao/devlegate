@@ -68,6 +68,11 @@ admission and replay consume this same version. Incomplete proof remains inspect
 `digest: null`. Neither a digest nor `snapshot_complete` grants mutation authority.
 Missing or unsafe working ticket/report copies are blockers; their committed
 immutable evidence remains visible.
+The human view groups the ticket and control binding, workspace and Git
+observations, and each independent execution generation. Blockers appear first;
+private worker authority is hash-bound and its safety conclusions are reported
+through blockers. Artifact trees and detailed identity remain in JSON and YAML.
+Values in the human view can wrap; use machine output for exact tokens.
 
 ## Service
 

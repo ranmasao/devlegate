@@ -218,6 +218,108 @@ def test_workspace_private_authority_is_hash_bound(owner):
     assert len(intent["remote_urls_sha256"]) == 64
 
 
+@pytest.mark.parametrize("columns", [80, 120])
+@pytest.mark.parametrize("tty", [True, False])
+def test_workspace_human_inventory_preserves_snapshot(owner, monkeypatch, columns, tty):
+    from devlegate.clean_preview import canonical_digest
+    from devlegate.cli import _render_workspace_inspection
+
+    monkeypatch.setenv("COLUMNS", str(columns))
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: tty)
+    view = inspect_object(owner, "workspace", "T-1")
+    before = json.dumps(view, sort_keys=True)
+    text = _render_workspace_inspection(view)
+    assert json.dumps(view, sort_keys=True) == before
+    assert view["digest"] == canonical_digest(view["identity"])
+    assert "Snapshot complete: yes" in text and "Mutation authorized: no" in text
+    assert "Ticket ID: T-1" in text and "Local proof: proved" in text
+    assert "upstream continuity is unknown" in text
+    assert view["identity"]["resources"]["path"] in text.replace("\n    ", "")
+    assert all(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
+                   for c in line) <= columns for line in text.splitlines())
+
+
+def test_workspace_human_unproven_and_large_evidence(owner, monkeypatch):
+    from devlegate.cli import _render_workspace_inspection
+    from devlegate.resource_binding import ResourceBinding
+
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    binding.directory.rename(binding.directory.with_name("unbound"))
+    view = inspect_object(owner, "workspace", "T-1")
+    view["identity"]["artifacts"] = {str(i): {"nested": "x" * 10000}
+                                     for i in range(500)}
+    view["blockers"].append("界" * 200 + "\x1b")
+    monkeypatch.setenv("COLUMNS", "80")
+    text = _render_workspace_inspection(view)
+    assert "Snapshot complete: no" in text and "Canonical digest: unknown" in text
+    assert "Unproven evidence:" in text and "Local proof: unknown" in text
+    assert "Committed artifacts: 500" in text and "x" * 100 not in text
+    assert "\\u001b" in text and "\x1b" not in text
+    assert all(sum(2 if unicodedata.east_asian_width(c) in "WF" else 1
+                   for c in line) <= 80 for line in text.splitlines())
+
+
+@pytest.mark.parametrize("change", ["dirty", "locked", "disconnected"])
+def test_workspace_human_real_blockers(owner, change):
+    from pathlib import Path
+
+    from devlegate.cli import _render_workspace_inspection
+    from devlegate.resource_binding import ResourceBinding
+
+    binding = ResourceBinding.for_execution(
+        owner.recovery_workspace_manager("T-1"), owner._state["execution_id"],
+    )
+    if change == "dirty":
+        (binding.manager.path / "implementation.txt").write_text("dirty\n")
+    elif change == "locked":
+        git(owner.repo, "worktree", "lock", str(binding.manager.path))
+    else:
+        remote = Path(git(owner.repo, "remote", "get-url", "origin").stdout.strip())
+        remote.rename(remote.with_name("disconnected.git"))
+    before = snapshot(owner.repo.parent)
+    view = inspect_object(owner, "workspace", "T-1")
+    text = _render_workspace_inspection(view)
+    assert "Snapshot complete: no" in text
+    for blocker in view["blockers"]:
+        safe = "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in blocker)
+        assert "".join(safe.split()) in "".join(text.split())
+    assert ("Dirty: yes" if change == "dirty" else
+            "Locked: yes" if change == "locked" else
+            "Upstream state: unavailable") in text
+    assert snapshot(owner.repo.parent) == before
+
+
+@pytest.mark.parametrize("owner", ["submodule"], indirect=True)
+def test_workspace_human_submodule_observation(owner):
+    from devlegate.cli import _render_workspace_inspection
+
+    view = inspect_object(owner, "workspace", "T-1")
+    text = _render_workspace_inspection(view)
+    assert f"Submodules: {view['identity']['resources']['submodules']}" in text
+    assert "Local proof:" in text
+
+
+def test_workspace_cli_human_and_machine(owner, monkeypatch, capsys):
+    import devlegate.cli as cli
+    from devlegate._vendor import nanoyaml
+
+    view = inspect_object(owner, "workspace", "T-1")
+    monkeypatch.setattr(cli, "request", lambda *_a, **_kw: view)
+    for output in (None, "--json", "--yaml"):
+        monkeypatch.setattr(sys, "argv", ["devlegate", "inspect", "workspace", "T-1",
+                                         *([output] if output else [])])
+        assert cli.main() == 0
+        text = capsys.readouterr().out
+        if output == "--json":
+            assert json.loads(text) == view
+        elif output == "--yaml":
+            assert nanoyaml.loads(text) == view
+        else:
+            assert "Workspace inspection" in text and "Local proof: proved" in text
+
+
 def test_active_worker_owner_snapshot_does_not_grant_authority(owner):
     owner._owned_execution_id = owner._state["execution_id"]
     owner._state["worker_identity"] = {"active": True}
