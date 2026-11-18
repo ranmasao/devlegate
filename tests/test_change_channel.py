@@ -4,9 +4,17 @@
 import json
 import socket
 import struct
+import subprocess
+from types import SimpleNamespace
 
-from devlegate.change_channel import RevisionChannel, revisions_tool
-from devlegate.change_revisions import RevisionNamespace
+import pytest
+
+from devlegate.change_channel import RevisionChannel, comparison_tool, revisions_tool
+from devlegate.change_revisions import (
+    RevisionNamespace,
+    RevisionUnavailable,
+    proven_linear_history,
+)
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.worker_egress import OpenCodeRunResult
 from devlegate.worker_supervisor import WorkerSupervisor
@@ -63,6 +71,10 @@ def test_supervisor_materializes_and_polls_revision_tool(tmp_path, monkeypatch):
 
         tool = (Path(config) / "tools" / "revisions.ts").read_text()
         assert "select only useful comparisons" in tool
+        assert "only paths and metadata" in (
+            Path(config) / "tools" / "changes.ts"
+        ).read_text()
+        assert "has_more" in (Path(config) / "tools" / "diff.ts").read_text()
         request = json.dumps({
             "operation": "revisions", "token": channel.token,
         }).encode()
@@ -82,3 +94,61 @@ def test_supervisor_materializes_and_polls_revision_tool(tmp_path, monkeypatch):
         WorkerSupervisor("opencode", "model", "").run(
             workspace, "prompt", execution_id="execution", revisions=channel,
         )
+
+
+def test_comparisons_and_report_provenance(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "Test")
+    (tmp_path / "file").write_text("before\n")
+    git("add", "file")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "file").write_text("after\n")
+    git("add", "file")
+    git("commit", "-qm", "checkpoint\n\nDevlegate-Execution: first")
+    first = git("rev-parse", "HEAD")
+    (tmp_path / "file").write_text("last\n")
+    git("add", "file")
+    git("commit", "-qm", "checkpoint\n\nDevlegate-Execution: second")
+    last = git("rev-parse", "HEAD")
+
+    def report(execution, head):
+        return SimpleNamespace(ticket_id="T-1", execution_branch="task",
+                               code_base_head=base, workspace_head=head,
+                               execution_id=execution)
+
+    reports = [report("second", last), report("noop", first), report("first", first)]
+    namespace = proven_linear_history(tmp_path, base, last, reports, "T-1", "task")
+    assert namespace.resolve("HEAD-1").identity == first
+    assert namespace.inventory()["checkpoint_count"] == 2
+    rebased = proven_linear_history(
+        tmp_path, base, last, reports, "T-1", "task", current_base=last,
+    )
+    assert rebased.resolve("HEAD").identity == last
+    with pytest.raises(RevisionUnavailable, match="cross-base"):
+        rebased.comparison("BASE", "HEAD")
+    with pytest.raises(RevisionUnavailable):
+        proven_linear_history(tmp_path, base, last, [report("foreign", last)],
+                              "T-1", "task")
+    with RevisionChannel(
+        tmp_path / "socket", namespace, lambda: True, tmp_path
+    ) as channel:
+        request = {"token": channel.token, "from": "BASE", "to": "HEAD"}
+        changes = exchange(channel, {**request, "operation": "changes"})
+        assert changes["records"][0]["path"] == "file"
+        assert "before\\n" not in json.dumps(changes)
+        diff = exchange(channel, {**request, "operation": "diff", "path": "file"})
+        assert "-before\n" in diff["lines"] and "+last\n" in diff["lines"]
+        assert exchange(channel, {**request, "operation": "diff"})["status"] == (
+            "UNAVAILABLE"
+        )
+        assert exchange(channel, {**request, "operation": "diff", "path": "../file"})[
+            "status"] == "INVALID_PATH"
+        assert exchange(channel, {**request, "operation": "changes", "to": "WORKTREE"})[
+            "status"] == "WORKTREE_UNAVAILABLE"
+    assert "one explicit file" in comparison_tool(tmp_path / "socket", "token", "diff")
