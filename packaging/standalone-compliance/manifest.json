@@ -89,7 +89,7 @@
     },
     {
       "component": "CPython runtime libraries",
-      "version": "3.12.14 PBS 20260901",
+      "version": "3.12.16 PBS 20261110",
       "role": "redistributed runtime",
       "license": "Per-file upstream licenses",
       "source_repository": "https://github.com/indygreg/python-build-standalone",
@@ -131,7 +131,7 @@
     },
     {
       "component": "python-build-standalone build machinery",
-      "version": "20260901",
+      "version": "20261110",
       "role": "build provenance not redistributed",
       "license": "Build provenance only",
       "source_repository": "https://github.com/indygreg/python-build-standalone",
