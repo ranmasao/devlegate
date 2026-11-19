@@ -16,10 +16,61 @@ from devlegate.git import run_git
 from devlegate.review_provenance import (
     ReviewProvenanceError,
     _transition,
+    deferred_amendment_history,
     resolve_rework_review,
     restore_review_binding,
 )
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
+
+
+@pytest.mark.parametrize("damage", [None, "move_edit", "delete_recreate", "direct"])
+def test_deferred_amendment_history_is_separate_and_blob_preserving(tmp_path, damage):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for directory in ("review", "todo", "backlog"):
+        (tmp_path / directory).mkdir()
+    original = (
+        '---\n"type": "devlegate.ticket"\n"title": "Original"\n---\nOriginal body\n'
+    )
+    amended = original.replace("Original body", "Amended body")
+    (tmp_path / "review/TASK-1.md").write_text(original)
+    git("add", ".")
+    git("commit", "-qm", "lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    target = "todo" if damage == "direct" else "backlog"
+    git("mv", "review/TASK-1.md", f"{target}/TASK-1.md")
+    if damage == "move_edit":
+        (tmp_path / "backlog/TASK-1.md").write_text(amended)
+        git("add", ".")
+    git("commit", "-qm", "defer")
+    defer = git("rev-parse", "HEAD")
+    if damage not in {"direct", "move_edit"}:
+        if damage == "delete_recreate":
+            git("rm", "backlog/TASK-1.md")
+            git("commit", "-qm", "delete")
+            (tmp_path / "backlog").mkdir(exist_ok=True)
+        (tmp_path / "backlog/TASK-1.md").write_text(amended)
+        git("add", ".")
+        git("commit", "-qm", "amend")
+        edit = git("rev-parse", "HEAD")
+        git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+        git("commit", "-qm", "schedule")
+    head = git("rev-parse", "HEAD")
+    args = (tmp_path, head, lifecycle, "TASK-1")
+    kwargs = dict(
+        todo_path="todo", review_path="review", backlog_path="backlog", runner=run_git
+    )
+    if damage is None:
+        assert deferred_amendment_history(*args, **kwargs) == (defer, edit, head)
+    else:
+        with pytest.raises(ReviewProvenanceError):
+            deferred_amendment_history(*args, **kwargs)
 
 
 def _binding():
