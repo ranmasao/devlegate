@@ -435,10 +435,35 @@ class ImmutableExplorer:
                 raise ObservationError("LINE_TOO_LONG")
             contents.append(text)
         lines_a, lines_b = (text.splitlines(keepends=True) for text in contents)
+        # Strip identical outer regions before invoking the quadratic matcher.
+        # Keep the normal three context lines and adjust hunk coordinates back
+        # to the original files. This makes a localized edit in a large file
+        # affordable without treating an output limit as a compute limit.
+        prefix = 0
+        while (prefix < min(len(lines_a), len(lines_b))
+               and lines_a[prefix] == lines_b[prefix]):
+            prefix += 1
+        suffix = 0
+        while (suffix < min(len(lines_a), len(lines_b)) - prefix
+               and lines_a[-suffix - 1] == lines_b[-suffix - 1]):
+            suffix += 1
+        shift = max(0, prefix - 3)
+        trim_end = max(0, suffix - 3)
+        if shift or trim_end:
+            lines_a = lines_a[shift:len(lines_a) - trim_end if trim_end else None]
+            lines_b = lines_b[shift:len(lines_b) - trim_end if trim_end else None]
         if len(lines_a) + len(lines_b) > 1200:
             raise ObservationError("TOO_EXPENSIVE")
         lines = list(difflib.unified_diff(lines_a, lines_b, fromfile="a/" + path,
                                           tofile="b/" + path))
+        if shift:
+            def adjust_hunk(match: re.Match) -> str:
+                return (f"@@ -{int(match[1]) + shift}{match[2] or ''} "
+                        f"+{int(match[3]) + shift}{match[4] or ''} @@")
+
+            lines = [re.sub(r"^@@ -(\d+)(,\d+)? \+(\d+)(,\d+)? @@",
+                            adjust_hunk, line) if line.startswith("@@ ") else line
+                     for line in lines]
         lines = [part for line in lines for part in (
             [line] if line.endswith("\n") else
             [line + "\n", "\\ No newline at end of file\n"]
