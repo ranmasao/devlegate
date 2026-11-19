@@ -41,6 +41,38 @@ SCHEMA = "devlegate.ticket-reset.v1"
 STAGES = {"stopping-worker", "retiring-old-generation", "requeue", "queued", "started"}
 
 
+def _reviewed_spec_changed(owner, lifecycle, head, ticket_id, reviewed_blob):
+    """Observe every generation, including edits subsequently reverted."""
+    repo = owner.control_worktree
+    runner = owner._git_runtime
+    if not is_ancestor(repo, lifecycle, head, runner=runner):
+        raise ValueError("reset reviewed control history is not an ancestor")
+    paths = tuple(
+        f"{path}/{ticket_id}.md" for path in owner._workflow_paths().values()
+    )
+    parent = lifecycle
+    changed = False
+    commits = commit_range(repo, f"{lifecycle}..{head}", reverse=True, runner=runner)
+    for commit in commits:
+        if commit_parents(repo, commit, runner=runner) != (parent,):
+            raise ValueError("reset reviewed control history is not linear")
+        relevant = {
+            item.split("\t", 1)[1]
+            for item in commit_changes(repo, commit, runner=runner)
+            if "\t" in item
+        }
+        if relevant.intersection(paths):
+            objects = [path_object(repo, commit, path, runner=runner) for path in paths]
+            present = [blob for blob in objects if blob is not None]
+            if len(present) != 1:
+                raise ValueError(
+                    "reset ticket history contains deletion or ambiguous identity"
+                )
+            changed |= present[0] != reviewed_blob
+        parent = commit
+    return changed
+
+
 def validate(state):
     try:
         _validate(state)
@@ -217,7 +249,7 @@ def admit(owner, ticket_id):
         )
         if reviewed_blob is None:
             raise ValueError("reset cannot prove the reviewed ticket blob")
-        if tree[source] != reviewed_blob:
+        if _reviewed_spec_changed(owner, lifecycle, head, ticket_id, reviewed_blob):
             if state != "todo":
                 raise ValueError(
                     "reset of an amended reviewed ticket requires an immutable "
