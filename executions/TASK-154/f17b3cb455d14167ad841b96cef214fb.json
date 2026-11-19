@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "02d7117204e2241070bc51aa14851952c7b971a8",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "f17b3cb455d14167ad841b96cef214fb",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an owner-controlled WORKTREE observation or snapshot boundary that provides verified changed-path enumeration without rereading unrelated large files, and fails closed on concurrent mutation and resource exhaustion.",
+    "Complete authenticated retained checkpoint provenance and cross-base handling, factual bounded submodule observations, and crash-safe per-execution response metering.",
+    "Validate the real contained adapter and authorization scenarios, run full project checks, and perform the requested isolated installed-package dogfooding after implementation is complete."
+  ],
+  "report_artifact": "executions/TASK-154/f17b3cb455d14167ad841b96cef214fb.md",
+  "report_sha256": "936cf31d1c1f73ebfdb4a0145a7cf7a963c75affc57fc1cb4f509816bae92350",
+  "resource_generation": "260f2f07f51e9831e68967bfb2bbae488cbcf6991e89b62776fbb1278823624e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an owner-controlled WORKTREE observation or snapshot boundary that provides verified changed-path enumeration without rereading unrelated large files, and fails closed on concurrent mutation and resource exhaustion.",
+      "Complete authenticated retained checkpoint provenance and cross-base handling, factual bounded submodule observations, and crash-safe per-execution response metering.",
+      "Validate the real contained adapter and authorization scenarios, run full project checks, and perform the requested isolated installed-package dogfooding after implementation is complete."
+    ],
+    "report": "The principal snapshot and changed-path enumeration design remains unresolved; the deadline fix alone does not establish a stable mutable-worktree observation or satisfy the ticket. This invocation ends before those substantial owner-lifecycle and persistence changes can be safely implemented and validated.",
+    "summary": "Applied the shared WORKTREE observation deadline to Git enumeration subprocesses and added a regression for deadline propagation and expiration."
+  },
+  "workspace_head": "bad351b67711332ae996d0e5f7d262268829e0b9"
+}
