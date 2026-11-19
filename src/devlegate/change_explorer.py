@@ -49,7 +49,12 @@ class ObservationError(Exception):
     """A bounded observation cannot be completed safely."""
 
 
-def _git(repo: Path, *args: str, limit: int) -> bytes:
+def _git(repo: Path, *args: str, limit: int, deadline: float | None = None) -> bytes:
+    deadline = min(deadline, time.monotonic() + 3) if deadline is not None else (
+        time.monotonic() + 3
+    )
+    if time.monotonic() >= deadline:
+        raise ObservationError("TOO_EXPENSIVE")
     env = {
         key: value for key, value in os.environ.items() if not key.startswith("GIT_")
     }
@@ -62,7 +67,6 @@ def _git(repo: Path, *args: str, limit: int) -> bytes:
     )
     assert process.stdout is not None
     output = bytearray()
-    deadline = time.monotonic() + 3
     try:
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ)
@@ -146,9 +150,10 @@ class ImmutableExplorer:
         self, diff_path: str | None, budget: list
     ) -> dict[str, tuple[str, str]]:
         """Read bounded parent entries without traversing symlinks or gitlinks."""
-        index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT)
+        index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT,
+                     deadline=budget[1])
         others = _git(self._repo, "ls-files", "--others", "--exclude-standard",
-                      "-z", limit=_TREE_LIMIT)
+                      "-z", limit=_TREE_LIMIT, deadline=budget[1])
         entries: dict[str, tuple[str, str] | None] = {}
         try:
             for record in index.split(b"\0"):

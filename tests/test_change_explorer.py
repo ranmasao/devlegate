@@ -306,6 +306,31 @@ def test_large_text_with_small_change_can_be_diffed(tmp_path):
     assert "+changed\n" in result["lines"]
 
 
+def test_worktree_git_observations_share_deadline(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "file").write_text("base\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    original = change_explorer._git
+    deadlines = []
+
+    def observe(repo, *args, **kwargs):
+        if args[0] == "ls-files":
+            deadlines.append(kwargs["deadline"])
+        return original(repo, *args, **kwargs)
+
+    monkeypatch.setattr(change_explorer, "_git", observe)
+    explorer.changes("BASE", "WORKTREE")
+    assert len(deadlines) == 4
+    assert len(set(deadlines)) == 1
+    with pytest.raises(ObservationError, match="TOO_EXPENSIVE"):
+        original(tmp_path, "ls-files", limit=1024, deadline=0)
+
+
 def test_worktree_diff_does_not_read_unrelated_large_file(tmp_path):
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "test@example.invalid")
