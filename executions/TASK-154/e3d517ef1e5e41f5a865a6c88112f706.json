@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "8f5f0df4f336b6c3629bbf2da9f9115e812327c7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "e3d517ef1e5e41f5a865a6c88112f706",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement a bounded changed-path-first WORKTREE inventory with independently verifiable content identity and authenticated stable pagination, including large unrelated files and concurrent mutations.",
+    "Complete durable per-execution metering, retained checkpoint provenance, factual submodule observations, and bounded diff edge cases.",
+    "Complete real adapter and isolated installed-package acceptance testing after the implementation is complete."
+  ],
+  "report_artifact": "executions/TASK-154/e3d517ef1e5e41f5a865a6c88112f706.md",
+  "report_sha256": "8a613073881ba580acd6af48f3357a82172a654af6d9a28fff02b87e9b20096d",
+  "resource_generation": "925b7cb941ad90a561810f4a02c3fba10a169c3edb944e3f6ccaf12ecea7cc72",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement a bounded changed-path-first WORKTREE inventory with independently verifiable content identity and authenticated stable pagination, including large unrelated files and concurrent mutations.",
+      "Complete durable per-execution metering, retained checkpoint provenance, factual submodule observations, and bounded diff edge cases.",
+      "Complete real adapter and isolated installed-package acceptance testing after the implementation is complete."
+    ],
+    "report": "The scalable inventory requires a trustworthy content-observation strategy that the existing Git index and filesystem metadata do not provide; I did not complete that design or the remaining implementation in this invocation.",
+    "summary": "Added a regression demonstrating that Git index shortcuts and matching size/mtime cannot establish unchanged WORKTREE content."
+  },
+  "workspace_head": "588467000ebdd6b217c3ddca9571fd112ed12468"
+}
