@@ -56,6 +56,38 @@ review transitions can return to todo with a durable reset disposition. Accepted
 and terminal workflow facts have no reverse requeue transition. Reset never
 undoes changes already integrated into product HEAD.
 
+### Amended reviewed specification
+
+For a reviewed execution, publish its attributed `rework` review together with
+an unchanged move from review to backlog. Edit the backlog ticket in a separate
+commit, then, after the curator decides to schedule it, move the unchanged amended
+blob to todo in a third commit. For example, in a clean control checkout using
+the default paths (replace the ID and review file with the exact execution):
+
+```sh
+git mv kanban/review/TASK-123.md kanban/backlog/TASK-123.md
+git add reviews/TASK-123/EXECUTION_ID.md
+git commit -m 'Defer TASK-123 with review'
+git push origin HEAD:devlegate/control
+${EDITOR:-vi} kanban/backlog/TASK-123.md
+git add kanban/backlog/TASK-123.md
+git commit -m 'Amend TASK-123 specification'
+git push origin HEAD:devlegate/control
+# After the curator schedules the amended ticket:
+git mv kanban/backlog/TASK-123.md kanban/todo/TASK-123.md
+git commit -m 'Schedule amended TASK-123'
+git push origin HEAD:devlegate/control
+devlegate reset TASK-123
+```
+
+The reset verifies the immutable review, exact blob transitions and linear
+history before it retires the prior generation. Old reports and feedback remain
+historical evidence; they are not fed to the fresh worker. An unchanged-spec
+rework follows the ordinary review binding instead. A changed ticket or review
+after reset is queued blocks fresh admission; preserve the evidence and resolve
+the control lineage rather than attempting to replace resources. A failed push
+requires fetching and examining the new control history before retrying.
+
 ## Effects and cost
 
 Only one owner serializes admission, cancellation, resource retirement and

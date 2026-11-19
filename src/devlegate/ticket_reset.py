@@ -20,7 +20,15 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceError,
     ExecutionWorkspaceManager,
 )
-from devlegate.git import is_ancestor, path_object, remote_ref, resolve_ref_commit
+from devlegate.git import (
+    commit_changes,
+    commit_parents,
+    commit_range,
+    is_ancestor,
+    path_object,
+    remote_ref,
+    resolve_ref_commit,
+)
 from devlegate.resource_binding import ResourceBinding, UnprovenResource, _identity
 from devlegate.tickets import (
     is_canonical_ticket_name,
@@ -197,6 +205,41 @@ def admit(owner, ticket_id):
         if owner._state.get(key) is not None:
             raise ValueError(f"reset blocked by pending owner transaction: {key}")
     reports = ExecutionReportStore(owner.control_worktree).list(ticket_id)
+    # Reset deliberately makes prior reports ineligible as continuation
+    # authority.  Verify a changed reviewed specification before establishing
+    # that boundary, while the original report is still visible to the owner.
+    previous = owner._latest_reviewed_rework_report(reports)
+    if previous is not None:
+        lifecycle, report = previous
+        reviewed_blob = path_object(
+            owner.control_worktree, lifecycle,
+            f"{owner.review_path}/{ticket_id}.md", runner=owner._git_runtime,
+        )
+        if reviewed_blob is None:
+            raise ValueError("reset cannot prove the reviewed ticket blob")
+        if tree[source] != reviewed_blob:
+            if state != "todo":
+                raise ValueError(
+                    "reset of an amended reviewed ticket requires an immutable "
+                    "review deferral, backlog amendment and subsequent scheduling"
+                )
+            from devlegate.review_provenance import (
+                ReviewProvenanceError,
+                resolve_deferred_amendment_review,
+            )
+
+            try:
+                amendment = resolve_deferred_amendment_review(
+                    owner.control_worktree, head, lifecycle, report,
+                    todo_path=owner.todo_path, review_path=owner.review_path,
+                    backlog_path=owner.backlog_path, runner=owner._git_runtime,
+                )
+            except ReviewProvenanceError as error:
+                raise ValueError(
+                    f"reset cannot verify deferred amendment provenance: {error}"
+                ) from error
+            if amendment is None:
+                raise ValueError("reset cannot prove the deferred amendment history")
     current = owner._state.get("execution_ticket_id") == ticket_id
     if ticket.state == "todo" and not reports and not current:
         manager = _manager(owner, ticket_id)
@@ -538,6 +581,45 @@ def report_is_discarded(owner, report):
     return isinstance(intent, dict) and report.ticket_id == intent["ticket_id"] and (
         report.execution_id in intent["prior_reports"]
     )
+
+
+def require_queued_generation(owner, ticket_id, head):
+    """Do not let changes after reset bypass its verified evidence boundary."""
+    intent = owner._state.get("ticket_reset")
+    if not isinstance(intent, dict) or intent["status"] != "queued" or (
+        intent["ticket_id"] != ticket_id
+    ):
+        return
+    transaction = intent["transaction"]
+    if not isinstance(transaction, dict) or not isinstance(
+        transaction.get("commit"), str
+    ):
+        raise ValueError("queued reset has no proven publication")
+    publication = transaction["commit"]
+    if not is_ancestor(owner.control_worktree, publication, head,
+                       runner=owner._git_runtime):
+        raise ValueError("queued reset control history was rewritten")
+    parent = publication
+    for commit in commit_range(owner.control_worktree, f"{publication}..{head}",
+                               reverse=True, runner=owner._git_runtime):
+        parents = commit_parents(
+            owner.control_worktree, commit, runner=owner._git_runtime
+        )
+        if parents != (parent,):
+            raise ValueError("queued reset control history is not linear")
+        for change in commit_changes(owner.control_worktree, commit,
+                                     runner=owner._git_runtime):
+            path = change[2:]
+            if path.endswith(f"/{ticket_id}.md") or path.startswith((
+                f"executions/{ticket_id}/", f"reviews/{ticket_id}/",
+            )):
+                raise ValueError("queued reset ticket or historical evidence changed")
+        parent = commit
+    if path_object(owner.control_worktree, head,
+                   f"{owner.todo_path}/{ticket_id}.md", runner=owner._git_runtime) != (
+        intent["blob"]
+    ):
+        raise ValueError("queued reset ticket blob changed")
 
 
 def require_control(owner):
