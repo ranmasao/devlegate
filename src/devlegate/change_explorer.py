@@ -26,9 +26,10 @@ from devlegate.change_revisions import RevisionNamespace, RevisionUnavailable
 _OBJECT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 _TREE_LIMIT = 2 * 1024 * 1024
 _FILE_LIMIT = 32 * 1024
+_DIFF_FILE_LIMIT = 4 * 1024 * 1024
 _LINE_LIMIT = 4096
 _PAGE_LIMIT = 8 * 1024
-_WORKTREE_LIMIT = 16 * 1024 * 1024
+_WORKTREE_LIMIT = 64 * 1024 * 1024
 
 
 def _serialized_size(value: object) -> int:
@@ -103,26 +104,24 @@ class ImmutableExplorer:
             raise ValueError("cursor secret must contain at least 32 bytes")
         self._repo, self._revisions, self._secret = repo, revisions, secret
         self._worktree_blobs: dict[str, bytes] = {}
+        self._large_worktree_blobs: set[str] = set()
         self._observation = ""
-        self._unverified_worktree = False
         self._worktree_sizes: dict[str, int] = {}
-        self._uncertain_paths: set[str] = set()
 
     def revisions(self) -> dict[str, object]:
         return self._revisions.inventory()
 
-    def _trees(self, before: str, after: str) -> tuple[dict, dict]:
+    def _trees(self, before: str, after: str, diff_path: str | None = None) -> tuple[dict, dict]:
         try:
             a, b = self._revisions.comparison(before, after)
         except (RevisionUnavailable, TypeError) as error:
             raise ObservationError("REVISION_UNAVAILABLE") from error
         self._worktree_blobs = {}
+        self._large_worktree_blobs = set()
         self._worktree_sizes = {}
-        self._uncertain_paths = set()
-        self._unverified_worktree = False
-        worktree = (self._worktree()
-                    if a.identity is None or b.identity is None else None)
-        if worktree is not None and worktree != self._worktree():
+        worktree = (self._worktree(diff_path)
+                     if a.identity is None or b.identity is None else None)
+        if worktree is not None and worktree != self._worktree(diff_path):
             raise ObservationError("WORKTREE_UNAVAILABLE")
         trees = (self._tree(a.identity) if a.identity else worktree,
                  self._tree(b.identity) if b.identity else worktree)
@@ -131,14 +130,11 @@ class ImmutableExplorer:
         ).hexdigest()
         return trees
 
-    def _worktree(self) -> dict[str, tuple[str, str]]:
+    def _worktree(self, diff_path: str | None = None) -> dict[str, tuple[str, str]]:
         """Read bounded parent entries without traversing symlinks or gitlinks."""
         index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT)
         others = _git(self._repo, "ls-files", "--others", "--exclude-standard",
                       "-z", limit=_TREE_LIMIT)
-        changed = set(_git(self._repo, "diff-files", "--name-only", "-z",
-                           "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
-                           limit=_TREE_LIMIT).split(b"\0"))
         entries: dict[str, tuple[str, str] | None] = {}
         try:
             for record in index.split(b"\0"):
@@ -190,18 +186,6 @@ class ImmutableExplorer:
                         mode = "120000"
                     elif stat.S_ISREG(info.st_mode):
                         self._worktree_sizes[path] = info.st_size
-                        if info.st_size > _FILE_LIMIT:
-                            # Git's index observation is useful for inventory, but
-                            # stat information cannot prove a stable continuation.
-                            self._unverified_worktree = True
-                            mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
-                            if indexed and os.fsencode(path) not in changed:
-                                self._uncertain_paths.add(path)
-                            token = hashlib.sha256(
-                                repr(_file_identity(info)).encode()
-                            ).hexdigest()
-                            result[path] = (mode, "worktree:" + token)
-                            continue
                         if info.st_size > _WORKTREE_LIMIT - total:
                             raise ObservationError("TOO_EXPENSIVE")
                         fd = os.open(
@@ -209,17 +193,43 @@ class ImmutableExplorer:
                             dir_fd=directory,
                         )
                         try:
+                            cache_limit = _DIFF_FILE_LIMIT if path == diff_path else _FILE_LIMIT
                             opened = os.fstat(fd)
                             if (not stat.S_ISREG(opened.st_mode)
                                     or _file_identity(opened) != _file_identity(info)):
                                 raise ObservationError("WORKTREE_UNAVAILABLE")
-                            with os.fdopen(fd, "rb", closefd=False) as stream:
-                                data = stream.read(_WORKTREE_LIMIT - total + 1)
+                            base = self._revisions.resolve("BASE").identity
+                            algorithm = hashlib.sha256 if len(base) == 64 else hashlib.sha1
+                            digest = algorithm(b"blob " + str(info.st_size).encode() + b"\0")
+                            chunks = []
+                            read = 0
+                            while True:
+                                if time.monotonic() >= deadline:
+                                    raise ObservationError("TOO_EXPENSIVE")
+                                chunk = os.read(fd, min(65536, info.st_size - read + 1))
+                                if not chunk:
+                                    break
+                                read += len(chunk)
+                                if read > info.st_size:
+                                    raise ObservationError("WORKTREE_UNAVAILABLE")
+                                digest.update(chunk)
+                                if info.st_size <= cache_limit:
+                                    chunks.append(chunk)
+                            if read != info.st_size:
+                                raise ObservationError("WORKTREE_UNAVAILABLE")
                             if _file_identity(os.fstat(fd)) != _file_identity(opened):
                                 raise ObservationError("WORKTREE_UNAVAILABLE")
                         finally:
                             os.close(fd)
                         mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
+                        total += read
+                        obj = digest.hexdigest()
+                        result[path] = (mode, obj)
+                        if info.st_size <= cache_limit:
+                            self._worktree_blobs[obj] = b"".join(chunks)
+                        else:
+                            self._large_worktree_blobs.add(obj)
+                        continue
                     else:
                         raise ObservationError("WORKTREE_UNAVAILABLE")
                     total += len(data)
@@ -303,8 +313,6 @@ class ImmutableExplorer:
                 raise ValueError
             if observation != self._observation:
                 raise ObservationError("STALE_CURSOR")
-            if self._unverified_worktree:
-                raise ObservationError("STALE_CURSOR")
             return offset
         except (ValueError, TypeError, UnicodeError) as error:
             raise ObservationError("INVALID_CURSOR") from error
@@ -334,8 +342,6 @@ class ImmutableExplorer:
                 record["after_size"] = self._worktree_sizes.get(path)
             if before == "WORKTREE" and old and old[0] != "160000":
                 record["before_size"] = self._worktree_sizes.get(path)
-            if path in self._uncertain_paths:
-                record["change"] = "unknown"
             if old and new and (old[0] == "160000" or new[0] == "160000"):
                 record["pointer_changed"] = old[1] != new[1]
             if mutable and any(entry and entry[0] == "160000" for entry in (old, new)):
@@ -359,9 +365,6 @@ class ImmutableExplorer:
             raise ObservationError("TOO_LARGE")
         end = offset + len(records)
         more = end < len(paths)
-        if more and self._unverified_worktree:
-            # A stat-only observation is insufficient to authenticate a later page.
-            raise ObservationError("TOO_EXPENSIVE")
         return {"status": "OK", "records": records, "complete": not more,
                 "has_more": more, "next_cursor": self._cursor(
                     "changes", before, after, "", end) if more else None}
@@ -369,7 +372,7 @@ class ImmutableExplorer:
     def diff(self, before: str, after: str, path: str,
              cursor: str | None = None) -> dict:
         path = _path(path)
-        a, b = self._trees(before, after)
+        a, b = self._trees(before, after, path)
         offset = self._offset(cursor, "diff", before, after, path)
         if any(path.startswith(p + "/") for p, entry in (a | b).items()
                if entry[0] == "160000"):
@@ -394,13 +397,13 @@ class ImmutableExplorer:
                 continue
             data = self._worktree_blobs.get(entry[1])
             if data is None:
-                if entry[1].startswith("worktree:"):
+                if entry[1] in self._large_worktree_blobs:
                     raise ObservationError("TOO_LARGE")
                 size = _git(self._repo, "cat-file", "-s", entry[1], limit=128)
-                if int(size) > _FILE_LIMIT:
+                if int(size) > _DIFF_FILE_LIMIT:
                     raise ObservationError("TOO_LARGE")
-                data = _git(self._repo, "cat-file", "blob", entry[1], limit=_FILE_LIMIT)
-            if len(data) > _FILE_LIMIT:
+                data = _git(self._repo, "cat-file", "blob", entry[1], limit=_DIFF_FILE_LIMIT)
+            if len(data) > _DIFF_FILE_LIMIT:
                 raise ObservationError("TOO_LARGE")
             if b"\x00" in data:
                 raise ObservationError("BINARY_DIFF_UNAVAILABLE")
