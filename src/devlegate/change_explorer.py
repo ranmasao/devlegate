@@ -111,7 +111,9 @@ class ImmutableExplorer:
     def revisions(self) -> dict[str, object]:
         return self._revisions.inventory()
 
-    def _trees(self, before: str, after: str, diff_path: str | None = None) -> tuple[dict, dict]:
+    def _trees(
+        self, before: str, after: str, diff_path: str | None = None
+    ) -> tuple[dict, dict]:
         try:
             a, b = self._revisions.comparison(before, after)
         except (RevisionUnavailable, TypeError) as error:
@@ -159,6 +161,13 @@ class ImmutableExplorer:
             for path, indexed in sorted(entries.items()):
                 if time.monotonic() >= deadline:
                     raise ObservationError("TOO_EXPENSIVE")
+                # A one-file diff needs only that entry and any enclosing
+                # gitlink, not the content of unrelated worktree files.
+                if diff_path is not None and path != diff_path and not (
+                    indexed and indexed[0] == "160000"
+                    and diff_path.startswith(path + "/")
+                ):
+                    continue
                 if indexed and indexed[0] == "160000":
                     result[path] = indexed
                     continue
@@ -193,14 +202,20 @@ class ImmutableExplorer:
                             dir_fd=directory,
                         )
                         try:
-                            cache_limit = _DIFF_FILE_LIMIT if path == diff_path else _FILE_LIMIT
+                            cache_limit = (
+                                _DIFF_FILE_LIMIT if path == diff_path else _FILE_LIMIT
+                            )
                             opened = os.fstat(fd)
                             if (not stat.S_ISREG(opened.st_mode)
                                     or _file_identity(opened) != _file_identity(info)):
                                 raise ObservationError("WORKTREE_UNAVAILABLE")
                             base = self._revisions.resolve("BASE").identity
-                            algorithm = hashlib.sha256 if len(base) == 64 else hashlib.sha1
-                            digest = algorithm(b"blob " + str(info.st_size).encode() + b"\0")
+                            algorithm = (
+                                hashlib.sha256 if len(base) == 64 else hashlib.sha1
+                            )
+                            digest = algorithm(
+                                b"blob " + str(info.st_size).encode() + b"\0"
+                            )
                             chunks = []
                             read = 0
                             while True:
@@ -402,7 +417,9 @@ class ImmutableExplorer:
                 size = _git(self._repo, "cat-file", "-s", entry[1], limit=128)
                 if int(size) > _DIFF_FILE_LIMIT:
                     raise ObservationError("TOO_LARGE")
-                data = _git(self._repo, "cat-file", "blob", entry[1], limit=_DIFF_FILE_LIMIT)
+                data = _git(
+                    self._repo, "cat-file", "blob", entry[1], limit=_DIFF_FILE_LIMIT
+                )
             if len(data) > _DIFF_FILE_LIMIT:
                 raise ObservationError("TOO_LARGE")
             if b"\x00" in data:
