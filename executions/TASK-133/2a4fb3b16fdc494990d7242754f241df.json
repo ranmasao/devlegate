@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "197fb11dc4c2f2f74c1f7b839b081fcf70113e22",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "2a4fb3b16fdc494990d7242754f241df",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized control-history admission for backlog and unbound todo amendments, including dependency rescheduling, protected-state history, active/recovery/integration boundaries, deletion-and-recreation and SHA races.",
+    "Complete deferred-generation history validation across reset and restart, including unchanged-blob edit/revert histories, and expand end-to-end race, authorization and evidence-preservation coverage.",
+    "Complete the provenance-state matrix and operator guidance for all supported amendment states; run the complete configured CI suite and Ruff on the final implementation."
+  ],
+  "report_artifact": "executions/TASK-133/2a4fb3b16fdc494990d7242754f241df.md",
+  "report_sha256": "863f228eec0e718ea680c429864ad11e52e526f476683422587b2a683d4c4c4a",
+  "resource_generation": "8394b86326b6052df9f5a6149e513fa0ec08b0b52cffa65fbc1aaf5417f63960",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized control-history admission for backlog and unbound todo amendments, including dependency rescheduling, protected-state history, active/recovery/integration boundaries, deletion-and-recreation and SHA races.",
+      "Complete deferred-generation history validation across reset and restart, including unchanged-blob edit/revert histories, and expand end-to-end race, authorization and evidence-preservation coverage.",
+      "Complete the provenance-state matrix and operator guidance for all supported amendment states; run the complete configured CI suite and Ruff on the final implementation."
+    ],
+    "report": "The broader admission and history design remains unfinished. The full control-workspace test run exceeded its 300-second command limit; focused reset, provenance and review-regression tests completed.",
+    "summary": "Added verification of deferred amendment and immutable review provenance before explicit reset retires the prior generation, with fresh-workspace admission and protection against post-reset ticket or evidence changes. Added real-Git coverage, improved Git-observation diagnostics, and documented the deferred amendment and reset workflow."
+  },
+  "workspace_head": "6844545acaf8d59b61800dc2ae36f8bcbe1c5fe6"
+}
