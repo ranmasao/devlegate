@@ -31,6 +31,10 @@ class ReviewProvenanceError(ValueError):
     """Current control history cannot safely identify rework feedback."""
 
 
+class ReviewObservationError(ReviewProvenanceError):
+    """Git could not determine whether a review history is present."""
+
+
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 MAX_REVIEW_BYTES = 256 * 1024
 _HEADER = re.compile(
@@ -167,6 +171,10 @@ def deferred_amendment_history(
     transition: list[str] = []
     parent = lifecycle
     try:
+        if not is_ancestor(repo, lifecycle, head, runner=runner):
+            raise ReviewProvenanceError(
+                "amendment control history does not descend from the reviewed lifecycle"
+            )
         commits = commit_range(
             repo, f"{lifecycle}..{head}", reverse=True, runner=runner
         )
@@ -216,10 +224,12 @@ def deferred_amendment_history(
         if state == "todo":
             return transition[0], transition[1], transition[2]
         return None
-    except (GitObservationError, GitAncestryError, TicketError) as error:
-        raise ReviewProvenanceError(
+    except (GitObservationError, GitAncestryError) as error:
+        raise ReviewObservationError(
             "cannot verify deferred amendment history"
         ) from error
+    except TicketError as error:
+        raise ReviewProvenanceError("invalid deferred amended ticket") from error
 
 
 def _transition(
