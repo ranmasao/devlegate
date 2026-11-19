@@ -1,0 +1,36 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "4518132783dede093d36d02de171a1ae1ab3053e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "dd4bf9d7934e405f9f17877e28807096",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized general amendment admission for backlog and unbound todo tickets, including exact control history, execution-boundary checks, DAG re-evaluation and race handling.",
+    "Complete deferred-generation lifecycle and protected-state validation, expand integration/race coverage, document the full provenance-state matrix and operator workflow, and run full configured CI."
+  ],
+  "report_artifact": "executions/TASK-133/dd4bf9d7934e405f9f17877e28807096.md",
+  "report_sha256": "6ba949790d5b53112376ae75dcf524321de91802af7b8336f9d166a541d85120",
+  "resource_generation": "feafd354d62e9bb65b48ac329de8f443d329012ac3a498140b6c358925b0951a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized general amendment admission for backlog and unbound todo tickets, including exact control history, execution-boundary checks, DAG re-evaluation and race handling.",
+      "Complete deferred-generation lifecycle and protected-state validation, expand integration/race coverage, document the full provenance-state matrix and operator workflow, and run full configured CI."
+    ],
+    "report": "The available execution time was exhausted before the general admission and remaining acceptance criteria could be implemented and verified safely.",
+    "summary": "Hardened reviewed-ticket reset admission to inspect every intervening control commit, rejecting hidden specification changes and deletion/recreation even when the final blob matches the original. Added real-Git regression coverage for edit/revert and deletion/recreation histories."
+  },
+  "workspace_head": "2543863fc4bf9204c1c3c2f735e7cb5863096485"
+}
