@@ -113,6 +113,28 @@ def test_reset_refuses_review_to_todo_with_changed_specification(owner):
     assert "ticket_reset" not in owner._state
 
 
+@pytest.mark.parametrize("damage", ["edit-revert", "delete-recreate"])
+def test_reset_refuses_hidden_reviewed_spec_history(owner, damage):
+    source = owner.control_worktree / owner.review_path / "T-1.md"
+    target = owner.control_worktree / owner.todo_path / "T-1.md"
+    original = source.read_text()
+    git(owner.control_worktree, "mv", str(source), str(target))
+    git(owner.control_worktree, "commit", "-m", "move reviewed ticket")
+    if damage == "edit-revert":
+        target.write_text(original + "\nTemporary mutation\n")
+        git(owner.control_worktree, "add", str(target))
+    else:
+        git(owner.control_worktree, "rm", str(target))
+    git(owner.control_worktree, "commit", "-m", "alter ticket history")
+    target.write_text(original)
+    git(owner.control_worktree, "add", str(target))
+    git(owner.control_worktree, "commit", "-m", "restore original blob")
+    git(owner.control_worktree, "push", "origin", owner.control_branch)
+    with owner._lock(), pytest.raises(ValueError, match="deferred amendment|deletion"):
+        admit(owner, "T-1")
+    assert "ticket_reset" not in owner._state
+
+
 @pytest.mark.parametrize("state", ["backlog", "todo", "review"])
 def test_reset_requeues_exact_blob_and_discards_rework(owner, state, monkeypatch):
     source = owner.control_worktree / owner.review_path / "T-1.md"
