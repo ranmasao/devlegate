@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "9e6605dd4a6e70763c2cfb804b20319c460fb1c2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "92d41a09ce034133b65b2c7b4674beab",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement an owner-controlled, safely invalidated WORKTREE observation strategy that provides useful changed-path inventory without trusting index or stat shortcuts; prove stable and mutated multi-page behavior under resource limits.",
+    "Complete retained checkpoint provenance and cross-base handling, factual shallow submodule observations, durable execution-wide response metering, and contained adapter integration and authorization tests.",
+    "Run the required full project checks and installed-package dogfooding after functional implementation and exact-checkpoint green CI."
+  ],
+  "report_artifact": "executions/TASK-154/92d41a09ce034133b65b2c7b4674beab.md",
+  "report_sha256": "fff3618a801e4bbd523206594705d5770ce76f1672e8441b45c204ea0fb48066",
+  "resource_generation": "74c06e25719887d1da7c249ccefcb67896659677f5c0b0abc855cbc711f0d86c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement an owner-controlled, safely invalidated WORKTREE observation strategy that provides useful changed-path inventory without trusting index or stat shortcuts; prove stable and mutated multi-page behavior under resource limits.",
+      "Complete retained checkpoint provenance and cross-base handling, factual shallow submodule observations, durable execution-wide response metering, and contained adapter integration and authorization tests.",
+      "Run the required full project checks and installed-package dogfooding after functional implementation and exact-checkpoint green CI."
+    ],
+    "report": "The available execution time did not permit implementing and validating the owner-controlled observation mechanism or the remaining integration gates. The current bounded full-content scan can still return TOO_EXPENSIVE for an unrelated large file.",
+    "summary": "WORKTREE verification passes now share a bounded content-read and elapsed-time budget, with explicit fail-closed behavior when verification exceeds it. Added regression coverage for budget exhaustion during initial inventory and continuation while retaining selective one-file diffs."
+  },
+  "workspace_head": "3956c1d9c308c7b1c0ec549f9d3afbf055925c85"
+}
