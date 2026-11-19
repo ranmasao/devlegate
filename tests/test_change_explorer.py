@@ -195,3 +195,40 @@ def test_worktree_gitlink_has_explicit_unknown_checkout_status(tmp_path):
     assert result["checkout_status"] == "unknown"
     with pytest.raises(ObservationError, match="INVALID_PATH"):
         explorer.diff("HEAD", "WORKTREE", "module/nested")
+
+
+def test_large_unrelated_worktree_file_does_not_block_inventory(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "large").write_bytes(b"x" * (17 * 1024 * 1024))
+    (tmp_path / "small").write_text("before\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "small").write_text("after\n")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    records = {r["path"]: r for r in explorer.changes("BASE", "WORKTREE")["records"]}
+    assert records["small"]["change"] == "modified"
+    assert records["large"]["change"] == "unknown"
+    assert "+after\n" in explorer.diff("BASE", "WORKTREE", "small")["lines"]
+    (tmp_path / "large").write_bytes(b"y" * (17 * 1024 * 1024))
+    records = {r["path"]: r for r in explorer.changes("BASE", "WORKTREE")["records"]}
+    assert records["large"]["after_size"] == 17 * 1024 * 1024
+    with pytest.raises(ObservationError, match="TOO_LARGE"):
+        explorer.diff("BASE", "WORKTREE", "large")
+
+
+def test_large_file_inventory_does_not_issue_unverifiable_cursor(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "large").write_bytes(b"x" * 40000)
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    for number in range(35):
+        (tmp_path / f"new-{number:02}").write_text("new\n")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    with pytest.raises(ObservationError, match="TOO_EXPENSIVE"):
+        explorer.changes("BASE", "WORKTREE")
