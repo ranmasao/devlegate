@@ -210,7 +210,7 @@ def test_large_unrelated_worktree_file_does_not_block_inventory(tmp_path):
     explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
     records = {r["path"]: r for r in explorer.changes("BASE", "WORKTREE")["records"]}
     assert records["small"]["change"] == "modified"
-    assert records["large"]["change"] == "unknown"
+    assert "large" not in records
     assert "+after\n" in explorer.diff("BASE", "WORKTREE", "small")["lines"]
     (tmp_path / "large").write_bytes(b"y" * (17 * 1024 * 1024))
     records = {r["path"]: r for r in explorer.changes("BASE", "WORKTREE")["records"]}
@@ -219,7 +219,7 @@ def test_large_unrelated_worktree_file_does_not_block_inventory(tmp_path):
         explorer.diff("BASE", "WORKTREE", "large")
 
 
-def test_large_file_inventory_does_not_issue_unverifiable_cursor(tmp_path):
+def test_large_file_inventory_pages_and_detects_same_size_mutation(tmp_path):
     git(tmp_path, "init", "-q")
     git(tmp_path, "config", "user.email", "test@example.invalid")
     git(tmp_path, "config", "user.name", "Test")
@@ -230,5 +230,30 @@ def test_large_file_inventory_does_not_issue_unverifiable_cursor(tmp_path):
     for number in range(35):
         (tmp_path / f"new-{number:02}").write_text("new\n")
     explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
-    with pytest.raises(ObservationError, match="TOO_EXPENSIVE"):
-        explorer.changes("BASE", "WORKTREE")
+    page = explorer.changes("BASE", "WORKTREE")
+    assert page["has_more"]
+    first = [record["path"] for record in page["records"]]
+    second = explorer.changes("BASE", "WORKTREE", page["next_cursor"])
+    assert first + [record["path"] for record in second["records"]] == [
+        f"new-{number:02}" for number in range(35)
+    ]
+    (tmp_path / "large").write_bytes(b"y" * 40000)
+    with pytest.raises(ObservationError, match="STALE_CURSOR"):
+        explorer.changes("BASE", "WORKTREE", page["next_cursor"])
+
+
+def test_large_text_with_small_change_can_be_diffed(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    lines = [f"{number:04} " + "x" * 100 + "\n" for number in range(400)]
+    (tmp_path / "large").write_text("".join(lines))
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    lines[200] = "changed\n"
+    (tmp_path / "large").write_text("".join(lines))
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    result = explorer.diff("BASE", "WORKTREE", "large")
+    assert result["complete"]
+    assert "+changed\n" in result["lines"]
