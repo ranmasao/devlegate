@@ -233,6 +233,7 @@ def _transition(
     backlog_path: str,
     artifact_path: str,
     runner: Runner,
+    allow_deferred: bool = False,
 ) -> tuple[tuple[str, ...], str | None]:
     review = f"{review_path}/{ticket_id}.md"
     todo = f"{todo_path}/{ticket_id}.md"
@@ -309,6 +310,8 @@ def _transition(
                 deferred = None
             elif workflow:
                 raise ReviewProvenanceError("review disposition history is conflicting")
+        if allow_deferred and direct is None and deferred is not None:
+            return (deferred,), artifact_commit
         if direct is None or deferred is not None:
             raise ReviewProvenanceError(
                 "reviewed execution has no proven rework transition"
@@ -330,6 +333,7 @@ def resolve_rework_review(
     review_path: str,
     backlog_path: str,
     runner: Runner,
+    _allow_deferred: bool = False,
 ) -> ReviewBinding:
     """Resolve the immutable review bound to one rejected execution."""
     if report.result.transport_error is not None or not report.result.egress_ok:
@@ -347,6 +351,7 @@ def resolve_rework_review(
         backlog_path=backlog_path,
         artifact_path=artifact,
         runner=runner,
+        allow_deferred=_allow_deferred,
     )
     try:
         content = read_path(repo, head, artifact, runner=runner)
@@ -423,11 +428,41 @@ def resolve_rework_review(
     )
 
 
+def resolve_deferred_amendment_review(
+    repo: Path, head: str, lifecycle: str, report: ExecutionReport, *,
+    todo_path: str, review_path: str, backlog_path: str, runner: Runner,
+) -> tuple[tuple[str, str, str], ReviewBinding] | None:
+    """Verify both the amendment route and its immutable original review.
+
+    This is an observation, not authorization to retire or reuse resources.
+    """
+    history = deferred_amendment_history(
+        repo, head, lifecycle, report.ticket_id, todo_path=todo_path,
+        review_path=review_path, backlog_path=backlog_path, runner=runner,
+    )
+    if history is None:
+        return None
+    binding = resolve_rework_review(
+        repo, history[0], lifecycle, report, todo_path=todo_path,
+        review_path=review_path, backlog_path=backlog_path, runner=runner,
+        _allow_deferred=True,
+    )
+    try:
+        content = read_path(repo, head, binding.path, runner=runner)
+        publication = file_history_commit(repo, head, binding.path, runner=runner)
+    except GitObservationError as error:
+        raise ReviewProvenanceError("cannot verify deferred review evidence") from error
+    if content != binding.content or publication != binding.publication:
+        raise ReviewProvenanceError("deferred review evidence changed or disappeared")
+    return history, binding
+
+
 __all__ = [
     "MAX_REVIEW_BYTES",
     "ReviewBinding",
     "ReviewProvenanceError",
     "deferred_amendment_history",
+    "resolve_deferred_amendment_review",
     "restore_review_binding",
     "resolve_rework_review",
 ]
