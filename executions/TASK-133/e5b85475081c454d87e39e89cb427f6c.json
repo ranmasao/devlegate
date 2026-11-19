@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "adaa6534cb7fc6509facaaf79e9e4e7a299614cf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "e5b85475081c454d87e39e89cb427f6c",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized ordinary amendment admission using verified control history, exact blobs, execution and recovery boundaries, remote reobservation, and dependency-graph rescheduling.",
+    "Complete and prove deferred fresh-generation admission and resource retirement across restart, including immutable evidence and control-head race checks.",
+    "Add comprehensive runtime and real-Git acceptance coverage, operator workflow and provenance-state matrix; run full configured tests and Ruff."
+  ],
+  "report_artifact": "executions/TASK-133/e5b85475081c454d87e39e89cb427f6c.md",
+  "report_sha256": "c7a4915f8aa8766b0b5417a38fe9fbd03fdf673a507bc9af2ad8f2f183d6fb18",
+  "resource_generation": "02226148870ecc446e9c3e1a3e103e2e73d4e22220ade69edb25c56a6bf1714f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized ordinary amendment admission using verified control history, exact blobs, execution and recovery boundaries, remote reobservation, and dependency-graph rescheduling.",
+      "Complete and prove deferred fresh-generation admission and resource retirement across restart, including immutable evidence and control-head race checks.",
+      "Add comprehensive runtime and real-Git acceptance coverage, operator workflow and provenance-state matrix; run full configured tests and Ruff."
+    ],
+    "report": "The history observer is not yet connected to runtime admission, so the central feature remains unfinished. This invocation is ending at its execution resource limit; pytest and Ruff are not installed in the available environment, although a standalone real-Git backlog observation succeeded.",
+    "summary": "Added a Git history observer that identifies backlog and todo ticket amendments and rejects protected-state edits, deletion/recreation, non-linear history, and non-blob-preserving workflow moves. Added real-Git test cases for amendment observation and malformed histories."
+  },
+  "workspace_head": "594f7853609956ae3f7c0829137beabcd456f859"
+}
