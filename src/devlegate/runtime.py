@@ -165,6 +165,7 @@ from devlegate.recovery_workspace import (
 )
 from devlegate.resource_binding import ResourceBinding, ResourceProof, UnprovenResource
 from devlegate.review_provenance import (
+    ReviewObservationError,
     ReviewProvenanceError,
     deferred_amendment_history,
     resolve_deferred_amendment_review,
@@ -4734,6 +4735,11 @@ class ServiceEngine:
                                 backlog_path=self.backlog_path,
                                 runner=self._git_runtime,
                             )
+                        except ReviewObservationError as observation_error:
+                            raise WorkflowBlockedError(
+                                "cannot observe deferred amendment provenance for "
+                                f"{selected_ticket.id}: {observation_error}"
+                            ) from observation_error
                         except ReviewProvenanceError:
                             amendment_history = None
                         if amendment_history is None:
@@ -4776,6 +4782,15 @@ class ServiceEngine:
                     }
             resource_binding = None
             if not pending_agent_execution:
+                from devlegate.ticket_reset import require_queued_generation
+
+                try:
+                    require_queued_generation(self, selected_ticket.id, control_head)
+                except (ValueError, GitObservationError, GitAncestryError) as error:
+                    raise WorkflowBlockedError(
+                        f"cannot admit reset generation for {selected_ticket.id}: "
+                        f"{error}"
+                    ) from error
                 resource_manager = ExecutionWorkspaceManager(
                     self.repo, self.execution_worktree_root, selected_ticket.id,
                     runner=self._git_runtime,
