@@ -104,6 +104,9 @@ class ImmutableExplorer:
         self._repo, self._revisions, self._secret = repo, revisions, secret
         self._worktree_blobs: dict[str, bytes] = {}
         self._observation = ""
+        self._unverified_worktree = False
+        self._worktree_sizes: dict[str, int] = {}
+        self._uncertain_paths: set[str] = set()
 
     def revisions(self) -> dict[str, object]:
         return self._revisions.inventory()
@@ -114,6 +117,9 @@ class ImmutableExplorer:
         except (RevisionUnavailable, TypeError) as error:
             raise ObservationError("REVISION_UNAVAILABLE") from error
         self._worktree_blobs = {}
+        self._worktree_sizes = {}
+        self._uncertain_paths = set()
+        self._unverified_worktree = False
         worktree = (self._worktree()
                     if a.identity is None or b.identity is None else None)
         if worktree is not None and worktree != self._worktree():
@@ -130,6 +136,9 @@ class ImmutableExplorer:
         index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT)
         others = _git(self._repo, "ls-files", "--others", "--exclude-standard",
                       "-z", limit=_TREE_LIMIT)
+        changed = set(_git(self._repo, "diff-files", "--name-only", "-z",
+                           "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+                           limit=_TREE_LIMIT).split(b"\0"))
         entries: dict[str, tuple[str, str] | None] = {}
         try:
             for record in index.split(b"\0"):
@@ -180,6 +189,19 @@ class ImmutableExplorer:
                             raise ObservationError("WORKTREE_UNAVAILABLE")
                         mode = "120000"
                     elif stat.S_ISREG(info.st_mode):
+                        self._worktree_sizes[path] = info.st_size
+                        if info.st_size > _FILE_LIMIT:
+                            # Git's index observation is useful for inventory, but
+                            # stat information cannot prove a stable continuation.
+                            self._unverified_worktree = True
+                            mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
+                            if indexed and os.fsencode(path) not in changed:
+                                self._uncertain_paths.add(path)
+                            token = hashlib.sha256(
+                                repr(_file_identity(info)).encode()
+                            ).hexdigest()
+                            result[path] = (mode, "worktree:" + token)
+                            continue
                         if info.st_size > _WORKTREE_LIMIT - total:
                             raise ObservationError("TOO_EXPENSIVE")
                         fd = os.open(
@@ -281,6 +303,8 @@ class ImmutableExplorer:
                 raise ValueError
             if observation != self._observation:
                 raise ObservationError("STALE_CURSOR")
+            if self._unverified_worktree:
+                raise ObservationError("STALE_CURSOR")
             return offset
         except (ValueError, TypeError, UnicodeError) as error:
             raise ObservationError("INVALID_CURSOR") from error
@@ -306,6 +330,12 @@ class ImmutableExplorer:
                       "after_mode": new[0] if new else None,
                       "before_size": None, "after_size": None,
                       "added_lines": None, "deleted_lines": None}
+            if after == "WORKTREE" and new and new[0] != "160000":
+                record["after_size"] = self._worktree_sizes.get(path)
+            if before == "WORKTREE" and old and old[0] != "160000":
+                record["before_size"] = self._worktree_sizes.get(path)
+            if path in self._uncertain_paths:
+                record["change"] = "unknown"
             if old and new and (old[0] == "160000" or new[0] == "160000"):
                 record["pointer_changed"] = old[1] != new[1]
             if mutable and any(entry and entry[0] == "160000" for entry in (old, new)):
@@ -329,6 +359,9 @@ class ImmutableExplorer:
             raise ObservationError("TOO_LARGE")
         end = offset + len(records)
         more = end < len(paths)
+        if more and self._unverified_worktree:
+            # A stat-only observation is insufficient to authenticate a later page.
+            raise ObservationError("TOO_EXPENSIVE")
         return {"status": "OK", "records": records, "complete": not more,
                 "has_more": more, "next_cursor": self._cursor(
                     "changes", before, after, "", end) if more else None}
@@ -361,6 +394,8 @@ class ImmutableExplorer:
                 continue
             data = self._worktree_blobs.get(entry[1])
             if data is None:
+                if entry[1].startswith("worktree:"):
+                    raise ObservationError("TOO_LARGE")
                 size = _git(self._repo, "cat-file", "-s", entry[1], limit=128)
                 if int(size) > _FILE_LIMIT:
                     raise ObservationError("TOO_LARGE")
