@@ -17,6 +17,7 @@ from devlegate.review_provenance import (
     ReviewProvenanceError,
     _transition,
     deferred_amendment_history,
+    resolve_deferred_amendment_review,
     resolve_rework_review,
     restore_review_binding,
 )
@@ -71,6 +72,66 @@ def test_deferred_amendment_history_is_separate_and_blob_preserving(tmp_path, da
     else:
         with pytest.raises(ReviewProvenanceError):
             deferred_amendment_history(*args, **kwargs)
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "modified", "wrong_execution"])
+def test_deferred_amendment_requires_immutable_attributed_review(tmp_path, damage):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for directory in ("review", "backlog", "todo", "reviews/TASK-1"):
+        (tmp_path / directory).mkdir(parents=True)
+    ticket = '---\n"type": "devlegate.ticket"\n"title": "Original"\n---\nBody\n'
+    (tmp_path / "review/TASK-1.md").write_text(ticket)
+    git("add", ".")
+    git("commit", "-qm", "review lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    report = SimpleNamespace(
+        ticket_id="TASK-1", execution_id="a" * 32,
+        workspace_head="b" * 40, control_head="c" * 40,
+        result=SimpleNamespace(egress_ok=True, transport_error=None),
+    )
+    artifact = tmp_path / f"reviews/TASK-1/{report.execution_id}.md"
+    reviewed_execution = (
+        "d" * 32 if damage == "wrong_execution" else report.execution_id
+    )
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        f"ticket: {report.ticket_id}\n"
+        f"execution: {reviewed_execution}\n"
+        f"checkpoint: {report.workspace_head}\ncontrol: {report.control_head}\n"
+        "disposition: rework\n-->\nHistorical feedback.\n"
+    )
+    git("mv", "review/TASK-1.md", "backlog/TASK-1.md")
+    git("add", ".")
+    git("commit", "-qm", "defer with review")
+    (tmp_path / "backlog/TASK-1.md").write_text(ticket.replace("Body", "Revised"))
+    git("add", ".")
+    git("commit", "-qm", "amend")
+    git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+    git("commit", "-qm", "schedule")
+    if damage == "missing":
+        git("rm", str(artifact.relative_to(tmp_path)))
+        git("commit", "-qm", "delete review")
+    elif damage == "modified":
+        artifact.write_text(artifact.read_text() + "Changed\n")
+        git("add", ".")
+        git("commit", "-qm", "alter review")
+    args = (tmp_path, git("rev-parse", "HEAD"), lifecycle, report)
+    kwargs = dict(todo_path="todo", review_path="review", backlog_path="backlog",
+                  runner=run_git)
+    if damage:
+        with pytest.raises(ReviewProvenanceError):
+            resolve_deferred_amendment_review(*args, **kwargs)
+    else:
+        history, binding = resolve_deferred_amendment_review(*args, **kwargs)
+        assert binding.publication == history[0]
+        assert binding.content == artifact.read_text()
 
 
 def _binding():
