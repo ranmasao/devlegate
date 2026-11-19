@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import json
+import os
 import subprocess
 
 import pytest
@@ -240,6 +241,28 @@ def test_large_file_inventory_pages_and_detects_same_size_mutation(tmp_path):
     (tmp_path / "large").write_bytes(b"y" * 40000)
     with pytest.raises(ObservationError, match="STALE_CURSOR"):
         explorer.changes("BASE", "WORKTREE", page["next_cursor"])
+
+
+def test_index_shortcuts_cannot_prove_worktree_content_is_unchanged(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    tracked = tmp_path / "tracked"
+    tracked.write_text("before\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "update-index", "--assume-unchanged", "tracked")
+    original = tracked.stat()
+    tracked.write_text("after!\n")
+    os.utime(tracked, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    # A changed-path-first implementation must not treat this Git shortcut,
+    # or a same-size and same-mtime stat, as proof of identical content.
+    assert git(tmp_path, "diff-files", "--name-only") == ""
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    records = explorer.changes("BASE", "WORKTREE")["records"]
+    assert [record["path"] for record in records] == ["tracked"]
 
 
 def test_large_text_with_small_change_can_be_diffed(tmp_path):
