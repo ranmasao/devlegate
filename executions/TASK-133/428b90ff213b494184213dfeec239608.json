@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "780bcab447b4758289bb019311cfa4972e97f7bf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "428b90ff213b494184213dfeec239608",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized amendment admission and history validation for backlog and unbound todo tickets, including schema/DAG re-evaluation and active, recovery, integration, protected-state and concurrency safeguards.",
+    "Implement the deferred-review fresh-generation lifecycle with immutable review validation and explicit, durable retirement of the exact prior execution resources before admitting new work.",
+    "Add real-Git owner integration and restart/race coverage, operator Git workflow and provenance-state matrix, then run the complete configured CI and Ruff checks."
+  ],
+  "report_artifact": "executions/TASK-133/428b90ff213b494184213dfeec239608.md",
+  "report_sha256": "6b95dbcdb160d39fcc5eae7d891d58cd5b05eaae924c7496497b9f39b1d96591",
+  "resource_generation": "499b73c90b30dc1c65cb738ad9cd780e896516a4f0fddc973a72028805ecec8d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized amendment admission and history validation for backlog and unbound todo tickets, including schema/DAG re-evaluation and active, recovery, integration, protected-state and concurrency safeguards.",
+      "Implement the deferred-review fresh-generation lifecycle with immutable review validation and explicit, durable retirement of the exact prior execution resources before admitting new work.",
+      "Add real-Git owner integration and restart/race coverage, operator Git workflow and provenance-state matrix, then run the complete configured CI and Ruff checks."
+    ],
+    "report": "The available execution budget does not permit completing and validating the interdependent admission and reset lifecycle safely in this invocation. The existing reset operation requeues immediately and its report-discard boundary cannot by itself establish the required amended-generation provenance.",
+    "summary": "Preserved ordinary rework provenance diagnostics unless a complete deferred-amendment route is proven, while retaining fail-closed review evidence checks for proven amendments."
+  },
+  "workspace_head": "f5101851a2dfc9cc1f66220b4e4258d454c1e8c9"
+}
