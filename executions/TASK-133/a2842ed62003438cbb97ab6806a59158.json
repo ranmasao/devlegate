@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "07618e0b24d2a3e9c9691f1764683ae19330556f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "a2842ed62003438cbb97ab6806a59158",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement fresh-generation runtime admission for proven deferred amendments, including immutable review evidence validation, explicit retirement of old resources, owner serialization and control-head race checks.",
+    "Implement and validate backlog and unbound todo amendments, dependency rescheduling, protected-state and active/recovery/integration refusal, and malformed or rewritten history handling.",
+    "Document the operator workflow and provenance-state matrix, add complete integration coverage, and run the full configured CI."
+  ],
+  "report_artifact": "executions/TASK-133/a2842ed62003438cbb97ab6806a59158.md",
+  "report_sha256": "3b799587bba5a07e23e086574ef06f0a185853322dd5d47f65fa1a9060c921ec",
+  "resource_generation": "095a16f8f72f8522e22db4622739d6e4fc6b951b57595a71cab246bee57d3749",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement fresh-generation runtime admission for proven deferred amendments, including immutable review evidence validation, explicit retirement of old resources, owner serialization and control-head race checks.",
+      "Implement and validate backlog and unbound todo amendments, dependency rescheduling, protected-state and active/recovery/integration refusal, and malformed or rewritten history handling.",
+      "Document the operator workflow and provenance-state matrix, add complete integration coverage, and run the full configured CI."
+    ],
+    "report": "The available execution context is exhausted before the admission and resource-retirement changes can be implemented and verified safely; recognized amendments remain blocked rather than being admitted without those safeguards.",
+    "summary": "Added a fail-closed diagnostic for a separately committed deferred-ticket amendment, with a narrow Git history observer and real-Git coverage for valid and malformed transitions."
+  },
+  "workspace_head": "d6eefbbc112d69559eea636f9f560853ad7135ab"
+}
