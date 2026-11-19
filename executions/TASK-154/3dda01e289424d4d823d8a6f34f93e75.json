@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "63a89a8140050384bc3c2ba944bc7b448943ebc0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "3dda01e289424d4d823d8a6f34f93e75",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement changed-path-first inventory and scalable verified pagination without reading every unrelated WORKTREE file, and expand bounded large-file diff support.",
+    "Implement verified shallow submodule checkout, drift, and dirtiness observations, and retained non-ancestor checkpoint provenance including legacy evidence.",
+    "Implement durable per-execution response metering and complete resource, authorization, adapter, and acceptance coverage.",
+    "Run the full project checks and required isolated installed-package dogfooding after a complete checkpoint and green exact-SHA CI."
+  ],
+  "report_artifact": "executions/TASK-154/3dda01e289424d4d823d8a6f34f93e75.md",
+  "report_sha256": "b3341b3eea207cd4f4e078f891c220f84d3c5f207ee52894ff2d469d21a2b2a7",
+  "resource_generation": "dcc0a5f45eec38f141ec5bcb8f0ce038512e70f80f035b01b891e09b41540338",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement changed-path-first inventory and scalable verified pagination without reading every unrelated WORKTREE file, and expand bounded large-file diff support.",
+      "Implement verified shallow submodule checkout, drift, and dirtiness observations, and retained non-ancestor checkpoint provenance including legacy evidence.",
+      "Implement durable per-execution response metering and complete resource, authorization, adapter, and acceptance coverage.",
+      "Run the full project checks and required isolated installed-package dogfooding after a complete checkpoint and green exact-SHA CI."
+    ],
+    "report": "The execution budget does not permit completing the remaining architectural and integration work in this invocation. Pytest is unavailable locally; focused disposable-repository smoke checks and git diff --check passed.",
+    "summary": "Replaced provisional large-WORKTREE file identities with bounded streaming content hashes, enabling accurate inventory and stale-cursor detection for files within the read budget. Added selective bounded support for small diffs of larger text files and focused regression coverage."
+  },
+  "workspace_head": "04deec9a33648e72a1f8cf5ea3ade7c0f14cd08f"
+}
