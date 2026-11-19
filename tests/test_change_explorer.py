@@ -257,3 +257,21 @@ def test_large_text_with_small_change_can_be_diffed(tmp_path):
     result = explorer.diff("BASE", "WORKTREE", "large")
     assert result["complete"]
     assert "+changed\n" in result["lines"]
+
+
+def test_worktree_diff_does_not_read_unrelated_large_file(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "file").write_text("before\n")
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / "file").write_text("after\n")
+    with (tmp_path / "unrelated").open("wb") as stream:
+        stream.truncate(65 * 1024 * 1024)
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    result = explorer.diff("BASE", "WORKTREE", "file")
+    assert result["complete"]
+    assert "-before\n" in result["lines"]
+    assert "+after\n" in result["lines"]
