@@ -14,6 +14,7 @@ from devlegate import runtime
 from devlegate.execution_result import ExecutionReport, build_execution_report
 from devlegate.git import run_git
 from devlegate.review_provenance import (
+    ReviewObservationError,
     ReviewProvenanceError,
     _transition,
     deferred_amendment_history,
@@ -22,6 +23,17 @@ from devlegate.review_provenance import (
     restore_review_binding,
 )
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
+
+
+def test_amendment_observation_failure_is_not_absence(tmp_path):
+    def failed_runner(*_args, **_kwargs):
+        raise OSError("git unavailable")
+
+    with pytest.raises(ReviewObservationError, match="cannot verify"):
+        deferred_amendment_history(
+            tmp_path, "a" * 40, "b" * 40, "TASK-1", todo_path="todo",
+            review_path="review", backlog_path="backlog", runner=failed_runner,
+        )
 
 
 @pytest.mark.parametrize("damage", [None, "move_edit", "delete_recreate", "direct"])
