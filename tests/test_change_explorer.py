@@ -275,3 +275,25 @@ def test_worktree_diff_does_not_read_unrelated_large_file(tmp_path):
     assert result["complete"]
     assert "-before\n" in result["lines"]
     assert "+after\n" in result["lines"]
+
+
+def test_many_line_low_delta_diff_has_original_coordinates(tmp_path):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    original = [f"line {number}\n" for number in range(10000)]
+    (tmp_path / "file").write_text("".join(original))
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    modified = original.copy()
+    modified[5000] = "changed\n"
+    (tmp_path / "file").write_text("".join(modified))
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    result = explorer.diff("BASE", "WORKTREE", "file")
+    assert result["complete"]
+    assert "@@ -4998,7 +4998,7 @@\n" in result["lines"]
+    (tmp_path / "file").write_text("".join(original))
+    subprocess.run(["git", "apply", "-"], cwd=tmp_path, check=True,
+                   input="".join(result["lines"]), text=True, capture_output=True)
+    assert (tmp_path / "file").read_text() == "".join(modified)
