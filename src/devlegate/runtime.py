@@ -166,6 +166,7 @@ from devlegate.recovery_workspace import (
 from devlegate.resource_binding import ResourceBinding, ResourceProof, UnprovenResource
 from devlegate.review_provenance import (
     ReviewProvenanceError,
+    deferred_amendment_history,
     resolve_rework_review,
     restore_review_binding,
 )
@@ -4724,6 +4725,22 @@ class ServiceEngine:
                             runner=self._git_runtime,
                         )
                     except ReviewProvenanceError as error:
+                        try:
+                            amendment = deferred_amendment_history(
+                                self.control_worktree, control_head, lifecycle_commit,
+                                selected_ticket.id, todo_path=self.todo_path,
+                                review_path=self.review_path,
+                                backlog_path=self.backlog_path,
+                                runner=self._git_runtime,
+                            )
+                        except ReviewProvenanceError:
+                            amendment = None
+                        if amendment is not None:
+                            raise WorkflowBlockedError(
+                                "deferred ticket has an amended specification; "
+                                "fresh-generation admission and explicit retirement "
+                                "of prior execution resources are required"
+                            ) from error
                         raise WorkflowBlockedError(
                             "cannot bind curator feedback for "
                             f"{selected_ticket.id}: {error}"

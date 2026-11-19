@@ -24,6 +24,7 @@ from devlegate.git import (
     path_object,
     read_path,
 )
+from devlegate.tickets import TicketError, parse_ticket_text
 
 
 class ReviewProvenanceError(ValueError):
@@ -140,6 +141,85 @@ def _same_blob(
     original = path_object(repo, older, older_path, runner=runner)
     current = path_object(repo, newer, newer_path, runner=runner)
     return original is not None and original == current
+
+
+def deferred_amendment_history(
+    repo: Path,
+    head: str,
+    lifecycle: str,
+    ticket_id: str,
+    *,
+    todo_path: str,
+    review_path: str,
+    backlog_path: str,
+    runner: Runner,
+) -> tuple[str, str, str] | None:
+    """Identify a narrow review -> backlog -> edit -> todo history.
+
+    This observes ticket history only.  It does not authorize a new execution:
+    callers must separately establish review evidence, admission and resource
+    retirement, and guard the observed control head against concurrent updates.
+    """
+    review = f"{review_path}/{ticket_id}.md"
+    backlog = f"{backlog_path}/{ticket_id}.md"
+    todo = f"{todo_path}/{ticket_id}.md"
+    state = "review"
+    transition: list[str] = []
+    parent = lifecycle
+    try:
+        commits = commit_range(
+            repo, f"{lifecycle}..{head}", reverse=True, runner=runner
+        )
+        for commit in commits:
+            if commit_parents(repo, commit, runner=runner) != (parent,):
+                raise ReviewProvenanceError("amendment history is not linear")
+            changes = set(commit_changes(repo, commit, runner=runner))
+            workflow = {item for item in changes if item.endswith(f"/{ticket_id}.md")}
+            if workflow:
+                if state == "review" and workflow == {f"D\t{review}", f"A\t{backlog}"}:
+                    # The review artifact may be published in the same commit.
+                    extra = changes - workflow
+                    artifact_prefix = f"A\treviews/{ticket_id}/"
+                    if len(extra) > 1 or any(
+                        not item.startswith(artifact_prefix) for item in extra
+                    ):
+                        raise ReviewProvenanceError(
+                            "review deferral contains unrelated changes"
+                        )
+                    if not _same_blob(repo, parent, review, commit, backlog, runner):
+                        raise ReviewProvenanceError(
+                            "ticket changed during review deferral"
+                        )
+                    state = "backlog"
+                elif state == "backlog" and changes == {f"M\t{backlog}"}:
+                    old = path_object(repo, parent, backlog, runner=runner)
+                    new = path_object(repo, commit, backlog, runner=runner)
+                    text = read_path(repo, commit, backlog, runner=runner)
+                    if old is None or new is None or old == new or text is None:
+                        raise ReviewProvenanceError(
+                            "amendment does not change an existing ticket blob"
+                        )
+                    parse_ticket_text(Path(backlog), "backlog", text)
+                    state = "amended"
+                elif state == "amended" and changes == {f"D\t{backlog}", f"A\t{todo}"}:
+                    if not _same_blob(repo, parent, backlog, commit, todo, runner):
+                        raise ReviewProvenanceError(
+                            "ticket changed during backlog scheduling"
+                        )
+                    state = "todo"
+                else:
+                    raise ReviewProvenanceError(
+                        "ambiguous or unsupported amendment history"
+                    )
+                transition.append(commit)
+            parent = commit
+        if state == "todo":
+            return transition[0], transition[1], transition[2]
+        return None
+    except (GitObservationError, GitAncestryError, TicketError) as error:
+        raise ReviewProvenanceError(
+            "cannot verify deferred amendment history"
+        ) from error
 
 
 def _transition(
@@ -347,6 +427,7 @@ __all__ = [
     "MAX_REVIEW_BYTES",
     "ReviewBinding",
     "ReviewProvenanceError",
+    "deferred_amendment_history",
     "restore_review_binding",
     "resolve_rework_review",
 ]
