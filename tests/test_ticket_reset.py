@@ -18,6 +18,7 @@ from runtime_helpers import run_test_iteration
 from test_clean_preview import owner as owner  # noqa: F401
 
 from devlegate.execution_containment import DurableDeterministicContainmentProvider
+from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.ipc_server import UnixIPCServer
 from devlegate.runtime import DevlegateError, WorkflowBlockedError
@@ -30,6 +31,86 @@ from devlegate.worker_supervisor import (
     _linux_process_start_time,
     _run_opencode,
 )
+
+
+@pytest.mark.parametrize("valid_review", [True, False])
+def test_amended_review_requires_proven_deferral_before_fresh_reset(
+    owner, monkeypatch, valid_review,
+):
+    report = ExecutionReportStore(owner.control_worktree).list("T-1")[0]
+    source = owner.control_worktree / owner.review_path / "T-1.md"
+    backlog = owner.control_worktree / owner.backlog_path / "T-1.md"
+    todo = owner.control_worktree / owner.todo_path / "T-1.md"
+    artifact = owner.control_worktree / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        f"ticket: T-1\nexecution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\ncontrol: {report.control_head}\n"
+        f"disposition: {'rework' if valid_review else 'accept'}\n-->\n"
+        "OLD_FEEDBACK\n"
+    )
+    git(owner.control_worktree, "mv", str(source), str(backlog))
+    git(owner.control_worktree, "add", "reviews")
+    git(owner.control_worktree, "commit", "-m", "defer reviewed ticket")
+    backlog.write_text(backlog.read_text() + "\nAMENDED_SPECIFICATION\n")
+    git(owner.control_worktree, "add", str(backlog))
+    git(owner.control_worktree, "commit", "-m", "amend ticket")
+    git(owner.control_worktree, "mv", str(backlog), str(todo))
+    git(owner.control_worktree, "commit", "-m", "schedule amendment")
+    git(owner.control_worktree, "push", "origin", owner.control_branch)
+    old_evidence = git(owner.control_worktree, "ls-tree", "-r", "HEAD",
+                       "executions", "reviews").stdout
+    with owner._lock():
+        if not valid_review:
+            with pytest.raises(ValueError, match="deferred amendment provenance"):
+                admit(owner, "T-1")
+            assert "ticket_reset" not in owner._state
+            return
+        admit(owner, "T-1")
+        advance(owner)
+    assert git(owner.control_worktree, "ls-tree", "-r", "HEAD", "executions",
+               "reviews").stdout == old_evidence
+    captured = []
+    original = owner._workers.run
+
+    def worker(workspace, prompt, **kwargs):
+        assert not (workspace.path / "implementation.txt").exists()
+        captured.append((prompt, kwargs["execution_id"]))
+        return original(workspace, prompt, **kwargs)
+
+    monkeypatch.setattr(owner._workers, "run", worker)
+    assert run_test_iteration(owner) == 0
+    assert captured[0][1] != report.execution_id
+    assert "AMENDED_SPECIFICATION" in captured[0][0]
+    assert "OLD_FEEDBACK" not in captured[0][0]
+
+
+def test_queued_reset_refuses_ticket_change_before_admission(owner, monkeypatch):
+    with owner._lock():
+        admit(owner, "T-1")
+        advance(owner)
+    ticket = owner.control_worktree / owner.todo_path / "T-1.md"
+    ticket.write_text(ticket.read_text() + "\nChanged after reset\n")
+    git(owner.control_worktree, "add", str(ticket))
+    git(owner.control_worktree, "commit", "-m", "change queued ticket")
+    git(owner.control_worktree, "push", "origin", owner.control_branch)
+    monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: pytest.fail("launch"))
+    with pytest.raises(WorkflowBlockedError, match="queued reset ticket"):
+        run_test_iteration(owner)
+
+
+def test_reset_refuses_review_to_todo_with_changed_specification(owner):
+    source = owner.control_worktree / owner.review_path / "T-1.md"
+    target = owner.control_worktree / owner.todo_path / "T-1.md"
+    git(owner.control_worktree, "mv", str(source), str(target))
+    target.write_text(target.read_text() + "\nUnreviewed mutation\n")
+    git(owner.control_worktree, "add", str(target))
+    git(owner.control_worktree, "commit", "-m", "invalid direct change")
+    git(owner.control_worktree, "push", "origin", owner.control_branch)
+    with owner._lock(), pytest.raises(ValueError, match="deferred amendment"):
+        admit(owner, "T-1")
+    assert "ticket_reset" not in owner._state
 
 
 @pytest.mark.parametrize("state", ["backlog", "todo", "review"])
