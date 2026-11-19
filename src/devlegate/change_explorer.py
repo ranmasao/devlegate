@@ -29,7 +29,10 @@ _FILE_LIMIT = 32 * 1024
 _DIFF_FILE_LIMIT = 4 * 1024 * 1024
 _LINE_LIMIT = 4096
 _PAGE_LIMIT = 8 * 1024
-_WORKTREE_LIMIT = 64 * 1024 * 1024
+# Both verification passes share this budget. Index metadata is not trusted as
+# evidence of unchanged contents (including for assume-unchanged entries).
+_WORKTREE_LIMIT = 128 * 1024 * 1024
+_WORKTREE_SECONDS = 3
 
 
 def _serialized_size(value: object) -> int:
@@ -121,10 +124,17 @@ class ImmutableExplorer:
         self._worktree_blobs = {}
         self._large_worktree_blobs = set()
         self._worktree_sizes = {}
-        worktree = (self._worktree(diff_path)
-                     if a.identity is None or b.identity is None else None)
-        if worktree is not None and worktree != self._worktree(diff_path):
-            raise ObservationError("WORKTREE_UNAVAILABLE")
+        worktree = None
+        if a.identity is None or b.identity is None:
+            # There is no owner-controlled change tracker for this workspace.
+            # Consequently completeness requires content-reading every eligible
+            # entry, not trusting index/stat shortcuts. Two bounded passes detect
+            # changes between observations; they do not make a mutable worktree
+            # an atomic snapshot. Cursors re-observe content before every page.
+            budget = [_WORKTREE_LIMIT, time.monotonic() + _WORKTREE_SECONDS]
+            worktree = self._worktree(diff_path, budget)
+            if worktree != self._worktree(diff_path, budget):
+                raise ObservationError("WORKTREE_UNAVAILABLE")
         trees = (self._tree(a.identity) if a.identity else worktree,
                  self._tree(b.identity) if b.identity else worktree)
         self._observation = hmac.new(
@@ -132,7 +142,9 @@ class ImmutableExplorer:
         ).hexdigest()
         return trees
 
-    def _worktree(self, diff_path: str | None = None) -> dict[str, tuple[str, str]]:
+    def _worktree(
+        self, diff_path: str | None, budget: list
+    ) -> dict[str, tuple[str, str]]:
         """Read bounded parent entries without traversing symlinks or gitlinks."""
         index = _git(self._repo, "ls-files", "--stage", "-z", limit=_TREE_LIMIT)
         others = _git(self._repo, "ls-files", "--others", "--exclude-standard",
@@ -154,8 +166,7 @@ class ImmutableExplorer:
         except (ValueError, UnicodeError) as error:
             raise ObservationError("WORKTREE_UNAVAILABLE") from error
         result = {}
-        total = 0
-        deadline = time.monotonic() + 3
+        deadline = budget[1]
         root = os.open(self._repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             for path, indexed in sorted(entries.items()):
@@ -195,7 +206,7 @@ class ImmutableExplorer:
                         mode = "120000"
                     elif stat.S_ISREG(info.st_mode):
                         self._worktree_sizes[path] = info.st_size
-                        if info.st_size > _WORKTREE_LIMIT - total:
+                        if info.st_size > budget[0]:
                             raise ObservationError("TOO_EXPENSIVE")
                         fd = os.open(
                             parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -225,6 +236,7 @@ class ImmutableExplorer:
                                 if not chunk:
                                     break
                                 read += len(chunk)
+                                budget[0] -= len(chunk)
                                 if read > info.st_size:
                                     raise ObservationError("WORKTREE_UNAVAILABLE")
                                 digest.update(chunk)
@@ -237,7 +249,6 @@ class ImmutableExplorer:
                         finally:
                             os.close(fd)
                         mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
-                        total += read
                         obj = digest.hexdigest()
                         result[path] = (mode, obj)
                         if info.st_size <= cache_limit:
@@ -247,8 +258,8 @@ class ImmutableExplorer:
                         continue
                     else:
                         raise ObservationError("WORKTREE_UNAVAILABLE")
-                    total += len(data)
-                    if total > _WORKTREE_LIMIT:
+                    budget[0] -= len(data)
+                    if budget[0] < 0:
                         raise ObservationError("TOO_EXPENSIVE")
                     base = self._revisions.resolve("BASE").identity
                     algorithm = hashlib.sha256 if len(base) == 64 else hashlib.sha1

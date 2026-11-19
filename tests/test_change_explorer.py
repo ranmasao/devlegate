@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import devlegate.change_explorer as change_explorer
 from devlegate.change_explorer import ImmutableExplorer, ObservationError
 from devlegate.change_revisions import Checkpoint, RevisionNamespace
 
@@ -263,6 +264,29 @@ def test_index_shortcuts_cannot_prove_worktree_content_is_unchanged(tmp_path):
     explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
     records = explorer.changes("BASE", "WORKTREE")["records"]
     assert [record["path"] for record in records] == ["tracked"]
+
+
+def test_worktree_verification_passes_share_read_budget(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "Test")
+    (tmp_path / "large").write_bytes(b"a" * 4096)
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-qm", "base")
+    base = git(tmp_path, "rev-parse", "HEAD")
+    for number in range(35):
+        (tmp_path / f"new-{number:02}").write_text("new\n")
+    explorer = ImmutableExplorer(tmp_path, RevisionNamespace(base, ()), b"x" * 32)
+    page = explorer.changes("BASE", "WORKTREE")
+    assert page["has_more"]
+    # One pass fits but both do not. Neither an initial request nor a cursor
+    # continuation may return a purportedly complete inventory in this case.
+    monkeypatch.setattr(change_explorer, "_WORKTREE_LIMIT", 5000)
+    for cursor in (None, page["next_cursor"]):
+        with pytest.raises(ObservationError, match="TOO_EXPENSIVE"):
+            explorer.changes("BASE", "WORKTREE", cursor)
+    # An unrelated large entry must not prevent a bounded one-path diff.
+    assert "+new\n" in explorer.diff("BASE", "WORKTREE", "new-00")["lines"]
 
 
 def test_large_text_with_small_change_can_be_diffed(tmp_path):
