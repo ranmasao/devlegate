@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "4df56a42c8d9b835293ac8fd27a4c4019adec5aa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "2c931b550b004293a5297813f4f5ae35",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-serialized, control-SHA-bound amendment admission for backlog and unbound todo tickets, including dependency and DAG re-evaluation and active-execution race protection.",
+    "Bind verified deferred amendment history to explicit reset/retirement evidence and admit a fresh execution generation without reusing prior work or feedback; preserve ordinary rework behavior.",
+    "Add full runtime and real-Git coverage for protected states, races, resource lifecycle and fresh worker admission; document the provenance-state matrix and operator workflow, and run the configured checks."
+  ],
+  "report_artifact": "executions/TASK-133/2c931b550b004293a5297813f4f5ae35.md",
+  "report_sha256": "ef7ab5201eb16d8388c9e04a77429458aa5637036371e45dbb47d14054c1796b",
+  "resource_generation": "16d96ba65cde23331a7770ca0eed7024c779bfdd939928a8382de9f8f2653b71",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-serialized, control-SHA-bound amendment admission for backlog and unbound todo tickets, including dependency and DAG re-evaluation and active-execution race protection.",
+      "Bind verified deferred amendment history to explicit reset/retirement evidence and admit a fresh execution generation without reusing prior work or feedback; preserve ordinary rework behavior.",
+      "Add full runtime and real-Git coverage for protected states, races, resource lifecycle and fresh worker admission; document the provenance-state matrix and operator workflow, and run the configured checks."
+    ],
+    "report": "The execution time available for this invocation does not permit safely completing and validating the owner admission and reset integration. The existing fresh-generation refusal remains in place.",
+    "summary": "Strengthened deferred-amendment observation to verify the original review's attribution and immutable publication through the current control head. Runtime diagnostics now fail closed when that review evidence cannot be verified."
+  },
+  "workspace_head": "e1d07456c95e88520b864b8e2397829cda0ea495"
+}
