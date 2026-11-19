@@ -1,0 +1,42 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "1b8d41f108bdca6fb690d473c98faeba86a0d806",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "f8a93d2c79614929a15129570e94e5ae",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Replace provisional stat-based large-file handling with a bounded, verifiable selective inventory that supports stable pagination and reports changed paths without uncertain unrelated entries; cover aggregate scan limits and concurrent mutations.",
+    "Implement bounded factual submodule checkout and dirty-state observation, including staged pointer differences and unavailable states.",
+    "Complete retained non-linear checkpoint provenance and durable per-execution response metering across owner restarts.",
+    "Implement bounded low-delta large-file diffs and remaining file/type, security, pagination and budget acceptance cases.",
+    "Run focused and full project checks, then perform the requested isolated installed-artifact and real OpenCode tool acceptance with durable evidence."
+  ],
+  "report_artifact": "executions/TASK-154/f8a93d2c79614929a15129570e94e5ae.md",
+  "report_sha256": "168b497cc9dd547f90b89088a0dcc7810cdc7f6f95ab379ccd3412c6090150f6",
+  "resource_generation": "a02b8e6503ad30618c9b5ae983ae3781bdc538af14a6fd098931e643aa9f1e93",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Replace provisional stat-based large-file handling with a bounded, verifiable selective inventory that supports stable pagination and reports changed paths without uncertain unrelated entries; cover aggregate scan limits and concurrent mutations.",
+      "Implement bounded factual submodule checkout and dirty-state observation, including staged pointer differences and unavailable states.",
+      "Complete retained non-linear checkpoint provenance and durable per-execution response metering across owner restarts.",
+      "Implement bounded low-delta large-file diffs and remaining file/type, security, pagination and budget acceptance cases.",
+      "Run focused and full project checks, then perform the requested isolated installed-artifact and real OpenCode tool acceptance with durable evidence."
+    ],
+    "report": "This invocation reached its available execution resources before the full implementation and acceptance work could be completed. The local environment also lacks pytest and Ruff; a disposable-repository smoke check and git diff --check succeeded.",
+    "summary": "WORKTREE inventory avoids loading oversized files and reports uncertain large-file observations explicitly, while refusing continuations that cannot be verified. Added focused coverage for large-file inventories and conservative pagination."
+  },
+  "workspace_head": "d1a33f49567796b3cd6c0be3181598fd5b439144"
+}
