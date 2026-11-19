@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "7749d20f084ac18eed685acc77b1986696df4df4",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "9f3fe1d0e340446a99023690e1483337",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement changed-path-first WORKTREE inventory with content-verified, stable pagination and no silently omitted paths.",
+    "Complete retained checkpoint attribution, bounded shallow submodule status, and durable per-execution response accounting.",
+    "Complete large low-delta diff handling and the remaining acceptance and adapter integration tests.",
+    "Run focused and full checks in a tool-equipped environment; obtain exact-checkpoint hosted CI and perform the requested isolated package dogfooding when permitted by the owner."
+  ],
+  "report_artifact": "executions/TASK-154/9f3fe1d0e340446a99023690e1483337.md",
+  "report_sha256": "33e72076fd17eedb4807646bd86febfbf0d7a780e035c779e9c0f5dc889e6d6a",
+  "resource_generation": "06c8e44c3e2c1eb613492857558d6d29afc6e47f72139a2fe5ea4113bcf0427f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement changed-path-first WORKTREE inventory with content-verified, stable pagination and no silently omitted paths.",
+      "Complete retained checkpoint attribution, bounded shallow submodule status, and durable per-execution response accounting.",
+      "Complete large low-delta diff handling and the remaining acceptance and adapter integration tests.",
+      "Run focused and full checks in a tool-equipped environment; obtain exact-checkpoint hosted CI and perform the requested isolated package dogfooding when permitted by the owner."
+    ],
+    "report": "This invocation has reached its execution resource limit before the remaining architectural changes could be implemented. Local pytest and Ruff are unavailable, and ./dev lint cannot run without the missing development environment; a disposable-repository smoke check and git diff --check passed.",
+    "summary": "Reformatted the Change Explorer code flagged by Ruff and limited one-file WORKTREE diff observations to the requested entry and enclosing gitlinks. Added a regression test for diffing a small file alongside an unrelated file larger than the worktree read budget."
+  },
+  "workspace_head": "d65fb84268917e71417d6fe65ada6233d4768902"
+}
