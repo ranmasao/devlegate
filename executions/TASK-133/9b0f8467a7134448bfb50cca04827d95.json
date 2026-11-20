@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "a953610ac6c3245b62b22ed0501312acc9f03c75",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "9b0f8467a7134448bfb50cca04827d95",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement serialized owner authorization for backlog and unbound todo amendments, including exact local/remote control re-observation and admission-race handling.",
+    "Implement and verify deferred-review fresh-generation admission with explicit resource retirement and immutable prior evidence; preserve unchanged-spec rework.",
+    "Cover protected-state modifications, malformed histories, active/recovery/integration/reset conflicts, dependency rescheduling and restart behavior at the owner boundary; document the provenance matrix and operator Git workflow.",
+    "Run the exact configured full CI checks on the final implementation."
+  ],
+  "report_artifact": "executions/TASK-133/9b0f8467a7134448bfb50cca04827d95.md",
+  "report_sha256": "249ff856888b376568e684b2055490b5ead790e566cbf03a8171e12062411fd5",
+  "resource_generation": "3a3e474a898737efc333c7a8a08ab5a963a0f9a857c75b21bc760a03e3585695",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement serialized owner authorization for backlog and unbound todo amendments, including exact local/remote control re-observation and admission-race handling.",
+      "Implement and verify deferred-review fresh-generation admission with explicit resource retirement and immutable prior evidence; preserve unchanged-spec rework.",
+      "Cover protected-state modifications, malformed histories, active/recovery/integration/reset conflicts, dependency rescheduling and restart behavior at the owner boundary; document the provenance matrix and operator Git workflow.",
+      "Run the exact configured full CI checks on the final implementation."
+    ],
+    "report": "The invocation's execution time was exhausted before the owner admission and fresh-generation lifecycle could be safely completed. Focused scheduler and history tests passed; Ruff on changed files passed. A broad Ruff invocation also scanned third-party packaging sources and reported existing lint violations there.",
+    "summary": "Bound execution control-descendant adoption now inspects intervening ticket history and rejects specification amendments, including edits subsequently reverted. Added a real-Git regression test for the edit-and-revert case."
+  },
+  "workspace_head": "1b6bc417aa0fcd42ba9ef91b4fd28b9ae50caa1a"
+}
