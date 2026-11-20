@@ -1,0 +1,36 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "d5101c029979b3c2c610ccc596bb8059b3d0adee",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "a01dee4a59064f92a3ffc35e11cc5e1f",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Identify and resolve the failures reported by the full parallel coverage run; rerun the configured full coverage suite and Ruff on the final implementation.",
+    "Complete owner-boundary coverage for malformed schema or dependency cycles and control-SHA/admission races, and confirm the history gate remains sound across recovery and integration paths."
+  ],
+  "report_artifact": "executions/TASK-133/a01dee4a59064f92a3ffc35e11cc5e1f.md",
+  "report_sha256": "ad4662c70a26c1539ab0335dcdb22c20fca0e82cbd7145d4acf6daf66c02a59d",
+  "resource_generation": "2ca43ba0a4eed889317063c96521d398c901bd88e14dce1af94ed8a911f20ab1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Identify and resolve the failures reported by the full parallel coverage run; rerun the configured full coverage suite and Ruff on the final implementation.",
+      "Complete owner-boundary coverage for malformed schema or dependency cycles and control-SHA/admission races, and confirm the history gate remains sound across recovery and integration paths."
+    ],
+    "report": "The focused scheduler, amendment-history, and reset suites passed, but the full parallel coverage run timed out after reporting failures without reaching its failure summary; a subsequent isolation run also timed out before identifying them. The available local interpreter is Python 3.14 rather than CI's configured Python 3.12.",
+    "summary": "Added an owner admission history gate anchored to the last durably handled control head, with an explicit first-observation bootstrap boundary. Repaired the backlog amendment fixture and added real-Git refusals for invalid moves, protected edits, and deletion/recreation, plus observation-failure coverage and operator documentation."
+  },
+  "workspace_head": "7d67e0ca7a92838edbfec45a82df72ab781aaf31"
+}
