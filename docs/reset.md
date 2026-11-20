@@ -88,6 +88,42 @@ after reset is queued blocks fresh admission; preserve the evidence and resolve
 the control lineage rather than attempting to replace resources. A failed push
 requires fetching and examining the new control history before retrying.
 
+### Ordinary unbound specifications
+
+In a clean control checkout, an operator with control-branch write access can
+edit an existing backlog ticket and push the edit as an ordinary commit:
+
+```sh
+${EDITOR:-vi} kanban/backlog/TASK-123.md
+git add kanban/backlog/TASK-123.md
+git commit -m 'Amend TASK-123 specification'
+git push origin HEAD:devlegate/control
+# Only after the curator schedules the ticket:
+git mv kanban/backlog/TASK-123.md kanban/todo/TASK-123.md
+git commit -m 'Schedule TASK-123'
+git push origin HEAD:devlegate/control
+```
+
+An unbound todo ticket can similarly be edited at `kanban/todo/TASK-123.md`,
+committed and pushed. The owner reloads the ticket store and re-evaluates
+dependencies before selecting work. Keep workflow moves and content edits in
+separate commits; preserve the ticket ID and valid ticket schema and DAG.
+
+| Ticket provenance/state | Operator route |
+| --- | --- |
+| Backlog or unbound todo | Commit an edit at the existing path; schedule backlog separately. |
+| Pending or active execution, recovery, or integration | Do not amend the bound specification; resolve the owner operation first. |
+| Review, unchanged specification | Ordinary rework retains its attributed review binding. |
+| Review, amended specification | Defer unchanged with an attributed review, amend in backlog, schedule, then reset. |
+| Accepted or done | Preserve the reviewed/integrated history; do not edit it in place. |
+
+Do not resolve a rejected push by force-pushing. Fetch and inspect the new
+control history, determine whether a worker was admitted or another operation
+started, and retry only at a supported boundary. Observation failures, ambiguous
+identity, malformed tickets or DAGs, and changed control lineage require repair
+and a fresh owner observation. Explicit reset is the resource-retirement route;
+an edit alone does not dispose of old worktrees or refs.
+
 ## Effects and cost
 
 Only one owner serializes admission, cancellation, resource retirement and
