@@ -791,6 +791,29 @@ def test_bound_pending_generation_adopts_safe_control_descendant(
     assert "stale execution" not in result.stderr
 
 
+def test_bound_control_descendant_rejects_edit_then_revert(tmp_path, monkeypatch):
+    working, config, state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    control = next((state / "worktrees").glob("*/control"))
+    admitted = git(control, "rev-parse", "HEAD").stdout.strip()
+    ticket = control / "kanban/todo/T-1.md"
+    original = ticket.read_text()
+    ticket.write_text(original + "amended\n")
+    git(control, "add", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "amend ticket")
+    ticket.write_text(original)
+    git(control, "add", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "revert ticket amendment")
+    candidate = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    monkeypatch.chdir(working)
+    devlegate = Devlegate(config)
+    with pytest.raises(
+        ExecutionWorkspaceError, match="bound ticket specification changed"
+    ):
+        devlegate._adopt_validated_control_descendant(candidate, "T-1", admitted)
+
+
 def test_bound_pending_generation_blocks_changed_dependency_eligibility(tmp_path):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0

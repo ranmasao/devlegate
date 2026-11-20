@@ -6340,6 +6340,26 @@ class ServiceEngine:
                 "control history diverged from the execution admission generation; "
                 "per-execution reconciliation is required"
             )
+        # Comparing only the final ticket contents misses an edit followed by a
+        # revert.  A bound execution must retain its exact specification for the
+        # entire interval, including across restarts and control fast-forwards.
+        from devlegate.amendment_history import observe_ticket_history
+
+        try:
+            amendments = observe_ticket_history(
+                self.control_worktree, admitted_control, candidate, ticket_id,
+                self._workflow_paths(), runner=self._git_runtime,
+            )
+        except (ValueError, GitObservationError, GitAncestryError) as error:
+            raise ExecutionWorkspaceError(
+                "cannot prove bound ticket control history; "
+                "per-execution reconciliation is required"
+            ) from error
+        if amendments:
+            raise ExecutionWorkspaceError(
+                "bound ticket specification changed after execution admission; "
+                "explicit recovery or reset is required"
+            )
         reason = self._control_descendant_adoption_error(candidate, ticket_id)
         if reason is not None:
             raise ExecutionWorkspaceError(reason)
