@@ -1,0 +1,38 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "blocked",
+  "control_head": "c522e25781459460e3b2b162b41a093c725c5968",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-185",
+  "execution_id": "2c52fe5d737444ddbcd51854fa14bcdb",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-185",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate integrate the worker changes and run hosted CI on the resulting exact SHA?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Verify full hosted CI, including coverage and Ruff, on the exact integrated final SHA."
+  ],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "a79512cc525af52ae66449b35bdefa3a561730d242c52775a34d158bac5ae2c8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-185",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate integrate the worker changes and run hosted CI on the resulting exact SHA?"
+    ],
+    "remaining": [
+      "Verify full hosted CI, including coverage and Ruff, on the exact integrated final SHA."
+    ],
+    "report": null,
+    "summary": "Fixed reset retirement to resolve submodule admin ownership using unique safe names from each pinned commit\u2019s .gitmodules, preserving recursive safety checks. Added real-Git coverage for named submodules, dirty retirement, and invalid mappings."
+  },
+  "workspace_head": "adb397a2c6af9b384ae770702eae49fb526d275a"
+}
