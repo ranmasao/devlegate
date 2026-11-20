@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+import devlegate.amendment_history as amendment_history
 from devlegate.amendment_history import observe_ticket_history
 from devlegate.tickets import WORKFLOW_STATES
 
@@ -56,7 +57,9 @@ def test_observes_backlog_and_todo_changes_and_exact_move(history):
     assert all(item.old_blob != item.new_blob for item in changes)
 
 
-@pytest.mark.parametrize("operation", ["delete-recreate", "move-edit", "protected-edit"])
+@pytest.mark.parametrize(
+    "operation", ["delete-recreate", "move-edit", "protected-edit"]
+)
 def test_rejects_ambiguous_or_protected_history(history, operation):
     repo, paths, ticket, start = history
     original = ticket.read_text()
@@ -79,3 +82,39 @@ def test_rejects_ambiguous_or_protected_history(history, operation):
     end = commit(repo, operation)
     with pytest.raises(ValueError):
         observe_ticket_history(repo, start, end, "T-1", paths)
+
+
+def test_edit_then_revert_is_not_mistaken_for_unchanged_history(history):
+    repo, paths, ticket, start = history
+    original = ticket.read_text()
+    ticket.write_text(original + "Changed\n")
+    first = commit(repo, "edit")
+    ticket.write_text(original)
+    last = commit(repo, "revert")
+    amendments = observe_ticket_history(repo, start, last, "T-1", paths)
+    assert [item.commit for item in amendments] == [first, last]
+    assert amendments[0].old_blob == amendments[1].new_blob
+
+
+def test_incomplete_range_cannot_be_treated_as_no_amendment(history, monkeypatch):
+    repo, paths, ticket, start = history
+    ticket.write_text(ticket.read_text() + "Changed\n")
+    end = commit(repo, "edit")
+    monkeypatch.setattr(amendment_history, "commit_range", lambda *a, **k: ())
+    with pytest.raises(ValueError, match="did not reach"):
+        observe_ticket_history(repo, start, end, "T-1", paths)
+
+
+def test_missing_diff_cannot_hide_changed_blob(history, monkeypatch):
+    repo, paths, ticket, start = history
+    ticket.write_text(ticket.read_text() + "Changed\n")
+    end = commit(repo, "edit")
+    monkeypatch.setattr(amendment_history, "commit_changes", lambda *a, **k: ())
+    with pytest.raises(ValueError, match="without an observable diff"):
+        observe_ticket_history(repo, start, end, "T-1", paths)
+
+
+def test_rejects_symbolic_control_identity(history):
+    repo, paths, _, start = history
+    with pytest.raises(ValueError, match="exact control commit"):
+        observe_ticket_history(repo, start, "HEAD", "T-1", paths)
