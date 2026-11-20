@@ -71,12 +71,16 @@ def test_amended_review_requires_proven_deferral_before_fresh_reset(
         advance(owner)
     assert git(owner.control_worktree, "ls-tree", "-r", "HEAD", "executions",
                "reviews").stdout == old_evidence
+    amended_head = git(owner.control_worktree, "rev-parse", "HEAD").stdout.strip()
+    amended_blob = git(owner.control_worktree, "rev-parse",
+                       f"{amended_head}:{owner.todo_path}/T-1.md").stdout.strip()
     captured = []
     original = owner._workers.run
+    owner = Devlegate(owner.env_file)
 
     def worker(workspace, prompt, **kwargs):
         assert not (workspace.path / "implementation.txt").exists()
-        captured.append((prompt, kwargs["execution_id"]))
+        captured.append((prompt, kwargs["execution_id"], dict(owner._state)))
         return original(workspace, prompt, **kwargs)
 
     monkeypatch.setattr(owner._workers, "run", worker)
@@ -84,6 +88,11 @@ def test_amended_review_requires_proven_deferral_before_fresh_reset(
     assert captured[0][1] != report.execution_id
     assert "AMENDED_SPECIFICATION" in captured[0][0]
     assert "OLD_FEEDBACK" not in captured[0][0]
+    assert captured[0][2]["execution_control_head"] == amended_head
+    assert git(
+        owner.control_worktree, "rev-parse", f"{amended_head}:{owner.todo_path}/T-1.md"
+    ).stdout.strip() == amended_blob
+    assert artifact.read_text().endswith("OLD_FEEDBACK\n")
 
 
 def test_queued_reset_refuses_ticket_change_before_admission(owner, monkeypatch):

@@ -229,6 +229,70 @@ def test_dependency_state_change_on_control_changes_plan(tmp_path, monkeypatch):
     assert snapshot.eligible == (("T-1", "Waiting"),)
     assert snapshot.blocked == ()
 
+
+@pytest.mark.parametrize("edit_todo", [False, True])
+def test_pushed_unbound_amendments_reach_scheduler_and_worker(
+    tmp_path, monkeypatch, edit_todo,
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    publisher = tmp_path / "publisher"
+    git(
+        tmp_path, "clone", "-b", "devlegate/control", str(tmp_path / "remote.git"),
+        publisher,
+    )
+    ticket = publisher / "kanban/todo/T-1.md"
+    backlog = publisher / "kanban/backlog/T-1.md"
+    git(publisher, "mv", str(ticket), str(backlog))
+    (publisher / "kanban/backlog/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwork\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "defer and add dependency")
+    backlog.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Backlog amendment"\n'
+        '"depends_on":\n  - "D-1"\n---\nbacklog body\n'
+    )
+    git(publisher, "commit", "-am", "amend backlog")
+    git(publisher, "mv", str(backlog), str(ticket))
+    git(publisher, "commit", "-m", "schedule")
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    engine = Devlegate(config)
+    assert run_test_iteration(engine) == 0
+    assert engine.status_view().eligible == ()
+
+    if edit_todo:
+        ticket.write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Todo amendment"\n'
+            '---\nLATEST_AMENDED_BODY\n'
+        )
+        git(publisher, "commit", "-am", "amend todo dependency")
+    else:
+        git(publisher, "mv", "kanban/backlog/D-1.md", "kanban/done/D-1.md")
+        git(publisher, "commit", "-m", "complete dependency")
+    admitted = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    prompts = []
+    binding = []
+
+    def worker(workspace, prompt, **kwargs):
+        prompts.append(prompt)
+        binding.append(dict(engine._state))
+        (workspace.path / "implementation.txt").write_text("implemented\n")
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None,
+        )
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    assert run_test_iteration(engine) == 0
+    assert ("LATEST_AMENDED_BODY" if edit_todo else "backlog body") in prompts[0]
+    assert binding[0]["execution_control_head"] == admitted
+    assert binding[0]["selected_ticket_title"] == (
+        "Todo amendment" if edit_todo else "Backlog amendment"
+    )
+    assert binding[0]["selected_ticket_dependencies"] == ([] if edit_todo else ["D-1"])
+
 def test_idle_diagnostic_uses_scheduler_barrier_reason(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
