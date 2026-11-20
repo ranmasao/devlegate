@@ -1,0 +1,38 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "incomplete",
+  "control_head": "d35ed7730ebc63a429fb5dcf6183a00065f83b79",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "e3859d6bc4a5486398eae67853b60a41",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement Git history classification and owner-serialized admission for backlog and unbound todo amendments, preserving schema, dependency scheduling, and protected-state boundaries.",
+    "Integrate deferred amendment generations with review provenance and explicit retirement of previous execution resources; preserve historical evidence and reject races or ambiguous history.",
+    "Add end-to-end amendment, recovery, protected-state, and race coverage and document the operator workflow and provenance-state matrix."
+  ],
+  "report_artifact": "executions/TASK-133/e3859d6bc4a5486398eae67853b60a41.md",
+  "report_sha256": "a78565b59d81a5b14462a6cfa9c51389471c356c89335241cb12dcdc5452df5d",
+  "resource_generation": "1fc3cd6bca5d47d1685d9e5fefed713d24062010917e8ac71bec85feafdc658e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement Git history classification and owner-serialized admission for backlog and unbound todo amendments, preserving schema, dependency scheduling, and protected-state boundaries.",
+      "Integrate deferred amendment generations with review provenance and explicit retirement of previous execution resources; preserve historical evidence and reject races or ambiguous history.",
+      "Add end-to-end amendment, recovery, protected-state, and race coverage and document the operator workflow and provenance-state matrix."
+    ],
+    "report": "The implementation is not complete: safely recognizing a new generation requires coordinated changes to review provenance, runtime admission, and the reset protocol. This invocation produced only the review-disposition safety regression coverage.",
+    "summary": "Added real-Git regression coverage ensuring review dispositions cannot change the ticket specification while moving it to todo or backlog."
+  },
+  "workspace_head": "8cb976ae7d57c919e458b44a65755c2b16050a03"
+}
