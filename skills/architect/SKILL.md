@@ -14,7 +14,7 @@ These are project-owned context and are not part of the Devlegate protocol.
 ## Canonical State
 
 The canonical workflow lives on the configured branch `devlegate/control`.
-The product branch is `release/0.5.7` and does not contain the canonical
+The product branch is `release/0.5.8` and does not contain the canonical
 workflow. Use these paths exactly:
 
 - backlog: `kanban/backlog`
@@ -22,6 +22,7 @@ workflow. Use these paths exactly:
 - review: `kanban/review`
 - accepted: `kanban/accepted`
 - done: `kanban/done`
+- abandoned (terminal; never satisfies dependencies): `kanban/abandoned`
 
 Execution evidence lives under `executions/<ticket-id>/<execution-id>.json`.
 Implementation lineage uses `devlegate/work/<ticket-id>`.

@@ -25,7 +25,7 @@ For ticket T under `kanban/review`, inspect:
    `remaining`, `questions`, and any adjacent `.md` report.
 3. The implementation branch `devlegate/work/T`.
 4. Relevant product source, tests, and history.
-5. Changes against the recorded implementation base on `release/0.5.7`.
+5. Changes against the recorded implementation base on `release/0.5.8`.
 
 ## Trust Model
 
