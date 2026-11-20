@@ -170,6 +170,37 @@ def _require_no_hidden_changes(manager, repo):
         _require_no_hidden_changes(manager, repo / relative)
 
 
+def _submodule_names(repo, paths):
+    """Map Gitlinks to unique, safe names from the committed configuration."""
+    if not paths:
+        return {}
+    output = observe_git(
+        repo, "config", "--blob", "HEAD:.gitmodules", "--null",
+        "--get-regexp", r"^submodule\..*\.path$",
+    ).stdout
+    mapping = {}
+    names = set()
+    for entry in output.split("\0"):
+        if not entry:
+            continue
+        key, separator, value = entry.partition("\n")
+        if (not separator or not key.startswith("submodule.")
+                or not key.endswith(".path")):
+            raise ValueError("reset submodule configuration is malformed")
+        name = key[len("submodule."):-len(".path")]
+        if (not name or "\\" in name or any(
+            component in {"", ".", ".."} for component in name.split("/")
+        )):
+            raise ValueError("reset submodule name is unsafe")
+        if name in names or value in mapping:
+            raise ValueError("reset submodule configuration is ambiguous")
+        names.add(name)
+        mapping[value] = name
+    if any(str(path) not in mapping for path in paths):
+        raise ValueError("reset submodule name is absent")
+    return mapping
+
+
 def _require_discardable_generation(binding):
     """Bound dirty discard to this checkout and its proved module admin tree.
 
@@ -185,7 +216,9 @@ def _require_discardable_generation(binding):
 
     def modules(repo, parent_admin):
         manager._validate_submodule_paths(repo)
-        for relative in manager._gitlink_paths(repo):
+        paths = manager._gitlink_paths(repo)
+        names = _submodule_names(repo, paths)
+        for relative in paths:
             path = repo / relative
             gitfile = path / ".git"
             _safe_path(gitfile)
@@ -195,7 +228,7 @@ def _require_discardable_generation(binding):
                 path, "rev-parse", "--absolute-git-dir",
             ).stdout.strip())
             _safe_path(target)
-            if target != parent_admin / "modules" / relative:
+            if target != parent_admin / "modules" / names[str(relative)]:
                 raise ValueError("reset submodule Git directory is outside generation")
             allowed_gitfiles.add(gitfile)
             modules(path, target)

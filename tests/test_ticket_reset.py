@@ -538,6 +538,55 @@ def test_reset_recursive_submodule_safety(owner, dirty, monkeypatch):
     assert run_test_iteration(owner) == 0
 
 
+@pytest.mark.parametrize("owner", ["named"], indirect=True)
+@pytest.mark.parametrize("dirty", [False, True])
+def test_reset_named_submodule_retirement(owner, dirty, monkeypatch):
+    from devlegate.resource_binding import ResourceBinding
+
+    manager = owner.recovery_workspace_manager("T-1")
+    binding = ResourceBinding.for_execution(manager, owner._state["execution_id"])
+    admin = binding._admin()
+    module = manager.path / "src/devlegate/_vendor/nanoyaml"
+    assert Path(git(module, "rev-parse", "--absolute-git-dir").stdout.strip()) == (
+        admin / "modules/nanoyaml"
+    )
+    unrelated = manager.path.parent / "unrelated"
+    unrelated.write_text("preserved\n")
+    if dirty:
+        (module / "data").write_text("dirty\n")
+        (module / "new-source").write_text("untracked\n")
+        (manager.path / ".gitmodules").write_text("modified configuration\n")
+    admit(owner, "T-1")
+    advance(owner)
+    assert not manager.path.exists()
+    assert not admin.exists()
+    assert str(binding.intent["ref"]) not in git(
+        owner.repo, "for-each-ref", "--format=%(refname)", str(binding.intent["ref"]),
+    ).stdout.splitlines()
+    assert unrelated.read_text() == "preserved\n"
+    assert owner._state["ticket_reset"]["status"] == "queued"
+    assert run_test_iteration(owner) == 0
+
+
+@pytest.mark.parametrize("configuration", [
+    '[submodule "other"]\n path = elsewhere\n',
+    '[submodule "one"]\n path = dependency\n'
+    '[submodule "two"]\n path = dependency\n',
+    '[submodule "one"]\n path = dependency\n path = elsewhere\n',
+    '[submodule "../escape"]\n path = dependency\n',
+])
+def test_reset_rejects_unproved_committed_submodule_mapping(tmp_path, configuration):
+    from devlegate.clean_reset import _submodule_names
+
+    git(tmp_path, "init")
+    (tmp_path / ".gitmodules").write_text(configuration)
+    git(tmp_path, "add", ".gitmodules")
+    git(tmp_path, "-c", "user.name=Fixture", "-c", "user.email=f@example.com",
+        "commit", "-m", "configuration")
+    with pytest.raises(ValueError):
+        _submodule_names(tmp_path, [Path("dependency")])
+
+
 def test_restart_during_cancellation_retires_live_managed_group(tmp_path, monkeypatch):
     """A durable process fixture models recovery of the kernel lifetime boundary."""
     repo, config, _state = control_fixture(tmp_path)

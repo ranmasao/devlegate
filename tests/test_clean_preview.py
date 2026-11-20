@@ -21,7 +21,7 @@ from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 @pytest.fixture
 def owner(tmp_path, monkeypatch, request):
     repo, config, _state = control_fixture(tmp_path)
-    if getattr(request, "param", None) in {"submodule", "nested"}:
+    if getattr(request, "param", None) in {"submodule", "nested", "named"}:
         dependency = tmp_path / "dependency"
         dependency.mkdir()
         git(dependency, "init", "-b", "main")
@@ -36,7 +36,11 @@ def owner(tmp_path, monkeypatch, request):
             git(tmp_path, "clone", str(dependency), str(leaf))
             git(dependency, "submodule", "add", str(leaf), "nested")
             git(dependency, "commit", "-am", "nested fixture")
-        git(repo, "submodule", "add", str(dependency), "dependency")
+        if request.param == "named":
+            git(repo, "submodule", "add", "--name", "nanoyaml", str(dependency),
+                "src/devlegate/_vendor/nanoyaml")
+        else:
+            git(repo, "submodule", "add", str(dependency), "dependency")
         git(repo, "commit", "-am", "submodule fixture")
         git(repo, "push", "origin", "main")
     assert invoke(repo, "control", "init", config=config).returncode == 0
