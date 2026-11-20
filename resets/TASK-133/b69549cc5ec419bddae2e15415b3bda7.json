@@ -1,0 +1,27 @@
+{
+  "admitted_control": "3c16954983f2683b2cfa767e4aca14622f03473b",
+  "cancelled_execution": "c0047c3328a443faa0b870029a88fe48",
+  "current_ticket_state": "backlog",
+  "disposition": "reset worker retirement completed; old todo requeue superseded by canonical curator backlog transition",
+  "operation_id": "b69549cc5ec419bddae2e15415b3bda7",
+  "prior_reports": [
+    "2a4fb3b16fdc494990d7242754f241df",
+    "2c931b550b004293a5297813f4f5ae35",
+    "428b90ff213b494184213dfeec239608",
+    "978f44ecc6ae4b7892d3dbd00dff5192",
+    "9b0f8467a7134448bfb50cca04827d95",
+    "a01dee4a59064f92a3ffc35e11cc5e1f",
+    "a2842ed62003438cbb97ab6806a59158",
+    "dd4bf9d7934e405f9f17877e28807096",
+    "e5b85475081c454d87e39e89cb427f6c",
+    "ed2f83f9bf2349239d2aa1d617467f21"
+  ],
+  "recovery": "archbig incident-specific one-shot; no ticket edit",
+  "requeue": "superseded",
+  "resource_generation": "c1ca94a964b7df965cc3915ab321d9d3b8a3a9d468d58865e4e6cb3be5af72d1",
+  "retirement": "completed",
+  "schema": "devlegate.ticket-reset.v1",
+  "superseding_control": "122ceb033f757b30a7783890e8456b84b8ee9ffc",
+  "ticket_blob": "4759fe01173b062093e6ca84861ea4b81c0ba4c4",
+  "ticket_id": "TASK-133"
+}
