@@ -8,6 +8,7 @@ admission against execution, recovery and integration and reobserve the remote
 head before acting on the result.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,12 +45,17 @@ def observe_ticket_history(
     in protected states, and a move combined with an edit are rejected, even
     if a later commit restores the original content.
     """
+    if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (start, head)):
+        raise ValueError("ticket history requires exact control commit identities")
     if not is_canonical_ticket_name(f"{ticket_id}.md"):
         raise ValueError("invalid ticket identity")
     paths = {
         state: f"{path}/{ticket_id}.md" for state, path in workflow_paths.items()
     }
-    if set(paths) != set(WORKFLOW_TRANSITIONS) or len(set(paths.values())) != len(paths):
+    if (
+        set(paths) != set(WORKFLOW_TRANSITIONS)
+        or len(set(paths.values())) != len(paths)
+    ):
         raise ValueError("invalid workflow paths")
     if not is_ancestor(repo, start, head, runner=runner):
         raise ValueError("ticket control history was rewritten")
@@ -72,13 +78,15 @@ def observe_ticket_history(
             raise ValueError("ticket control history is not linear")
         changes = set(commit_changes(repo, commit, runner=runner))
         relevant = {change for change in changes if change[2:] in paths.values()}
+        new_state, new_blob = identity(commit)
         if relevant:
-            new_state, new_blob = identity(commit)
             if new_state == state:
                 if relevant != {f"M\t{paths[state]}"} or state not in {
                     "backlog", "todo",
                 }:
-                    raise ValueError("unsupported ticket modification in control history")
+                    raise ValueError(
+                        "unsupported ticket modification in control history"
+                    )
                 text = read_path(repo, commit, paths[state], runner=runner)
                 if text is None or new_blob == blob:
                     raise ValueError("amendment has no distinct ticket blob")
@@ -101,5 +109,9 @@ def observe_ticket_history(
                 ):
                     raise ValueError("ticket workflow move is not blob-preserving")
             state, blob = new_state, new_blob
+        elif (new_state, new_blob) != (state, blob):
+            raise ValueError("ticket identity changed without an observable diff")
         parent = commit
+    if parent != head:
+        raise ValueError("ticket control history did not reach the observed head")
     return tuple(amendments)
