@@ -1,0 +1,36 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "09320ec2c777f4c409a151a18d049d20d5e755b2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "ed2f83f9bf2349239d2aa1d617467f21",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner admission validation for unbound ticket history, including protected-state edits, ambiguous identity, and control/admission races; connect it to a durable observed control boundary without disrupting normal lifecycle transitions.",
+    "Complete distinct refusal and race integration coverage and run the full configured test suite with coverage."
+  ],
+  "report_artifact": "executions/TASK-133/ed2f83f9bf2349239d2aa1d617467f21.md",
+  "report_sha256": "f3dcf143ef800159c376925897fd5e08f8710ef766182d12916f45039ff90451",
+  "resource_generation": "ef79a67df0f7e53c677d15e55eb3dc3be89c6f39aa6b47e417aba3aaf62a43c1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner admission validation for unbound ticket history, including protected-state edits, ambiguous identity, and control/admission races; connect it to a durable observed control boundary without disrupting normal lifecycle transitions.",
+      "Complete distinct refusal and race integration coverage and run the full configured test suite with coverage."
+    ],
+    "report": "Ordinary synchronization selects the amended snapshot, but the existing ticket-history observer is only invoked for bound descendant adoption. Safely extending it to unbound admission requires establishing a durable history boundary across synchronization, restart, and concurrent owner transactions; that implementation is not yet complete.",
+    "summary": "Added real-Git owner-flow coverage for backlog and todo amendments, dependency rescheduling, and fresh reviewed-ticket execution after reset and restart. Documented operator amendment examples and a provenance-state matrix."
+  },
+  "workspace_head": "35450d83e7ab21faf6d6155bf3f6d75608da8d0b"
+}
