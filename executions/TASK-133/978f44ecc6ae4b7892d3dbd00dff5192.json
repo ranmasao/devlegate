@@ -1,0 +1,40 @@
+{
+  "code_base_head": "479ff05917081848c5ca2af3c19ef9d7d62bdc5f",
+  "conclusion": "incomplete",
+  "control_head": "da391859ada051a339f8e83bf61f9adf5500310e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "978f44ecc6ae4b7892d3dbd00dff5192",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Integrate amendment history into owner-serialized admission with durable control baselines, remote re-observation, dependency graph re-evaluation, and active execution race refusal.",
+    "Complete fresh-generation admission after deferred review with verified reset/resource retirement and immutable prior evidence; preserve unchanged-spec rework binding.",
+    "Add owner and scheduler boundary coverage for protected states, malformed and rewritten histories, competing admissions, recovery, integration, and SHA races.",
+    "Document the operator amendment workflow and provenance-state matrix, and run full configured CI."
+  ],
+  "report_artifact": "executions/TASK-133/978f44ecc6ae4b7892d3dbd00dff5192.md",
+  "report_sha256": "8744103040979bec92765afcb59a8e20599e5035e48be210bc822df67c332480",
+  "resource_generation": "1883479f2e5fca59c205baf59d6bf4600647e9f2446865f34c81e4d7d8724cc8",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Integrate amendment history into owner-serialized admission with durable control baselines, remote re-observation, dependency graph re-evaluation, and active execution race refusal.",
+      "Complete fresh-generation admission after deferred review with verified reset/resource retirement and immutable prior evidence; preserve unchanged-spec rework binding.",
+      "Add owner and scheduler boundary coverage for protected states, malformed and rewritten histories, competing admissions, recovery, integration, and SHA races.",
+      "Document the operator amendment workflow and provenance-state matrix, and run full configured CI."
+    ],
+    "report": "The invocation's execution budget is exhausted before the owner admission and generation proof can be implemented and validated safely. Focused amendment-history tests and Ruff passed; full configured CI was not run.",
+    "summary": "Hardened the ticket history observer to require exact control commit identities and reject incomplete ranges or unreported blob changes. Added real-Git coverage for edit/revert histories and failed observations, and corrected the reported Ruff formatting errors."
+  },
+  "workspace_head": "4c9936e9abf1b1d5238b7e6c6b6b9168c1ba88f9"
+}
