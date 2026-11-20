@@ -8,7 +8,11 @@ import subprocess
 import pytest
 
 import devlegate.amendment_history as amendment_history
-from devlegate.amendment_history import observe_ticket_history
+from devlegate.amendment_history import (
+    observe_ticket_history,
+    validate_observed_history,
+)
+from devlegate.git import GitObservationError
 from devlegate.tickets import WORKFLOW_STATES
 
 
@@ -118,3 +122,16 @@ def test_rejects_symbolic_control_identity(history):
     repo, paths, _, start = history
     with pytest.raises(ValueError, match="exact control commit"):
         observe_ticket_history(repo, start, "HEAD", "T-1", paths)
+
+
+def test_owner_history_observation_failure_is_not_absence(history, monkeypatch):
+    repo, paths, ticket, start = history
+    ticket.write_text(ticket.read_text() + "Changed\n")
+    end = commit(repo, "edit")
+
+    def fail(*args, **kwargs):
+        raise GitObservationError("injected observation failure")
+
+    monkeypatch.setattr(amendment_history, "commit_changes", fail)
+    with pytest.raises(GitObservationError, match="injected"):
+        validate_observed_history(repo, start, end, paths)

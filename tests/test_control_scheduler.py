@@ -242,14 +242,20 @@ def test_pushed_unbound_amendments_reach_scheduler_and_worker(
         tmp_path, "clone", "-b", "devlegate/control", str(tmp_path / "remote.git"),
         publisher,
     )
-    ticket = publisher / "kanban/todo/T-1.md"
-    backlog = publisher / "kanban/backlog/T-1.md"
-    git(publisher, "mv", str(ticket), str(backlog))
+    ticket = publisher / "kanban/todo/B-1.md"
+    backlog = publisher / "kanban/backlog/B-1.md"
+    (publisher / "kanban/todo/T-1.md").unlink()
+    backlog.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Initial"\n---\nwork\n'
+    )
     (publisher / "kanban/backlog/D-1.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwork\n'
     )
     git(publisher, "add", ".")
-    git(publisher, "commit", "-m", "defer and add dependency")
+    git(publisher, "commit", "-m", "bootstrap backlog tickets")
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    engine = Devlegate(config)
+    assert run_test_iteration(engine) == 0
     backlog.write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Backlog amendment"\n'
         '"depends_on":\n  - "D-1"\n---\nbacklog body\n'
@@ -258,7 +264,6 @@ def test_pushed_unbound_amendments_reach_scheduler_and_worker(
     git(publisher, "mv", str(backlog), str(ticket))
     git(publisher, "commit", "-m", "schedule")
     git(publisher, "push", "origin", "HEAD:devlegate/control")
-    engine = Devlegate(config)
     assert run_test_iteration(engine) == 0
     assert engine.status_view().eligible == ()
 
@@ -269,8 +274,11 @@ def test_pushed_unbound_amendments_reach_scheduler_and_worker(
         )
         git(publisher, "commit", "-am", "amend todo dependency")
     else:
-        git(publisher, "mv", "kanban/backlog/D-1.md", "kanban/done/D-1.md")
-        git(publisher, "commit", "-m", "complete dependency")
+        for source, destination in (("backlog", "todo"), ("todo", "review"),
+                                    ("review", "accepted"), ("accepted", "done")):
+            git(publisher, "mv", f"kanban/{source}/D-1.md",
+                f"kanban/{destination}/D-1.md")
+            git(publisher, "commit", "-m", f"move dependency to {destination}")
     admitted = git(publisher, "rev-parse", "HEAD").stdout.strip()
     git(publisher, "push", "origin", "HEAD:devlegate/control")
     prompts = []
@@ -292,6 +300,64 @@ def test_pushed_unbound_amendments_reach_scheduler_and_worker(
         "Todo amendment" if edit_todo else "Backlog amendment"
     )
     assert binding[0]["selected_ticket_dependencies"] == ([] if edit_todo else ["D-1"])
+
+
+@pytest.mark.parametrize("operation", ["todo-backlog", "review", "accepted", "done",
+                                      "delete-recreate"])
+def test_owner_refuses_invalid_ticket_history_before_unrelated_worker(
+    tmp_path, monkeypatch, operation,
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    publisher = tmp_path / "publisher"
+    git(tmp_path, "clone", "-b", "devlegate/control", str(tmp_path / "remote.git"),
+        publisher)
+    initial = publisher / "kanban/todo/T-1.md"
+    initial.unlink()
+    backlog = publisher / "kanban/backlog/T-1.md"
+    backlog.write_text('---\n"type": "devlegate.ticket"\n"title": "Test"\n---\nwork\n')
+    git(publisher, "add", "-A")
+    git(publisher, "commit", "-m", "bootstrap backlog")
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    assert run_test_iteration(Devlegate(config)) == 0
+
+    if operation == "delete-recreate":
+        original = backlog.read_text()
+        backlog.unlink()
+        git(publisher, "commit", "-am", "delete ticket")
+        backlog.write_text(original)
+        git(publisher, "add", ".")
+        git(publisher, "commit", "-m", "recreate ticket")
+    else:
+        states = ["backlog", "todo", "review", "accepted", "done"]
+        target = "todo" if operation == "todo-backlog" else operation
+        for source, destination in zip(states, states[1:]):
+            git(publisher, "mv", f"kanban/{source}/T-1.md",
+                f"kanban/{destination}/T-1.md")
+            git(publisher, "commit", "-m", f"move to {destination}")
+            if destination == target:
+                break
+        if operation == "todo-backlog":
+            git(publisher, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
+        else:
+            path = publisher / f"kanban/{target}/T-1.md"
+            path.write_text(path.read_text() + "protected edit\n")
+        git(publisher, "commit", "-am", "unsupported change")
+    (publisher / "kanban/todo/B-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Other"\n---\nwork\n'
+    )
+    git(publisher, "add", ".")
+    git(publisher, "commit", "-m", "add unrelated worker")
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    engine = Devlegate(config)
+    calls = []
+    monkeypatch.setattr(engine._workers, "run", lambda *a, **k: calls.append(True))
+    with pytest.raises(
+        runtime.WorkflowBlockedError, match="unsupported control ticket history"
+    ):
+        run_test_iteration(engine)
+    assert calls == []
 
 def test_idle_diagnostic_uses_scheduler_barrier_reason(tmp_path, monkeypatch):
     working, config, state = control_fixture(tmp_path)

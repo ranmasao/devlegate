@@ -4171,6 +4171,23 @@ class ServiceEngine:
         if self._stop_before_admission():
             return 0
         ticket_store = self._ticket_store()
+        # The last handled control revision is durable across owner restarts.
+        # With no prior observation the validated current snapshot is the
+        # bootstrap boundary; subsequent changes must have supported history.
+        previous_control = self._state.get("handled_control_head")
+        if previous_control and previous_control != control_head:
+            from devlegate.amendment_history import validate_observed_history
+
+            try:
+                validate_observed_history(
+                    self.control_worktree, previous_control, control_head,
+                    self._workflow_paths(), runner=self._git_runtime,
+                )
+            except (ValueError, GitObservationError, GitAncestryError) as error:
+                raise WorkflowBlockedError(
+                    f"unsupported control ticket history: {error}; "
+                    "inspect control commits and recover before retrying"
+                ) from error
         publication = self._state.get("abandonment_publication")
         if isinstance(publication, dict) and publication.get("terminal") is not None:
             self._finish_abandonment()

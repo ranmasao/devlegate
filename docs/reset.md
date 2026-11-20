@@ -108,6 +108,11 @@ An unbound todo ticket can similarly be edited at `kanban/todo/TASK-123.md`,
 committed and pushed. The owner reloads the ticket store and re-evaluates
 dependencies before selecting work. Keep workflow moves and content edits in
 separate commits; preserve the ticket ID and valid ticket schema and DAG.
+The owner's first validated control snapshot is its bootstrap boundary: history
+before that observation is not retroactively authorized. Once a control head has
+been durably handled, later changes are checked against that head, including
+across owner restarts. An unsupported transition or protected edit blocks worker
+admission; inspect and repair the control lineage before retrying.
 
 | Ticket provenance/state | Operator route |
 | --- | --- |

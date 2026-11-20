@@ -36,6 +36,47 @@ class Amendment:
     new_blob: str
 
 
+def validate_observed_history(repo, start, head, workflow_paths, *, runner=run_git):
+    """Validate changed ticket identities since the owner's durable observation.
+
+    A ticket first introduced in this interval is observed from its creation
+    commit; the initial snapshot itself is the trust boundary.
+    """
+    if not is_ancestor(repo, start, head, runner=runner):
+        raise ValueError("ticket control history was rewritten")
+    first_changes = {}
+    parent = start
+    for commit in commit_range(repo, f"{start}..{head}", reverse=True, runner=runner):
+        if commit_parents(repo, commit, runner=runner) != (parent,):
+            raise ValueError("ticket control history is not linear")
+        for change in commit_changes(repo, commit, runner=runner):
+            status, separator, name = change.partition("\t")
+            if not separator:
+                raise ValueError("malformed ticket history diff")
+            path = Path(name)
+            if str(path.parent) not in workflow_paths.values() or not (
+                is_canonical_ticket_name(path.name)
+            ):
+                continue
+            first_changes.setdefault(path.stem, (parent, commit, status))
+        parent = commit
+    if parent != head:
+        raise ValueError("ticket control history did not reach the observed head")
+    for ticket_id, (before, commit, status) in first_changes.items():
+        paths = [f"{path}/{ticket_id}.md" for path in workflow_paths.values()]
+        existing = any(path_object(repo, start, path, runner=runner) is not None
+                       for path in paths)
+        if not existing:
+            if status != "A":
+                raise ValueError(f"ticket {ticket_id} has no observable creation")
+            before = commit
+        try:
+            observe_ticket_history(repo, before, head, ticket_id, workflow_paths,
+                                   runner=runner)
+        except ValueError as error:
+            raise ValueError(f"ticket {ticket_id}: {error}") from error
+
+
 def observe_ticket_history(
     repo, start, head, ticket_id, workflow_paths, *, runner=run_git
 ):
