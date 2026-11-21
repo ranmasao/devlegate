@@ -1,0 +1,30 @@
+{
+  "code_base_head": "f9ad59b38f6b9ae45e893f86d2566b52cff72d2d",
+  "conclusion": "completed",
+  "control_head": "af8261480b5437d5443d890be43d00c015dca424",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-187",
+  "execution_id": "c012f4eef9cb438199445603679d211a",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-187",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "1bfc073bbb3cfc2a4ef4893c17a18eb976d43d711852e80443dcf60d5a6b8110",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-187",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added operator-facing ticket reset lifecycle logs at durable admission, proven retirement and requeue transitions, and actual fresh execution start. Added bounded, deduplicated blocker diagnostics and focused coverage for failure, replay, and recovery behavior."
+  },
+  "workspace_head": "2067409f1706277a62bbd86864ce28abf9170418"
+}
