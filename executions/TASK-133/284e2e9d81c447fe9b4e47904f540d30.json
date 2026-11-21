@@ -1,0 +1,30 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "completed",
+  "control_head": "26f8a9cbc8c6b25a08f83f96f4011bf3a14e91b7",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "284e2e9d81c447fe9b4e47904f540d30",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "ece1af2b5c157d68e1734ceb59a1b3dc01595f205f4ea1729be5983985cb308e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Prevented lifecycle publication when a bound ticket disappears from its canonical todo path anywhere in the admission-to-candidate history, while retaining in-place amendments. Added real-Git continuity regression coverage and clarified the operator workflow."
+  },
+  "workspace_head": "f9ad59b38f6b9ae45e893f86d2566b52cff72d2d"
+}
