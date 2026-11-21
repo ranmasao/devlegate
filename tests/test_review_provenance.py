@@ -129,6 +129,42 @@ def test_real_git_rework_transitions(tmp_path, route):
     assert publication == commits[0]
 
 
+def test_real_git_deferred_rework_allows_separate_backlog_amendment(tmp_path):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for name in ("review", "todo", "backlog", "reviews/TASK-1"):
+        (tmp_path / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "review/TASK-1.md").write_text("reviewed specification\n")
+    git("add", ".")
+    git("commit", "-qm", "lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    git("mv", "review/TASK-1.md", "backlog/TASK-1.md")
+    (tmp_path / "reviews/TASK-1/review.md").write_text("rework\n")
+    git("add", ".")
+    git("commit", "-qm", "defer review")
+    deferral = git("rev-parse", "HEAD")
+    (tmp_path / "backlog/TASK-1.md").write_text("amended specification\n")
+    git("add", ".")
+    git("commit", "-qm", "amend backlog")
+    git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+    git("commit", "-qm", "schedule")
+    scheduled = git("rev-parse", "HEAD")
+
+    transition, publication = _transition(
+        tmp_path, scheduled, lifecycle, "TASK-1", todo_path="todo",
+        review_path="review", backlog_path="backlog",
+        artifact_path="reviews/TASK-1/review.md", runner=run_git,
+    )
+    assert transition == (deferral, scheduled)
+    assert publication == deferral
+
+
 def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
     report = SimpleNamespace(
         ticket_id="TASK-1",
