@@ -85,6 +85,11 @@ with coverage and lint and is required for independent review and integration.
 Runs pytest with statement and branch coverage, then writes the coverage report
 and `coverage.json`.
 
+When preparing a new `release/X.Y.Z` branch, its publication flow must run
+`python3 tools/prepare_release_readme.py X.Y.Z` and include the resulting README
+change in the initial branch commit. CI publishes the matching version-scoped
+badge after the branch's checks succeed.
+
 ```sh
 ./dev run [args...]
 ```

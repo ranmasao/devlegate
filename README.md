@@ -9,7 +9,7 @@ State · Provenance · Quality · Recovery
 ```
 
 [![CI](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml/badge.svg)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ranmasao/devlegate/badges/coverage.json)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/ranmasao/devlegate/badges/coverage-0.5.8.json)](https://github.com/ranmasao/devlegate/actions/workflows/ci.yaml)
 
 Devlegate is a local orchestrator for coding agents.
 
