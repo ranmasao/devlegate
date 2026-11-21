@@ -25,6 +25,7 @@ class WorkerPromptInput:
     directive: WorkDirective
     review_feedback: str | None = None
     review_source: str | None = None
+    historical_review: bool = False
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -80,9 +81,15 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         if not feedback:
             raise ValueError("review feedback must not be empty")
         source = _content(prompt_input.review_source or "verified curator review")
-        sections.append(
-            ("Current Review Feedback", f"Source: {source}\n\n{feedback}", True)
+        title = "Historical Review Feedback" if prompt_input.historical_review else (
+            "Current Review Feedback"
         )
+        context = (
+            "This feedback reviews the prior specification and checkpoint only; "
+            "it is not a review of the current assigned work.\n\n"
+            if prompt_input.historical_review else ""
+        )
+        sections.append((title, f"Source: {source}\n\n{context}{feedback}", True))
     elif prompt_input.directive is WorkDirective.REWORK:
         raise ValueError("rework requires verified review feedback")
     return (

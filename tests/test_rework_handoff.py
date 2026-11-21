@@ -30,7 +30,54 @@ def completed():
     return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
 
-@pytest.mark.parametrize("decision", ["accept", "rework", "stale"])
+@pytest.mark.parametrize("initial_state", ["backlog", "todo"])
+def test_unbound_amendment_rechecks_dependencies_before_fresh_admission(
+    tmp_path, monkeypatch, initial_state,
+):
+    repo, config, state = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    control = next((state / "worktrees").glob("*/control"))
+    if initial_state == "backlog":
+        git(control, "mv", "kanban/todo/T-1.md", "kanban/backlog/T-1.md")
+        git(control, "commit", "-m", "defer unbound ticket")
+    (control / "kanban/backlog/D-1.md").write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwork\n'
+    )
+    ticket = control / f"kanban/{initial_state}/T-1.md"
+    ticket.write_text(
+        '---\n"type": "devlegate.ticket"\n"title": "Amended"\n'
+        '"depends_on":\n  - "D-1"\n---\nCurrent requirements.\n'
+    )
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "amend dependency and requirements")
+    if initial_state == "backlog":
+        git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+        git(control, "commit", "-m", "schedule amended ticket")
+    git(control, "push", "origin", "devlegate/control")
+    owner = Devlegate(config)
+    monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: pytest.fail("launch"))
+    assert run_test_iteration(owner) == 0
+    assert not ExecutionReportStore(control).list("T-1")
+
+    ticket = control / "kanban/todo/T-1.md"
+    ticket.write_text(ticket.read_text().replace('"depends_on":\n  - "D-1"\n', ""))
+    git(control, "add", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "remove dependency")
+    git(control, "push", "origin", "devlegate/control")
+    admitted_head = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    def worker(_workspace, prompt, **_kwargs):
+        assert "Current requirements." in prompt
+        assert "## Historical Review Feedback" not in prompt
+        assert owner._state["execution_control_head"] == admitted_head
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", worker)
+    assert run_test_iteration(owner) == 0
+
+
+@pytest.mark.parametrize("decision", ["accept", "rework", "stale", "stale-rework"])
 def test_running_amendment_publishes_and_reviews_current_spec(
     tmp_path, monkeypatch, decision,
 ):
@@ -68,26 +115,29 @@ def test_running_amendment_publishes_and_reviews_current_spec(
     artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
     artifact.parent.mkdir(parents=True)
     artifact.write_text(
-        f"# {'REWORK' if decision == 'rework' else 'ACCEPT'}\n"
+        f"# {'REWORK' if decision in {'rework', 'stale-rework'} else 'ACCEPT'}\n"
         "Address amended requirements.\n"
     )
-    if decision == "stale":
+    if decision in {"stale", "stale-rework"}:
         ticket = control / "kanban/review/T-1.md"
         ticket.write_text(ticket.read_text() + "\nUnreviewed B2.\n")
         git(control, "add", "kanban/review/T-1.md")
         git(control, "commit", "-m", "change review specification")
-    destination = "todo" if decision == "rework" else "accepted"
+    destination = "todo" if decision in {"rework", "stale-rework"} else "accepted"
     git(control, "mv", "kanban/review/T-1.md", f"kanban/{destination}/T-1.md")
     git(control, "add", str(artifact.relative_to(control)))
     git(control, "commit", "-m", "review amended ticket")
     git(control, "push", "origin", "devlegate/control")
 
-    if decision in {"accept", "stale"}:
+    if decision in {"accept", "stale", "stale-rework"}:
         monkeypatch.setattr(
             owner._workers, "run", lambda *_a, **_k: pytest.fail("duplicate worker")
         )
-        if decision == "stale":
-            with pytest.raises(DevlegateError, match="review content changed"):
+        if decision in {"stale", "stale-rework"}:
+            with pytest.raises(
+                DevlegateError,
+                match="review content changed|review disposition history",
+            ):
                 run_test_iteration(owner)
             assert not (control / "kanban/done/T-1.md").exists()
             return
@@ -108,7 +158,10 @@ def test_running_amendment_publishes_and_reviews_current_spec(
     assert len(ExecutionReportStore(control).list("T-1")) == 2
 
 
-def test_owner_refuses_to_attribute_old_review_to_amended_ticket(tmp_path, monkeypatch):
+@pytest.mark.parametrize("scenario", ["valid", "missing", "invalid", "race"])
+def test_owner_admits_amended_continuation_with_historical_review(
+    tmp_path, monkeypatch, scenario,
+):
     repo, config, state = control_fixture(tmp_path)
     assert invoke(repo, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(repo)
@@ -132,8 +185,13 @@ def test_owner_refuses_to_attribute_old_review_to_amended_ticket(tmp_path, monke
         f"control: {report.control_head}\n"
         "disposition: rework\n-->\nReview of original specification.\n"
     )
+    if scenario == "invalid":
+        artifact.write_text(artifact.read_text().replace(report.execution_id, "f" * 32))
     git(control, "mv", "kanban/review/T-1.md", "kanban/backlog/T-1.md")
-    git(control, "add", str(artifact.relative_to(control)))
+    if scenario == "missing":
+        artifact.unlink()
+    else:
+        git(control, "add", str(artifact.relative_to(control)))
     git(control, "commit", "-m", "defer reviewed ticket")
     ticket = control / "kanban/backlog/T-1.md"
     ticket.write_text(ticket.read_text() + "\nAmended requirements.\n")
@@ -143,13 +201,60 @@ def test_owner_refuses_to_attribute_old_review_to_amended_ticket(tmp_path, monke
     git(control, "commit", "-m", "schedule amendment")
     git(control, "push", "origin", "devlegate/control")
 
-    def unexpected_worker(*_args, **_kwargs):
-        pytest.fail("historical review must not admit amended rework")
+    if scenario in {"missing", "invalid"}:
+        monkeypatch.setattr(
+            owner._workers, "run", lambda *_a, **_k: pytest.fail("launch")
+        )
+        with pytest.raises(DevlegateError, match="curator review"):
+            run_test_iteration(owner)
+        assert len(ExecutionReportStore(control).list("T-1")) == 1
+        return
 
-    monkeypatch.setattr(owner._workers, "run", unexpected_worker)
-    with pytest.raises(DevlegateError, match="current-spec review binding"):
-        run_test_iteration(owner)
-    assert len(ExecutionReportStore(control).list("T-1")) == 1
+    if scenario == "race":
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                owner, "_stop_before_admission",
+                lambda: owner._state.get("phase") == "agent_pending",
+            )
+            assert run_test_iteration(owner) == 0
+        ticket = control / "kanban/todo/T-1.md"
+        ticket.write_text(ticket.read_text() + "\nUnadmitted B2.\n")
+        git(control, "add", "kanban/todo/T-1.md")
+        git(control, "commit", "-m", "race pending admission")
+        git(control, "push", "origin", "devlegate/control")
+        pending = Devlegate(config)
+        monkeypatch.setattr(
+            pending._workers, "run", lambda *_a, **_k: pytest.fail("launch")
+        )
+        with pytest.raises(DevlegateError):
+            run_test_iteration(pending)
+        assert len(ExecutionReportStore(control).list("T-1")) == 1
+        return
+
+    def amended_worker(workspace, prompt, **_kwargs):
+        assert owner._state["execution_id"] != report.execution_id
+        assert owner._state["rework_provenance"]["amended_continuation"] is True
+        assert "Amended requirements." in prompt
+        assert "## Historical Review Feedback" in prompt
+        assert "not a review of the current assigned work" in prompt
+        assert "Review of original specification." in prompt
+        assert (workspace.path / "implementation.txt").read_text() == "checkpoint\n"
+        assert owner._state["rework_provenance"]["previous_report_checkpoint"] == (
+            report.workspace_head
+        )
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", amended_worker)
+    assert run_test_iteration(owner) == 0
+    reports = ExecutionReportStore(control).list("T-1")
+    assert len(reports) == 2
+    new_report = next(
+        item for item in reports if item.execution_id != report.execution_id
+    )
+    assert new_report.control_head != report.control_head
+    assert (control / "kanban/review/T-1.md").read_text().endswith(
+        "Amended requirements.\n"
+    )
     assert artifact.read_text().endswith("Review of original specification.\n")
 
 
