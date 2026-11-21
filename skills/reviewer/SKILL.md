@@ -27,6 +27,11 @@ For ticket T under `kanban/review`, inspect:
 4. Relevant product source, tests, and history.
 5. Changes against the recorded implementation base on `release/0.5.8`.
 
+If the specification changed while the worker was running, the report remains
+bound to the original specification B0. Review the checkpoint against the
+current review ticket B1, using B0 and the change to B1 as evidence. Explicitly
+explain whether the checkpoint satisfies B1 or what remains to be done.
+
 ## Trust Model
 
 ExecutionReport is durable execution evidence produced by the project workflow.
@@ -50,18 +55,9 @@ specification byte-for-byte. Do not create T-H1, T-fix, or another replacement
 ticket for ordinary hardening.
 
 Every rejected current execution requires feedback. Publish it as
-`reviews/T/<execution-id>.md` in the same commit as the review disposition. Use
-this exact header, taking identities from the verified ExecutionReport:
-
-```text
-<!-- devlegate-review-v1
-ticket: T
-execution: <32-lowercase-hex execution id>
-checkpoint: <40-lowercase-hex workspace head>
-control: <40-lowercase-hex report control head>
-disposition: rework
--->
-```
+`reviews/T/<execution-id>.md` in the same commit as the review disposition,
+beginning with `# REWORK` on its own line. The execution ID identifies the report;
+Devlegate verifies the checkpoint, control binding and reviewed specification.
 
 Put focused, actionable REWORK feedback after the header, distinguishing:
 
@@ -83,8 +79,9 @@ its specification or create additional hardening tickets.
 Never modify or delete a published review artifact. A later rejected execution
 gets a new artifact named for that execution; do not concatenate old feedback
 into the current artifact.
-If canonical requirements truly need amendment, stop ordinary review and request
-an explicit guarded Architect specification revision instead.
+If requirements need amendment after review, defer the unchanged review ticket
+to backlog with its review, then amend it in a separate commit. A later amendment
+is not covered by the prior review.
 
 ## Accepted Review
 
@@ -93,6 +90,11 @@ If the exact reviewed result passes review, move the SAME ticket from
 delta is not required: a proven zero-product-delta report may also be accepted.
 Preserve its ID and specification. This submits it for Devlegate-owned integration;
 accepted does not mean integrated or done.
+
+When B1 differs from the worker's B0, publish `reviews/T/<execution-id>.md`
+in the same commit as the move to accepted. Begin with `# ACCEPT` on its own
+line and explain how the checkpoint satisfies B1. Devlegate binds that decision
+to the reviewed ticket and execution; do not calculate or copy Git SHA values.
 
 Never move review directly to done. Devlegate finalizes accepted results, either by
 ancestry-safe product fast-forward or by proving a zero-delta no-op, and then moves

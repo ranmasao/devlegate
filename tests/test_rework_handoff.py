@@ -30,6 +30,84 @@ def completed():
     return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
 
+@pytest.mark.parametrize("decision", ["accept", "rework", "stale"])
+def test_running_amendment_publishes_and_reviews_current_spec(
+    tmp_path, monkeypatch, decision,
+):
+    repo, config, state = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+    architect = tmp_path / "architect"
+    git(tmp_path, "clone", tmp_path / "remote.git", architect)
+    git(architect, "config", "user.email", "test@example.com")
+    git(architect, "config", "user.name", "Test User")
+    git(architect, "switch", "-c", "curator", "origin/devlegate/control")
+    admitted = {}
+
+    def first(workspace, prompt, **_kwargs):
+        admitted["control"] = owner._state["execution_control_head"]
+        admitted["execution"] = owner._state["execution_id"]
+        assert "Amended requirements" not in prompt
+        ticket = architect / "kanban/todo/T-1.md"
+        ticket.write_text(ticket.read_text() + "\nAmended requirements.\n")
+        git(architect, "add", "-A")
+        git(architect, "commit", "-m", "amend running ticket")
+        git(architect, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", first)
+    assert run_test_iteration(owner) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    assert report.control_head == admitted["control"]
+    assert report.execution_id == admitted["execution"]
+    assert "Amended requirements." in (control / "kanban/review/T-1.md").read_text()
+
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        f"# {'REWORK' if decision == 'rework' else 'ACCEPT'}\n"
+        "Address amended requirements.\n"
+    )
+    if decision == "stale":
+        ticket = control / "kanban/review/T-1.md"
+        ticket.write_text(ticket.read_text() + "\nUnreviewed B2.\n")
+        git(control, "add", "kanban/review/T-1.md")
+        git(control, "commit", "-m", "change review specification")
+    destination = "todo" if decision == "rework" else "accepted"
+    git(control, "mv", "kanban/review/T-1.md", f"kanban/{destination}/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "review amended ticket")
+    git(control, "push", "origin", "devlegate/control")
+
+    if decision in {"accept", "stale"}:
+        monkeypatch.setattr(
+            owner._workers, "run", lambda *_a, **_k: pytest.fail("duplicate worker")
+        )
+        if decision == "stale":
+            with pytest.raises(DevlegateError, match="review content changed"):
+                run_test_iteration(owner)
+            assert not (control / "kanban/done/T-1.md").exists()
+            return
+        assert run_test_iteration(owner) == 0
+        assert (control / "kanban/done/T-1.md").is_file()
+        assert len(ExecutionReportStore(control).list("T-1")) == 1
+        return
+
+    def rework(workspace, prompt, **_kwargs):
+        assert owner._state["execution_id"] != report.execution_id
+        assert "Amended requirements." in prompt
+        assert "Address amended requirements." in prompt
+        assert (workspace.path / "implementation.txt").read_text() == "checkpoint\n"
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", rework)
+    assert run_test_iteration(owner) == 0
+    assert len(ExecutionReportStore(control).list("T-1")) == 2
+
+
 def test_owner_refuses_to_attribute_old_review_to_amended_ticket(tmp_path, monkeypatch):
     repo, config, state = control_fixture(tmp_path)
     assert invoke(repo, "control", "init", config=config).returncode == 0

@@ -542,8 +542,9 @@ def test_once_worker_completes_one_lifecycle_attempt(tmp_path):
     control = next((state / "worktrees").glob("*/control"))
     assert list((control / "executions/T-1").glob("*.json"))
 
+@pytest.mark.parametrize("amend_ticket", [False, True])
 def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, amend_ticket
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -574,6 +575,9 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
     (architect / "kanban/todo/T-2.md").write_text(
         '---\n"type": "devlegate.ticket"\n"title": "Future"\n---\nfuture\n'
     )
+    if amend_ticket:
+        ticket = architect / "kanban/todo/T-1.md"
+        ticket.write_text(ticket.read_text() + "\nAmended requirements.\n")
     git(architect, "add", "-A")
     git(architect, "commit", "-m", "add future ticket")
     descendant = git(architect, "rev-parse", "HEAD").stdout.strip()
@@ -589,6 +593,10 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
     assert run_test_iteration(recovered) == 1
     assert recovered._state["phase"] == "idle"
     assert (control / "kanban/todo/T-1.md").is_file()
+    if amend_ticket:
+        assert "Amended requirements." in (
+            control / "kanban/todo/T-1.md"
+        ).read_text()
     assert (control / "kanban/todo/T-2.md").is_file()
     lifecycle = git(control, "rev-parse", "HEAD").stdout.strip()
     assert git(control, "rev-parse", f"{lifecycle}^").stdout.strip() == descendant
