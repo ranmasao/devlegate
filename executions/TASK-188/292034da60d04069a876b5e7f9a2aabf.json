@@ -1,0 +1,30 @@
+{
+  "code_base_head": "2067409f1706277a62bbd86864ce28abf9170418",
+  "conclusion": "completed",
+  "control_head": "8d7f1beb46917e653fb1db8bb65a78d55accc082",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-188",
+  "execution_id": "292034da60d04069a876b5e7f9a2aabf",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-188",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "6e7ada1ef5459746969617db3b50232a79f7013193c28e8bf4fb0fb76bcad455",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-188",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Aligned the README insignia with the approved service layout and changed the one-shot startup test to verify unique semantic identity fields instead of ASCII artwork."
+  },
+  "workspace_head": "a53c6c3c435c0c6b7f76134107cf3b24a74a982c"
+}
