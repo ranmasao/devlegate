@@ -180,3 +180,8 @@ Current limits:
 - Devlegate core: EUPL-1.2 ([LICENSE](LICENSE)).
 - Copyable templates, prompts, and skills: CC0-1.0 ([LICENSING.md](LICENSING.md)).
 - NanoYAML: upstream MIT terms ([NOTICE](NOTICE)).
+# CLI pipelines
+
+If a downstream consumer closes stdout early, the Devlegate CLI exits with
+status 141 (128 + SIGPIPE). This indicates that output was not fully delivered;
+pipeline status also depends on the shell and its `pipefail` setting.

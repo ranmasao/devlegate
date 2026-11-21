@@ -3454,7 +3454,53 @@ def _run_attached_command(
         return 1
 
 
+class _StdoutPipeClosed(Exception):
+    """A broken pipe specifically from the CLI's stdout stream."""
+
+
+class _CLIStdout:
+    def __init__(self, stream):
+        self._stream = stream
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+    def write(self, text):
+        try:
+            return self._stream.write(text)
+        except BrokenPipeError as error:
+            raise _StdoutPipeClosed from error
+
+    def flush(self):
+        try:
+            self._stream.flush()
+        except BrokenPipeError as error:
+            raise _StdoutPipeClosed from error
+
+
 def main() -> int:
+    """Run the CLI, returning 141 when a stdout consumer closes its pipe."""
+    stdout = sys.stdout
+    sys.stdout = _CLIStdout(stdout)
+    try:
+        try:
+            result = _main()
+        except SystemExit:
+            sys.stdout.flush()
+            raise
+        sys.stdout.flush()
+        return result
+    except _StdoutPipeClosed:
+        # The original TextIOWrapper may still contain buffered output. Point its
+        # descriptor at /dev/null so interpreter shutdown cannot retry the pipe.
+        with open(os.devnull, "w") as null:
+            os.dup2(null.fileno(), stdout.fileno())
+        return 141
+    finally:
+        sys.stdout = stdout
+
+
+def _main() -> int:
     parser = build_parser()
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
     shorthand = None
