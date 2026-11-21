@@ -1,0 +1,34 @@
+{
+  "code_base_head": "a53c6c3c435c0c6b7f76134107cf3b24a74a982c",
+  "conclusion": "incomplete",
+  "control_head": "da3c8e17d0220607041904456d3e39d9656d2699",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-135",
+  "execution_id": "b692b761bb994ef6b65c80bf38a1b3ba",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-135",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Run hosted full CI and Ruff on the exact updated checkpoint before satisfying the review's completion condition."
+  ],
+  "report_artifact": "executions/TASK-135/b692b761bb994ef6b65c80bf38a1b3ba.md",
+  "report_sha256": "395be83e517c6317659bbd147e9df36fcd4a17a10e6d4f3437f673859d173eb6",
+  "resource_generation": "3b98cd0dec7707775855ac18bf918cb2bce6ce48a213e461975e015e2a613890",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-135",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Run hosted full CI and Ruff on the exact updated checkpoint before satisfying the review's completion condition."
+    ],
+    "report": "The worker cannot create or publish the exact checkpoint under the Git lifecycle contract; hosted validation requires Devlegate to create that checkpoint.",
+    "summary": "Added a maintainer-invoked, create-only release-branch publication path that commits the version-scoped README badge before publishing, and added required license headers. Expanded real-Git coverage for sequential release publication and competing badge updates."
+  },
+  "workspace_head": "aaa53ca24aab995a83c9dcb80c54744212f209a6"
+}
