@@ -21,6 +21,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
 )
 from devlegate.git import is_ancestor, path_object, remote_ref, resolve_ref_commit
+from devlegate.operational_log import service_log
 from devlegate.resource_binding import ResourceBinding, UnprovenResource, _identity
 from devlegate.tickets import (
     is_canonical_ticket_name,
@@ -31,6 +32,32 @@ from devlegate.worker_supervisor import WorkerSupervisionError
 
 SCHEMA = "devlegate.ticket-reset.v1"
 STAGES = {"stopping-worker", "retiring-old-generation", "requeue", "queued", "started"}
+
+
+def log_progress(intent, outcome):
+    detail = (
+        f"ticket reset ticket_id={intent['ticket_id']} "
+        f"operation_id={intent['operation_id']}"
+    )
+    if intent["status"] == "started":
+        detail += f" execution_id={intent['fresh_execution_id']}"
+    service_log(f"{detail} stage={intent['status']} {outcome}")
+
+
+def log_blocked(owner, intent, reason, previous):
+    """Report a changed blocker without exposing arbitrary error or worker data."""
+    key = (intent["operation_id"], intent["status"], reason)
+    if reason == previous or getattr(owner, "_reset_logged_blocker", None) == key:
+        return
+    owner._reset_logged_blocker = key
+    descriptions = {
+        "stopping-worker": "worker retirement could not be proven",
+        "retiring-old-generation": "resource retirement could not be proven",
+        "requeue": "requeue publication or activation could not be proven",
+        "queued": "fresh worker launch or retirement could not be proven",
+        "started": "worker retirement could not be proven",
+    }
+    log_progress(intent, f"blocked reason={descriptions[intent['status']]}")
 
 
 def validate(state):
@@ -265,6 +292,7 @@ def admit(owner, ticket_id):
         str(owner._state["phase"]), ticket_reset=intent,
         expected_store_revision=revision,
     )
+    log_progress(intent, "admitted")
     return response(intent)
 
 
@@ -414,6 +442,7 @@ def advance(owner):
                     binding.require_worker_retirement()
             _save(owner, intent, status="retiring-old-generation", blocker=None)
             intent = owner._state["ticket_reset"]
+            log_progress(intent, "worker retirement proven")
         if intent["status"] == "retiring-old-generation":
             binding = _binding(owner, intent)
             intent = owner._state["ticket_reset"]
@@ -426,6 +455,7 @@ def advance(owner):
             intent = owner._state["ticket_reset"]
             _save(owner, intent, status="requeue", blocker=None)
             intent = owner._state["ticket_reset"]
+            log_progress(intent, "old generation retirement proven")
         if intent["status"] == "requeue":
             head = intent["control"]["head"]
             if intent["transaction"] is None:
@@ -521,12 +551,19 @@ def advance(owner):
                     intent["ticket_id"]: intent["prior_reports"],
                 },
             )
+            log_progress(
+                owner._state["ticket_reset"], "requeue published and activated",
+            )
             owner.wake()
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError,
             ExecutionWorkspaceError, WorkerSupervisionError, DevlegateError) as error:
         intent = owner._state["ticket_reset"]
-        if not owner._state_write_uncertain:
-            _save(owner, intent, blocker=str(error))
+        previous = intent["blocker"]
+        try:
+            if not owner._state_write_uncertain:
+                _save(owner, intent, blocker=str(error))
+        finally:
+            log_blocked(owner, intent, str(error), previous)
         raise
 
 

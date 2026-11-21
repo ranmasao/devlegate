@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Single-argument reset lifecycle on disposable real Git repositories."""
 
+import copy
 import json
 import os
 import signal
@@ -30,6 +31,92 @@ from devlegate.worker_supervisor import (
     _linux_process_start_time,
     _run_opencode,
 )
+
+
+def test_reset_lifecycle_journal_tracks_persisted_transitions(owner, monkeypatch):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+
+    def record(message):
+        state, _revision = owner._runtime_store.observe()
+        entries.append((message, copy.deepcopy(state["ticket_reset"])))
+
+    monkeypatch.setattr(reset, "service_log", record)
+    ack = admit(owner, "T-1")
+    assert admit(owner, "T-1") == ack
+    advance(owner)
+    assert run_test_iteration(owner) == 0
+    stages = [
+        "stopping-worker", "retiring-old-generation", "requeue", "queued", "started",
+    ]
+    assert [state["status"] for _, state in entries] == stages
+    for (message, state), stage in zip(entries, stages, strict=True):
+        assert f"ticket_id=T-1 operation_id={ack['operation_id']}" in message
+        assert f"stage={stage}" in message
+        if stage == "started":
+            assert f"execution_id={state['fresh_execution_id']}" in message
+    assert "admitted" in entries[0][0]
+    assert "worker retirement proven" in entries[1][0]
+    assert "old generation retirement proven" in entries[2][0]
+    assert "requeue published and activated" in entries[3][0]
+    assert "fresh execution started" in entries[4][0]
+    restored = Devlegate(owner.env_file)
+    assert restored._state["ticket_reset"]["status"] == "started"
+    assert len(entries) == 5
+
+
+def test_reset_blocked_journal_is_private_deduplicated_and_recovers(owner, monkeypatch):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+    monkeypatch.setattr(reset, "service_log", entries.append)
+    ack = admit(owner, "T-1")
+    original = reset._binding
+
+    def fail(*_args):
+        raise ValueError("secret=PASSWORD /private/path\nmalicious journal line")
+
+    monkeypatch.setattr(reset, "_binding", fail)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="secret=PASSWORD"):
+            advance(owner)
+    blocked = [line for line in entries if " blocked " in line]
+    assert len(blocked) == 1
+    assert f"ticket_id=T-1 operation_id={ack['operation_id']}" in blocked[0]
+    assert "stage=retiring-old-generation" in blocked[0]
+    assert "PASSWORD" not in blocked[0] and "/private" not in blocked[0]
+    assert "\n" not in blocked[0]
+    assert not any("stage=requeue" in line for line in entries)
+    monkeypatch.setattr(reset, "_binding", original)
+    restored = Devlegate(owner.env_file)
+    advance(restored)
+    assert sum("stage=retiring-old-generation" in line for line in entries) == 2
+    assert any("stage=requeue" in line for line in entries)
+    assert any("stage=queued" in line for line in entries)
+
+
+def test_reset_publication_failure_does_not_log_queue(owner, monkeypatch):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+    monkeypatch.setattr(reset, "service_log", entries.append)
+    admit(owner, "T-1")
+    original = owner._publish_abandonment_transaction
+
+    def fail(_transaction):
+        raise OSError("private publication failure")
+
+    monkeypatch.setattr(owner, "_publish_abandonment_transaction", fail)
+    with pytest.raises(OSError):
+        advance(owner)
+    assert owner._state["ticket_reset"]["status"] == "requeue"
+    assert any("stage=requeue blocked" in line for line in entries)
+    assert not any("stage=queued" in line for line in entries)
+    monkeypatch.setattr(owner, "_publish_abandonment_transaction", original)
+    advance(owner)
+    assert sum("stage=requeue old generation" in line for line in entries) == 1
+    assert sum("stage=queued" in line for line in entries) == 1
 
 
 @pytest.mark.parametrize("state", ["backlog", "todo", "review"])
@@ -291,6 +378,10 @@ def test_pristine_todo_reset_is_a_read_only_scheduling_nudge(tmp_path, monkeypat
 def test_reset_lost_admission_ack_replays_without_external_id(
     owner, monkeypatch, committed,
 ):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+    monkeypatch.setattr(reset, "service_log", entries.append)
     original = owner._runtime_store._commit
 
     def crash(connection):
@@ -301,9 +392,11 @@ def test_reset_lost_admission_ack_replays_without_external_id(
     monkeypatch.setattr(owner._runtime_store, "_commit", crash)
     with pytest.raises(DevlegateError):
         admit(owner, "T-1")
+    assert not entries
     assert owner._state_write_uncertain
     restored = Devlegate(owner.env_file)
     ack = admit(restored, "T-1")
+    assert sum(" admitted" in line for line in entries) == (0 if committed else 1)
     operation = ack["operation_id"]
     assert admit(restored, "T-1")["operation_id"] == operation
     assert run_test_iteration(restored) == 0
@@ -469,6 +562,10 @@ def test_dirty_submodule_discard_requires_proved_administration(
 
 
 def test_reset_launch_failure_retries_pending_fresh_admission(owner, monkeypatch):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+    monkeypatch.setattr(reset, "service_log", entries.append)
     admit(owner, "T-1")
     advance(owner)
     original = owner._workers.run
@@ -478,12 +575,15 @@ def test_reset_launch_failure_retries_pending_fresh_admission(owner, monkeypatch
     assert run_test_iteration(owner) == 0
     assert owner._state["phase"] == "agent_pending"
     assert admit(owner, "T-1")["status"] == "blocked"
+    assert any("stage=queued blocked" in line for line in entries)
+    assert not any("stage=started" in line for line in entries)
     pending_id = owner._state["execution_id"]
     monkeypatch.setattr(owner._workers, "run", original)
     assert run_test_iteration(owner) == 0
     assert owner._state["execution_id"] == pending_id
     assert owner._state["ticket_reset"]["status"] == "started"
     assert owner._state["ticket_reset"]["blocker"] is None
+    assert sum("stage=started" in line for line in entries) == 1
 
 
 def test_reset_requeue_preserves_raw_ticket_blob(tmp_path, monkeypatch):

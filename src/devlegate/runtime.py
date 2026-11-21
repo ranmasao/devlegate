@@ -3114,6 +3114,10 @@ class ServiceEngine:
             worker_identity=identity.as_dict(),
             **reset_fields,
         )
+        if reset_fields:
+            from devlegate.ticket_reset import log_progress
+
+            log_progress(self._state["ticket_reset"], "fresh execution started")
         self._refresh_published_status()
 
     def _publish_ticket_projection(
@@ -5073,6 +5077,11 @@ class ServiceEngine:
                     str(self._state["phase"]),
                     ticket_reset={**reset, "blocker": "worker retirement is unproven"},
                 )
+                from devlegate.ticket_reset import log_blocked
+
+                log_blocked(
+                    self, reset, "worker retirement is unproven", reset["blocker"],
+                )
             raise DevlegateError(
                 "execution cgroup remains populated; worker retirement is unproven"
             )
@@ -5090,6 +5099,12 @@ class ServiceEngine:
                     "blocker": worker_run.transport_error or "worker launch failed",
                 },
             )
+            from devlegate.ticket_reset import log_blocked
+
+            log_blocked(
+                self, reset, worker_run.transport_error or "worker launch failed",
+                reset["blocker"],
+            )
             return 0
         if isinstance(reset, dict) and reset.get("status") == "queued" and (
             reset.get("ticket_id") == selected_ticket.id
@@ -5100,6 +5115,9 @@ class ServiceEngine:
                 "agent_running",
                 ticket_reset={**reset, "status": "started", "blocker": None},
             )
+            from devlegate.ticket_reset import log_progress
+
+            log_progress(self._state["ticket_reset"], "fresh execution started")
         from devlegate.ticket_reset import active as reset_active
 
         if reset_active(self) and self._state["ticket_reset"]["ticket_id"] == (
