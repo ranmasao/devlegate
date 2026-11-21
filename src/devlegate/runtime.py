@@ -166,6 +166,7 @@ from devlegate.recovery_workspace import (
 from devlegate.resource_binding import ResourceBinding, ResourceProof, UnprovenResource
 from devlegate.review_provenance import (
     ReviewProvenanceError,
+    resolve_amended_rework_review,
     resolve_rework_review,
     restore_review_binding,
 )
@@ -4710,10 +4711,29 @@ class ServiceEngine:
                     )
                     if branch_head not in {None, previous.workspace_head}:
                         raise WorkflowBlockedError(
-                            "cannot prove the exact previous rework generation"
+                            "cannot prove the exact previous rework generation; "
+                            "inspect its resources or explicitly reset the ticket "
+                            "to discard continuation rights"
                         )
                     try:
-                        review_binding = resolve_rework_review(
+                        reviewed_blob = path_object(
+                            self.control_worktree, lifecycle_commit,
+                            f"{self.review_path}/{selected_ticket.id}.md",
+                            runner=self._git_runtime,
+                        )
+                        current_blob = path_object(
+                            self.control_worktree, control_head,
+                            f"{self.todo_path}/{selected_ticket.id}.md",
+                            runner=self._git_runtime,
+                        )
+                        if reviewed_blob is None or current_blob is None:
+                            raise ReviewProvenanceError(
+                                "ticket specification is missing"
+                            )
+                        amended = reviewed_blob != current_blob
+                        resolver = (resolve_amended_rework_review if amended
+                                    else resolve_rework_review)
+                        review_binding = resolver(
                             self.control_worktree,
                             control_head,
                             lifecycle_commit,
@@ -4723,7 +4743,7 @@ class ServiceEngine:
                             backlog_path=self.backlog_path,
                             runner=self._git_runtime,
                         )
-                    except ReviewProvenanceError as error:
+                    except (ReviewProvenanceError, GitObservationError) as error:
                         raise WorkflowBlockedError(
                             "cannot bind curator feedback for "
                             f"{selected_ticket.id}: {error}"
@@ -4737,6 +4757,7 @@ class ServiceEngine:
                         "admitted_control_head": bound_execution_control,
                         "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
+                        "amended_continuation": amended,
                     }
             resource_binding = None
             if not pending_agent_execution:
@@ -4930,6 +4951,8 @@ class ServiceEngine:
                 directive=directive,
                 review_feedback=review_feedback,
                 review_source=review_source,
+                historical_review=isinstance(rework, dict)
+                and rework.get("amended_continuation") is True,
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)

@@ -258,6 +258,28 @@ def resolve_rework_review(
     runner: Runner,
 ) -> ReviewBinding:
     """Resolve the immutable review bound to one rejected execution."""
+    return _resolve_rework_review(
+        repo, head, lifecycle, report, todo_path=todo_path, review_path=review_path,
+        backlog_path=backlog_path, runner=runner, amended=False,
+    )
+
+
+def resolve_amended_rework_review(
+    repo: Path, head: str, lifecycle: str, report: ExecutionReport, *,
+    todo_path: str, review_path: str, backlog_path: str, runner: Runner,
+) -> ReviewBinding:
+    """Resolve historical feedback for a separately deferred amendment."""
+    return _resolve_rework_review(
+        repo, head, lifecycle, report, todo_path=todo_path, review_path=review_path,
+        backlog_path=backlog_path, runner=runner, amended=True,
+    )
+
+
+def _resolve_rework_review(
+    repo: Path, head: str, lifecycle: str, report: ExecutionReport, *,
+    todo_path: str, review_path: str, backlog_path: str, runner: Runner,
+    amended: bool,
+) -> ReviewBinding:
     if report.result.transport_error is not None or not report.result.egress_ok:
         raise ReviewProvenanceError(
             "failed worker execution cannot be attributed curator feedback"
@@ -288,10 +310,14 @@ def resolve_rework_review(
         raise ReviewProvenanceError(
             "cannot verify the specification covered by curator review"
         ) from error
-    if not same_specification:
+    if not same_specification and not amended:
         raise ReviewProvenanceError(
             "ticket specification changed after curator review; current-spec "
             "review binding is required before rework admission"
+        )
+    if amended and (same_specification or len(transitions) < 2):
+        raise ReviewProvenanceError(
+            "amended continuation requires a separate backlog deferral and amendment"
         )
     try:
         content = read_path(repo, head, artifact, runner=runner)
@@ -374,4 +400,5 @@ __all__ = [
     "ReviewProvenanceError",
     "restore_review_binding",
     "resolve_rework_review",
+    "resolve_amended_rework_review",
 ]

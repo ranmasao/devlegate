@@ -305,6 +305,16 @@ Edit the canonical Markdown at its existing path on `devlegate/control`, commit
 and push normally. Git records the change; there is no amendment command. The
 ticket parser and dependency graph still apply.
 
+For example, in a checkout of the control branch:
+
+```sh
+git switch devlegate/control
+${EDITOR:-vi} kanban/backlog/TASK-123.md
+git add kanban/backlog/TASK-123.md
+git commit -m "Amend TASK-123 requirements"
+git push origin devlegate/control
+```
+
 | Ticket state | Edit policy |
 | --- | --- |
 | backlog | Edit at the same path. |
@@ -319,9 +329,28 @@ B0 and the change as context. Publish `# ACCEPT` feedback with the move to
 accepted when B1 differs from B0, or `# REWORK` feedback with the unchanged move
 to todo. Both artifacts belong at `reviews/<ticket-id>/<execution-id>.md`; the
 publication boundary binds the review to the report and current ticket. Rework
-starts a distinct execution and can retain C0. A later amendment after a review
-is not implicitly covered by that review and currently blocks rework admission
-until current-spec review can be established.
+starts a distinct execution and can retain C0. If REWORK of B0 has already been
+published, defer the unchanged ticket to backlog with that artifact, commit the
+backlog amendment separately, then move the unchanged B1 blob to todo:
+
+```sh
+git switch devlegate/control
+git mv kanban/review/TASK-123.md kanban/backlog/TASK-123.md
+git add reviews/TASK-123/EXECUTION-ID.md
+git commit -m "Defer reviewed TASK-123"
+${EDITOR:-vi} kanban/backlog/TASK-123.md
+git add kanban/backlog/TASK-123.md
+git commit -m "Amend TASK-123 requirements"
+git mv kanban/backlog/TASK-123.md kanban/todo/TASK-123.md
+git commit -m "Schedule amended TASK-123"
+git push origin devlegate/control
+```
+
+The next execution is bound to B1 and receives the B0 review as historical
+context, not as a review of B1. It can reuse the verified C0 workspace; its own
+checkpoint requires independent review against B1. If resource ownership cannot
+be proven, resolve the reported condition or explicitly reset rather than deleting
+the workspace or its refs.
 
 An explicit `devlegate reset TASK-XXX` is different: it discards continuation
 rights and retires only proven resources to start fresh, while retaining historical

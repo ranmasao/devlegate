@@ -12,6 +12,7 @@ import json
 import devlegate.runtime as runtime_module
 
 import devlegate.recovery_transactions as recovery_transactions
+from devlegate.worker_egress import WorkerClaim
 
 
 class _ControlLineageOwner:
@@ -543,8 +544,9 @@ def test_once_worker_completes_one_lifecycle_attempt(tmp_path):
     assert list((control / "executions/T-1").glob("*.json"))
 
 @pytest.mark.parametrize("amend_ticket", [False, True])
+@pytest.mark.parametrize("successful", [False, True])
 def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
-    tmp_path, monkeypatch, amend_ticket
+    tmp_path, monkeypatch, amend_ticket, successful
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -552,6 +554,11 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
     devlegate = Devlegate(config)
 
     def worker(_workspace, _prompt, **_kwargs):
+        if successful:
+            (_workspace.path / "checkpoint.txt").write_text("completed evidence\n")
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None
+            )
         return WorkerRunResult(1, None, None, None)
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
@@ -590,13 +597,12 @@ def test_lifecycle_reconciles_compatible_control_descendant_without_worker(
         "run",
         lambda *_args: pytest.fail("lifecycle recovery launched a worker"),
     )
-    assert run_test_iteration(recovered) == 1
+    assert run_test_iteration(recovered) == (0 if successful else 1)
     assert recovered._state["phase"] == "idle"
-    assert (control / "kanban/todo/T-1.md").is_file()
+    ticket_path = control / f"kanban/{'review' if successful else 'todo'}/T-1.md"
+    assert ticket_path.is_file()
     if amend_ticket:
-        assert "Amended requirements." in (
-            control / "kanban/todo/T-1.md"
-        ).read_text()
+        assert "Amended requirements." in ticket_path.read_text()
     assert (control / "kanban/todo/T-2.md").is_file()
     lifecycle = git(control, "rev-parse", "HEAD").stdout.strip()
     assert git(control, "rev-parse", f"{lifecycle}^").stdout.strip() == descendant
