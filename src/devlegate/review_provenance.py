@@ -170,6 +170,7 @@ def _transition(
                 raise ReviewProvenanceError(
                     "review disposition history is not a linear first-parent chain"
                 )
+            previous = parent
             parent = commit
             changes = set(commit_changes(repo, commit, runner=runner))
             if f"A\t{artifact_path}" in changes:
@@ -221,12 +222,16 @@ def _transition(
                     raise ReviewProvenanceError(
                         "review backlog disposition is malformed"
                     )
-                if not _same_blob(repo, deferred, backlog, commit, todo, runner):
+                if not _same_blob(repo, previous, backlog, commit, todo, runner):
                     raise ReviewProvenanceError(
                         "ticket specification changed after rework deferral"
                     )
                 direct = (*direct, deferred, commit) if direct else (deferred, commit)
                 deferred = None
+            elif workflow == {f"M\t{backlog}"} and deferred is not None:
+                # A deferred ticket may be amended in backlog, independently
+                # of the unchanged-blob review and scheduling moves.
+                continue
             elif workflow:
                 raise ReviewProvenanceError("review disposition history is conflicting")
         if direct is None or deferred is not None:
