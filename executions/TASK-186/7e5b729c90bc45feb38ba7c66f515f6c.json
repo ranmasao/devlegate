@@ -1,0 +1,30 @@
+{
+  "code_base_head": "eae83989845f239f3593fecbac35c0367c645828",
+  "conclusion": "completed",
+  "control_head": "6f1a5cad69e555cd19d09e641a6241aea2595956",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-186",
+  "execution_id": "7e5b729c90bc45feb38ba7c66f515f6c",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-186",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "960327fd23c01c98d1b36b1c031ce02807e7ac0e5bcc9207cc05498058738256",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-186",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added a shared CLI stdout boundary that handles broken pipes with exit status 141 and prevents shutdown warnings. Documented pipeline behavior and added subprocess coverage for both entrypoints, buffered and unbuffered output, normal output, and command errors."
+  },
+  "workspace_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff"
+}
