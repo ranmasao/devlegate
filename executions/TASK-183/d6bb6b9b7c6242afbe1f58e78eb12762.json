@@ -1,0 +1,30 @@
+{
+  "code_base_head": "aaa53ca24aab995a83c9dcb80c54744212f209a6",
+  "conclusion": "completed",
+  "control_head": "196df9f291a5e68f8ea00dcfa7bfb2cfeb6d2a20",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-183",
+  "execution_id": "d6bb6b9b7c6242afbe1f58e78eb12762",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-183",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "8bcf820b78e3dd23768e674c7d79fa424e3ee8d3b3215479e40b2f039690775e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-183",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Moved the real-service rework publication to an independently owned control checkout and added a deterministic active-index-lock isolation test. Documented the incident, synchronization boundary, and provenance-preserving publication behavior."
+  },
+  "workspace_head": "eae83989845f239f3593fecbac35c0367c645828"
+}
