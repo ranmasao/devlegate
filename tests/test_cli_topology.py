@@ -687,13 +687,20 @@ def test_once_emits_one_startup_identity_block(git_fixture, monkeypatch):
     monkeypatch.chdir(git_fixture["working"])
     result = invoke(git_fixture, "once")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("---< D E V L E G A T E >---") == 1
-    assert "mode    : direct" in result.stdout
-    assert "version :" in result.stdout
-    assert "repo    :" in result.stdout
-    assert "product :" in result.stdout
-    assert "control :" in result.stdout
-    assert "pid     :" in result.stdout
+    identity = {key: [] for key in (
+        "version", "repo", "product", "control", "mode", "pid", "instance"
+    )}
+    for line in result.stdout.splitlines():
+        message = line.partition("] ")[2]
+        key, separator, value = message.partition(":")
+        if separator and key.strip() in identity:
+            identity[key.strip()].append(value.strip())
+
+    assert all(len(values) == 1 and values[0] for values in identity.values())
+    assert identity["version"] == [__version__]
+    assert identity["repo"] == [str(git_fixture["working"])]
+    assert identity["mode"] == ["direct"]
+    assert int(identity["pid"][0]) > 0
 
 def test_stop_without_service_is_conclusive(git_fixture):
     result = invoke(git_fixture, "stop")

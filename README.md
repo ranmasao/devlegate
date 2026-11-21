@@ -3,7 +3,7 @@
 ```text
            D | L
 ---< D E V L E G A T E >---
-         S.P.Q.R.
+          S.P.Q.R.
 
 State · Provenance · Quality · Recovery
 ```
