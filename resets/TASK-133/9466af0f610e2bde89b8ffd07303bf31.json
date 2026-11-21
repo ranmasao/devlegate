@@ -1,0 +1,23 @@
+{
+  "cancelled_execution": "0e4634b830cf4facb88d7a3d8bcf33ed",
+  "disposition": "reset; prior attempt is not a continuation",
+  "operation_id": "9466af0f610e2bde89b8ffd07303bf31",
+  "prior_reports": [
+    "0e4634b830cf4facb88d7a3d8bcf33ed",
+    "2a4fb3b16fdc494990d7242754f241df",
+    "2c931b550b004293a5297813f4f5ae35",
+    "428b90ff213b494184213dfeec239608",
+    "978f44ecc6ae4b7892d3dbd00dff5192",
+    "9b0f8467a7134448bfb50cca04827d95",
+    "a01dee4a59064f92a3ffc35e11cc5e1f",
+    "a2842ed62003438cbb97ab6806a59158",
+    "dd4bf9d7934e405f9f17877e28807096",
+    "e3859d6bc4a5486398eae67853b60a41",
+    "e5b85475081c454d87e39e89cb427f6c",
+    "ed2f83f9bf2349239d2aa1d617467f21"
+  ],
+  "resource_generation": "09119dc93c17f22f7356d57173cc436c70e8aa80c6bf3d11b6aeaf1a985f687c",
+  "schema": "devlegate.ticket-reset.v1",
+  "ticket_blob": "6ab53669346723882f9dfa517efbecd862af2a7a",
+  "ticket_id": "TASK-133"
+}
