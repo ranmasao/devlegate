@@ -68,13 +68,18 @@ jobs:
         run: ./dev lint
 
   publish-coverage:
-    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    if: github.event_name == 'push' && (github.ref_name == github.event.repository.default_branch || startsWith(github.ref, 'refs/heads/release/'))
     needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
+      - name: Check out tested commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Download coverage badge payload
         uses: actions/download-artifact@v8
         with:
@@ -83,15 +88,8 @@ jobs:
 
       - name: Publish badges branch
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          COMMIT: ${{ github.sha }}
         run: |
-          set -Eeuo pipefail
-          mkdir badge-work
-          cp coverage-artifact/coverage-badge.json badge-work/coverage.json
-          git -C badge-work init
-          git -C badge-work config user.name github-actions[bot]
-          git -C badge-work config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git -C badge-work add -f coverage.json
-          git -C badge-work commit -m "Update coverage badge"
-          git -C badge-work push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPOSITORY}.git" HEAD:refs/heads/badges
+          python3 tools/publish_coverage.py "$BRANCH" "$DEFAULT_BRANCH" "$COMMIT" coverage-artifact/coverage-badge.json
