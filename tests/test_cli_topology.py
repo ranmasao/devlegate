@@ -6,6 +6,7 @@
 
 from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
+import select
 from devlegate.execution_result import ExecutionReportStore
 
 
@@ -1147,6 +1148,54 @@ def test_real_service_absent_worker_uses_process_loss_resume(git_fixture, monkey
         _kill_worker_identity(new_identity)
         service.stop()
 
+def test_publisher_index_is_independent_of_active_control_commit(git_fixture):
+    control = git_fixture["control"]
+    publisher = _ensure_publisher_control(git_fixture)
+    hooks = git_fixture["tmp"] / "blocking-hooks"
+    hooks.mkdir()
+    fifo = git_fixture["tmp"] / "commit-release"
+    os.mkfifo(fifo)
+    hook = hooks / "pre-commit"
+    hook.write_text('#!/bin/sh\nprintf "lock-held\\n"\nread token < "$LOCK_FIFO"\n')
+    hook.chmod(0o755)
+    (control / "owner-change.txt").write_text("owner\n")
+    git(control, "add", "owner-change.txt")
+    fifo_fd = os.open(fifo, os.O_RDWR)
+    process = subprocess.Popen(
+        ["git", "-c", f"core.hooksPath={hooks}", "commit", "-a", "-m", "owner change"],
+        cwd=control,
+        env={**os.environ, "LOCK_FIFO": str(fifo)},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert select.select([process.stderr], [], [], 10)[0], (
+            "commit hook did not start"
+        )
+        assert process.stderr.readline().strip() == "lock-held"
+        lock = Path(
+            git(control, "rev-parse", "--git-path", "index.lock").stdout.strip()
+        )
+        assert lock.exists() and process.poll() is None
+        collision = git(
+            control, "commit", "--allow-empty", "-m", "collision", check=False
+        )
+        assert collision.returncode != 0 and "index.lock" in collision.stderr
+
+        (publisher / "publisher-change.txt").write_text("publisher\n")
+        git(publisher, "add", "publisher-change.txt")
+        git(publisher, "commit", "-m", "publisher change")
+        git(publisher, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        assert lock.exists() and process.poll() is None
+    finally:
+        os.write(fifo_fd, b"release\n")
+        os.close(fifo_fd)
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == 0, (stdout, stderr)
+    assert not lock.exists()
+
+
 def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
     git_fixture, monkeypatch
 ):
@@ -1234,10 +1283,16 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         assert plan["action"] == "none"
         assert "waiting for review" in plan["reason"]
 
-        review = engine.control_worktree / "kanban/review/T-1.md"
-        report = ExecutionReportStore(engine.control_worktree).list("T-1")[0]
+        # A scheduler action of "none" is not exclusive ownership of the
+        # service's index. Publish from a separate clone at the remote review
+        # checkpoint, leaving synchronization of its checkout to the service.
+        publisher = _ensure_publisher_control(git_fixture)
+        git(publisher, "fetch", "origin", "devlegate/control")
+        git(publisher, "reset", "--hard", "origin/devlegate/control")
+        review = publisher / "kanban/review/T-1.md"
+        report = ExecutionReportStore(publisher).list("T-1")[0]
         artifact = (
-            engine.control_worktree
+            publisher
             / "reviews"
             / "T-1"
             / f"{report.execution_id}.md"
@@ -1253,11 +1308,11 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             "-->\n"
             "Re-run the recovered generation through the review barrier.\n"
         )
-        review.rename(engine.control_worktree / "kanban/todo/T-1.md")
-        git(engine.control_worktree, "add", "-A")
-        git(engine.control_worktree, "commit", "-m", "return T-1 to todo")
+        review.rename(publisher / "kanban/todo/T-1.md")
+        git(publisher, "add", "-A")
+        git(publisher, "commit", "-m", "return T-1 to todo")
         git(
-            engine.control_worktree,
+            publisher,
             "push",
             "origin",
             "HEAD:refs/heads/devlegate/control",

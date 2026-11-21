@@ -78,6 +78,20 @@ just to reproduce CI. Local tests are a cheap defect filter, not complete
 regression proof: hosted exact-checkpoint CI runs the complete configured suite
 with coverage and lint and is required for independent review and integration.
 
+The real-service auto-resume topology test publishes its rework review from an
+independent clone of the remote control branch. A `none` scheduler plan at the
+review barrier does not grant exclusive access to the service's control index:
+the owner can still synchronize that checkout. Hosted run 44172781916 failed
+committing directly in that checkout with `index.lock` present; the log cannot
+tell an active owner from a stale lock, and the unchanged second attempt passed.
+The focused publisher-index test holds a real `git commit -a` in its pre-commit
+hook, verifies that a competing commit fails while that process owns the lock,
+and verifies that the independent publisher can commit and push before release.
+The auto-resume test fetches the published review checkpoint and its execution
+report in the publisher, then lets the service fast-forward its own checkout.
+The normal non-forced push and provenance checks still reject conflicting or
+invalid publication; no lock removal or retry is involved.
+
 ```sh
 ./dev coverage
 ```
