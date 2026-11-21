@@ -1,0 +1,38 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "incomplete",
+  "control_head": "e834a235f7e352c42211f9c456c668604a4666fd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "254bc876b05842a08a70fb08b1f3b134",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-derived binding of the current reviewed specification to the execution checkpoint, including B1 ACCEPT/REWORK and stale B2 rejection.",
+    "Allow an active B0 worker to finish and publish its checkpoint and B0 report across a safe B1 control advancement, including race and recovery handling.",
+    "Implement safe checkpoint-preserving amended continuation and verify explicit reset resource retirement, unbound amendments, and protected states; update operator documentation and cover the complete ticket with focused tests."
+  ],
+  "report_artifact": "executions/TASK-133/254bc876b05842a08a70fb08b1f3b134.md",
+  "report_sha256": "67cec63f0f3e96f406bf1cafa073a1e42e0bcc91cdf48524c9c28369e1d0d3a5",
+  "resource_generation": "3d411b7a2723efe7d8ae3760449a42f45e4eda2da7ca87c2d15d6675f9b5bc85",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-derived binding of the current reviewed specification to the execution checkpoint, including B1 ACCEPT/REWORK and stale B2 rejection.",
+      "Allow an active B0 worker to finish and publish its checkpoint and B0 report across a safe B1 control advancement, including race and recovery handling.",
+      "Implement safe checkpoint-preserving amended continuation and verify explicit reset resource retirement, unbound amendments, and protected states; update operator documentation and cover the complete ticket with focused tests."
+    ],
+    "report": "The current publication and acceptance mechanisms require coordinated changes to preserve immutable B0 attribution while proving review of B1. This invocation only established the fail-closed admission boundary; the end-to-end amendment contract remains unimplemented.",
+    "summary": "Added a fail-closed owner admission check preventing a historical review from being attributed to an amended ticket, with real-Git resolver and owner-path regressions. Preserved the existing deferred-transition behavior and review evidence."
+  },
+  "workspace_head": "01f1eafd8d294aef287012898c61dda79cefcbc9"
+}
