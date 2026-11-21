@@ -273,6 +273,25 @@ def resolve_rework_review(
         artifact_path=artifact,
         runner=runner,
     )
+    # A review published with the disposition describes the specification in
+    # review at that boundary.  A later backlog amendment is a valid Git
+    # transition, but it does not retroactively make that review a decision on
+    # the amended specification.  Until current-spec review is bound by the
+    # owner, do not admit it as ordinary rework.
+    try:
+        same_specification = _same_blob(
+            repo, lifecycle, f"{review_path}/{report.ticket_id}.md",
+            head, f"{todo_path}/{report.ticket_id}.md", runner,
+        )
+    except GitObservationError as error:
+        raise ReviewProvenanceError(
+            "cannot verify the specification covered by curator review"
+        ) from error
+    if not same_specification:
+        raise ReviewProvenanceError(
+            "ticket specification changed after curator review; current-spec "
+            "review binding is required before rework admission"
+        )
     try:
         content = read_path(repo, head, artifact, runner=runner)
         publication = file_history_commit(repo, head, artifact, runner=runner)

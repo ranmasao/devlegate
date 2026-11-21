@@ -165,6 +165,54 @@ def test_real_git_deferred_rework_allows_separate_backlog_amendment(tmp_path):
     assert publication == deferral
 
 
+def test_real_git_amended_rework_does_not_rebind_historical_review(tmp_path):
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for name in ("review", "todo", "backlog", "reviews/TASK-1"):
+        (tmp_path / name).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "review/TASK-1.md").write_text("B0\n")
+    git("add", ".")
+    git("commit", "-qm", "lifecycle")
+    lifecycle = git("rev-parse", "HEAD")
+    report = SimpleNamespace(
+        ticket_id="TASK-1", execution_id="a" * 32,
+        workspace_head="b" * 40, control_head="c" * 40,
+        result=SimpleNamespace(egress_ok=True, transport_error=None),
+    )
+    artifact = tmp_path / f"reviews/TASK-1/{report.execution_id}.md"
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        f"ticket: {report.ticket_id}\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n-->\nReview of B0.\n"
+    )
+    git("mv", "review/TASK-1.md", "backlog/TASK-1.md")
+    git("add", ".")
+    git("commit", "-qm", "publish B0 review and defer")
+    (tmp_path / "backlog/TASK-1.md").write_text("B1\n")
+    git("add", ".")
+    git("commit", "-qm", "amend")
+    git("mv", "backlog/TASK-1.md", "todo/TASK-1.md")
+    git("commit", "-qm", "schedule")
+
+    with pytest.raises(ReviewProvenanceError, match="current-spec review binding"):
+        resolve_rework_review(
+            tmp_path, git("rev-parse", "HEAD"), lifecycle, report,
+            todo_path="todo", review_path="review", backlog_path="backlog",
+            runner=run_git,
+        )
+    assert artifact.read_text().endswith("Review of B0.\n")
+    assert (tmp_path / "todo/TASK-1.md").read_text() == "B1\n"
+
+
 def test_transport_failure_is_not_selected_as_reviewed(monkeypatch, tmp_path):
     report = SimpleNamespace(
         ticket_id="TASK-1",
