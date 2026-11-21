@@ -1,0 +1,40 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "incomplete",
+  "control_head": "d7770df24ef93c5f7bc7eec9f71f56386eeac89f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "e6d5c03a3fe04a7cb506b130d02db36f",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement deferred B1 handling for bound B0 executions through owner-serialized publication and recovery without changing their immutable execution binding.",
+    "Bind independent ACCEPT and REWORK decisions to the reviewed current specification without requiring the Reviewer to supply Git identities; reject stale decisions while allowing unrelated control commits.",
+    "Verify safe checkpoint reuse and explicit reset resource retirement across amended generations, and add focused real-Git, owner, race, and recovery tests for the complete workflow.",
+    "Document the amendment state matrix and edit/commit/push, review, continuation, and explicit-reset workflows; run the whole-ticket focused checks and lint after implementation."
+  ],
+  "report_artifact": "executions/TASK-133/e6d5c03a3fe04a7cb506b130d02db36f.md",
+  "report_sha256": "4f3218b35670767e9cb8eaa6b27fbf47d77cfc59bf99afbdbe264e17ecf51e00",
+  "resource_generation": "192bc98341428a5deea6dac94336940b1a4697e7fab4d974b11263659360031a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement deferred B1 handling for bound B0 executions through owner-serialized publication and recovery without changing their immutable execution binding.",
+      "Bind independent ACCEPT and REWORK decisions to the reviewed current specification without requiring the Reviewer to supply Git identities; reject stale decisions while allowing unrelated control commits.",
+      "Verify safe checkpoint reuse and explicit reset resource retirement across amended generations, and add focused real-Git, owner, race, and recovery tests for the complete workflow.",
+      "Document the amendment state matrix and edit/commit/push, review, continuation, and explicit-reset workflows; run the whole-ticket focused checks and lint after implementation."
+    ],
+    "report": "The primary publication and review trust-boundary changes are interdependent and were not completed within this invocation; allowing B1 publication before reviewed-spec attribution is implemented could implicitly accept an unreviewed specification.",
+    "summary": "Allow a reviewed ticket to be amended in a separate backlog commit before a byte-preserving rescheduling move, and update the Reviewer protocol test fixture to the current release branch. Add a real-Git test for the deferred rework transition."
+  },
+  "workspace_head": "6dbd9a3d9abbf969ce59380ea9281b4f20b5fd7f"
+}
