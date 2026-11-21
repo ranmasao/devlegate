@@ -323,7 +323,9 @@ git push origin devlegate/control
 | review | Move the unchanged blob to backlog before editing in a separate commit. |
 | accepted, done, abandoned | Protected. |
 
-For a running worker, let it finish. Its checkpoint C0 and report remain evidence
+For a running worker, keep its ticket continuously at the same todo path: deleting
+or moving it and later recreating it is not an amendment and blocks publication
+of that execution. Let the worker finish. Its checkpoint C0 and report remain evidence
 of B0; the review ticket contains B1. The Reviewer evaluates C0 against B1, using
 B0 and the change as context. Publish `# ACCEPT` feedback with the move to
 accepted when B1 differs from B0, or `# REWORK` feedback with the unchanged move

@@ -9620,6 +9620,20 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "control descendant changed the active ticket; lifecycle replay refused"
             )
+        if allow_amendment:
+            for commit in commit_range(
+                self.control_worktree,
+                f"{control_head}..{candidate}",
+                runner=self._git_runtime,
+            ):
+                if read_path(
+                    self.control_worktree, commit, original_path,
+                    runner=self._git_runtime,
+                ) is None:
+                    raise WorkflowBlockedError(
+                        "active ticket was withdrawn or moved after admission; "
+                        "lifecycle replay refused"
+                    )
         original_lines = original.splitlines(keepends=True)
         delimiters = [
             index

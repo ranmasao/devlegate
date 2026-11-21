@@ -17,7 +17,7 @@ from runtime_helpers import run_test_iteration
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.resource_binding import ResourceBinding
-from devlegate.runtime import DevlegateError
+from devlegate.runtime import DevlegateError, WorkflowBlockedError
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import _capture_worker_identity
 
@@ -28,6 +28,47 @@ class ProcessLoss(BaseException):
 
 def completed():
     return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+
+@pytest.mark.parametrize("change", ["edit", "unrelated", "delete", "move"])
+def test_bound_ticket_continuity_across_control_history(tmp_path, monkeypatch, change):
+    repo, config, state = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+    control = next((state / "worktrees").glob("*/control"))
+    admitted = git(control, "rev-parse", "HEAD").stdout.strip()
+    ticket = control / "kanban/todo/T-1.md"
+    original = ticket.read_text()
+    body = original.split("---", 2)[2].lstrip("\r\n")
+    if change in {"delete", "move"}:
+        if change == "delete":
+            ticket.unlink()
+        else:
+            ticket.rename(control / "kanban/backlog/T-1.md")
+        git(control, "add", "-A")
+        git(control, "commit", "-m", "withdraw active ticket")
+        if change == "move":
+            (control / "kanban/backlog/T-1.md").unlink()
+        ticket.write_text(original + "replacement\n")
+    elif change == "edit":
+        ticket.write_text(original + "amendment\n")
+    else:
+        (control / "unrelated.txt").write_text("unrelated\n")
+    git(control, "add", "-A")
+    git(control, "commit", "-m", "update control")
+    candidate = git(control, "rev-parse", "HEAD").stdout.strip()
+
+    def prove():
+        owner._prove_bound_ticket_descendant(
+            candidate, admitted, "T-1", body, allow_amendment=True,
+        )
+
+    if change in {"delete", "move"}:
+        with pytest.raises(WorkflowBlockedError, match="withdrawn or moved"):
+            prove()
+    else:
+        prove()
 
 
 @pytest.mark.parametrize("initial_state", ["backlog", "todo"])
