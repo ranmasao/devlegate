@@ -30,6 +30,51 @@ def completed():
     return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
 
+def test_owner_refuses_to_attribute_old_review_to_amended_ticket(tmp_path, monkeypatch):
+    repo, config, state = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+
+    def first(workspace, _prompt, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("checkpoint\n")
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", first)
+    assert run_test_iteration(owner) == 0
+    control = next((state / "worktrees").glob("*/control"))
+    report = ExecutionReportStore(control).list("T-1")[0]
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n-->\nReview of original specification.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/backlog/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "defer reviewed ticket")
+    ticket = control / "kanban/backlog/T-1.md"
+    ticket.write_text(ticket.read_text() + "\nAmended requirements.\n")
+    git(control, "add", str(ticket.relative_to(control)))
+    git(control, "commit", "-m", "amend ticket")
+    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
+    git(control, "commit", "-m", "schedule amendment")
+    git(control, "push", "origin", "devlegate/control")
+
+    def unexpected_worker(*_args, **_kwargs):
+        pytest.fail("historical review must not admit amended rework")
+
+    monkeypatch.setattr(owner._workers, "run", unexpected_worker)
+    with pytest.raises(DevlegateError, match="current-spec review binding"):
+        run_test_iteration(owner)
+    assert len(ExecutionReportStore(control).list("T-1")) == 1
+    assert artifact.read_text().endswith("Review of original specification.\n")
+
+
 @pytest.fixture
 def interrupted_rework(tmp_path, monkeypatch):
     repo, config, state = control_fixture(tmp_path)
