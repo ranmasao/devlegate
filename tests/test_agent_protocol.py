@@ -167,7 +167,7 @@ def test_reviewer_priorities_and_repository_artifacts_agree(tmp_path):
 
     repository_context = RenderContext(
         "devlegate/control", "kanban/backlog", "kanban/todo", "kanban/review",
-        "kanban/done", "release/0.5.7",
+        "kanban/done", "release/0.5.8",
     )
     initialize_project(tmp_path, repository_context)
     generated = (tmp_path / "skills/reviewer/SKILL.md").read_bytes()
