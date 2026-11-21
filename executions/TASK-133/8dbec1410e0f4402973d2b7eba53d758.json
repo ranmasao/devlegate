@@ -1,0 +1,36 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "incomplete",
+  "control_head": "ccbb49195d5bfab550734b6222858fde685968e2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "8dbec1410e0f4402973d2b7eba53d758",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement a distinguishable, validated current-spec continuation path after an unchanged review-to-backlog deferral followed by a separate backlog amendment; preserve the existing stale-review refusal and prior checkpoint evidence.",
+    "Complete the remaining ticket-wide real-Git admission, publication race, reset/resource safety and review-boundary coverage, then verify the complete focused set and hosted exact-checkpoint CI."
+  ],
+  "report_artifact": "executions/TASK-133/8dbec1410e0f4402973d2b7eba53d758.md",
+  "report_sha256": "16808ad9820985bcacbc9ce8b805726d8dced56de31977f97f5a17c7c161592e",
+  "resource_generation": "510a1d3c18d0d7f3c7bf4c5e4a7668e630c6839b6a6d39dcc1c5301ba33e9b9e",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement a distinguishable, validated current-spec continuation path after an unchanged review-to-backlog deferral followed by a separate backlog amendment; preserve the existing stale-review refusal and prior checkpoint evidence.",
+      "Complete the remaining ticket-wide real-Git admission, publication race, reset/resource safety and review-boundary coverage, then verify the complete focused set and hosted exact-checkpoint CI."
+    ],
+    "report": "The post-review backlog amendment continuation is still refused by the retained stale-review guard. This invocation is ending before a safe replacement for that boundary and its full integration coverage can be completed.",
+    "summary": "Enabled lifecycle publication across running-ticket amendments while retaining the original execution binding, and added current-spec ACCEPT and REWORK review paths with checkpoint-preserving continuation. Updated reviewer guidance and operator documentation, with owner integration and recovery coverage."
+  },
+  "workspace_head": "c4d04813e8f619f89d782a84ec7a34a5d4fc1b98"
+}
