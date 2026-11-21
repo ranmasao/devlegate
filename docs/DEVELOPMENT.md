@@ -85,10 +85,18 @@ with coverage and lint and is required for independent review and integration.
 Runs pytest with statement and branch coverage, then writes the coverage report
 and `coverage.json`.
 
-When preparing a new `release/X.Y.Z` branch, its publication flow must run
-`python3 tools/prepare_release_readme.py X.Y.Z` and include the resulting README
-change in the initial branch commit. CI publishes the matching version-scoped
-badge after the branch's checks succeed.
+To create and publish a new release branch, choose the version and full source
+commit explicitly, then run from the repository:
+
+```sh
+python3 tools/publish_release_branch.py X.Y.Z FULL_SOURCE_COMMIT_ID
+```
+
+The source project's version must match (an optional `.devN` suffix is allowed).
+The command creates a signed-off commit with the matching README badge before
+publishing `release/X.Y.Z` to `origin`. It refuses existing branches and uses a
+create-only lease to reject concurrent creation. CI publishes the matching badge
+after the branch's checks succeed.
 
 ```sh
 ./dev run [args...]

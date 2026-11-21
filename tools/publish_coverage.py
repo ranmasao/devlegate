@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Daniil Romanov
+# Licensed under the EUPL-1.2.
+# SPDX-License-Identifier: EUPL-1.2
+
 """Publish a coverage payload without losing concurrent badge updates."""
 
 import re
