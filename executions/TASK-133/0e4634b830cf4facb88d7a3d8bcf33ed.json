@@ -1,0 +1,38 @@
+{
+  "code_base_head": "cdf8354fd0671d61198a88e7703f73a0eec66816",
+  "conclusion": "incomplete",
+  "control_head": "aa2729dba7c0f1f1a2b6bdd94329a29b2deb1674",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-133",
+  "execution_id": "0e4634b830cf4facb88d7a3d8bcf33ed",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-133",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Integrate amendment history and immutable review attribution with owner-serialized runtime admission, durable execution generation state, and explicit reset/resource-retirement proof.",
+    "Implement validation for backlog and unbound todo amendments, protected states, concurrent control changes and admission races, and dependency rescheduling.",
+    "Add end-to-end coverage for fresh generation, recovery, integration, rewritten refs and historical evidence; document the operator workflow and provenance-state matrix."
+  ],
+  "report_artifact": "executions/TASK-133/0e4634b830cf4facb88d7a3d8bcf33ed.md",
+  "report_sha256": "05166073edae51c1ec5e1e2b6cc58a534e8d1f65de0cd6e20ede7ff0f445b0c7",
+  "resource_generation": "09119dc93c17f22f7356d57173cc436c70e8aa80c6bf3d11b6aeaf1a985f687c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-133",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Integrate amendment history and immutable review attribution with owner-serialized runtime admission, durable execution generation state, and explicit reset/resource-retirement proof.",
+      "Implement validation for backlog and unbound todo amendments, protected states, concurrent control changes and admission races, and dependency rescheduling.",
+      "Add end-to-end coverage for fresh generation, recovery, integration, rewritten refs and historical evidence; document the operator workflow and provenance-state matrix."
+    ],
+    "report": "The history proof alone cannot safely authorize a new execution; control-ref observation, durable admission, and resource retirement must be integrated together before enabling the requested workflow. This invocation ends with that cross-cutting integration unfinished.",
+    "summary": "Added a narrow Git-history proof for a separately committed deferred ticket amendment, with real-Git coverage of valid and malformed transitions. Existing review and runtime admission behavior remains fail-closed."
+  },
+  "workspace_head": "96165f60211963e76034acca99f9333461df37ed"
+}
