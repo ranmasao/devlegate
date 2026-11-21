@@ -9568,6 +9568,8 @@ class ServiceEngine:
         control_head: str,
         ticket_id: str,
         selected_body: str,
+        *,
+        allow_amendment: bool = False,
     ) -> None:
         try:
             candidate_descends = is_ancestor(
@@ -9589,7 +9591,9 @@ class ServiceEngine:
         current = read_path(
             self.control_worktree, candidate, original_path, runner=self._git_runtime
         )
-        if original is None or current is None or original != current:
+        if original is None or current is None or (
+            not allow_amendment and original != current
+        ):
             raise WorkflowBlockedError(
                 "control descendant changed the active ticket; lifecycle replay refused"
             )
@@ -9615,6 +9619,7 @@ class ServiceEngine:
             report.control_head,
             report.ticket_id,
             str(self._state.get("selected_ticket_body", "")),
+            allow_amendment=True,
         )
 
     def _apply_lifecycle_once(

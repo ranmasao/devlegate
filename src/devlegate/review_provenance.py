@@ -119,17 +119,18 @@ def restore_review_binding(
     if not re.fullmatch(r"[0-9a-f]{40}", publication):
         raise ReviewProvenanceError("persisted curator review publication is invalid")
     match = _HEADER.match(content)
-    if (
-        match is None
-        or match.groupdict()
-        != {
-            "ticket": ticket_id,
-            "execution": execution_id,
-            "checkpoint": checkpoint,
-            "control": control_head,
-            "disposition": disposition,
-        }
-    ):
+    if match is None:
+        if not content.startswith(f"# {disposition.upper()}\n"):
+            raise ReviewProvenanceError(
+                "persisted curator review attribution is invalid"
+            )
+    elif match.groupdict() != {
+        "ticket": ticket_id,
+        "execution": execution_id,
+        "checkpoint": checkpoint,
+        "control": control_head,
+        "disposition": disposition,
+    }:
         raise ReviewProvenanceError("persisted curator review attribution is invalid")
     return ReviewBinding(content, path, publication, tuple(transition), digest)
 
@@ -323,7 +324,7 @@ def resolve_rework_review(
             "cannot inspect curator review publication"
         ) from error
     match = _HEADER.match(content)
-    if match is None:
+    if match is None and not content.startswith("# REWORK\n"):
         raise ReviewProvenanceError(
             "curator review artifact has a malformed attribution header"
         )
@@ -347,7 +348,7 @@ def resolve_rework_review(
         "control": report.control_head,
         "disposition": "rework",
     }
-    if match.groupdict() != expected:
+    if match is not None and match.groupdict() != expected:
         raise ReviewProvenanceError(
             "curator review attribution does not match the reviewed execution"
         )

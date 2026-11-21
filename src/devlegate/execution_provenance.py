@@ -17,6 +17,7 @@ from devlegate.git import (
     commit_changes,
     commit_parents,
     commit_range,
+    file_history_commit,
     history_changes,
     is_ancestor,
     path_object,
@@ -225,6 +226,45 @@ def resolve_accepted_execution_report(
         raise ExecutionProvenanceError(
             "accepted ticket has ambiguous or missing completed execution evidence"
         )
+    try:
+        original_blob = path_object(
+            repo, report.control_head, f"{todo_path}/{report.ticket_id}.md",
+            runner=runner,
+        )
+        reviewed_blob = path_object(
+            repo, commit, f"{review_path}/{report.ticket_id}.md", runner=runner,
+        )
+    except GitObservationError as error:
+        raise ExecutionProvenanceError(
+            "cannot verify the specification covered by accepted review"
+        ) from error
+    if original_blob is None or reviewed_blob is None:
+        raise ExecutionProvenanceError("accepted ticket specification is unavailable")
+    if original_blob != reviewed_blob:
+        artifact = f"reviews/{report.ticket_id}/{report.execution_id}.md"
+        try:
+            feedback = read_path(repo, accepted_revision, artifact, runner=runner)
+            publication = file_history_commit(
+                repo, accepted_revision, artifact, runner=runner
+            )
+            changes = set(commit_changes(repo, accepted_revision, runner=runner))
+        except GitObservationError as error:
+            raise ExecutionProvenanceError(
+                "cannot verify current-spec acceptance publication"
+            ) from error
+        if (
+            publication != accepted_revision
+            or not isinstance(feedback, str)
+            or not feedback.startswith("# ACCEPT\n")
+            or changes != {
+                f"A\t{artifact}",
+                f"D\t{review_path}/{report.ticket_id}.md",
+                f"A\t{accepted_path}/{report.ticket_id}.md",
+            }
+        ):
+            raise ExecutionProvenanceError(
+                "amended execution requires a trusted current-spec acceptance binding"
+            )
     if admitted is None or not _review_change_is_annotation(admitted, accepted):
         raise ExecutionProvenanceError(
             "review content changed after admission; specification changes are "

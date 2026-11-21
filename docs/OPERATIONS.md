@@ -289,15 +289,44 @@ backlog -> todo -> review -> accepted -> done
 Only eligible `todo` work is selected. Completed worker results enter review;
 accepted work is integrated only after the acceptance boundary is satisfied.
 For rework, the Reviewer publishes immutable feedback at
-`reviews/<ticket-id>/<execution-id>.md` with the `devlegate-review-v1` attribution
-header and moves the unchanged ticket from review to todo, optionally through
+`reviews/<ticket-id>/<execution-id>.md` beginning with `# REWORK` and moves the
+unchanged ticket from review to todo, optionally through
 backlog. Devlegate binds only that reviewed execution's exact artifact and injects
-it over worker stdin. Missing, headerless, mutable, conflicting, stale, or
+it over worker stdin. Missing, mutable, conflicting, stale, or
 mismatched artifacts block worker launch regardless of marker history. If an old
 pending REWORK has no valid current-protocol artifact, Devlegate does not infer
 feedback or start it as FRESH. Stop the service, preserve and inspect its workspace
 and evidence, then explicitly dispose of that pending generation outside the
 runtime before publishing a new, fully attributed review disposition.
+
+### Editing a ticket
+
+Edit the canonical Markdown at its existing path on `devlegate/control`, commit
+and push normally. Git records the change; there is no amendment command. The
+ticket parser and dependency graph still apply.
+
+| Ticket state | Edit policy |
+| --- | --- |
+| backlog | Edit at the same path. |
+| todo, not yet bound | Edit at the same path; the next fresh admission uses it. |
+| todo, worker bound | The worker retains B0; the committed B1 is deferred to review. |
+| review | Move the unchanged blob to backlog before editing in a separate commit. |
+| accepted, done, abandoned | Protected. |
+
+For a running worker, let it finish. Its checkpoint C0 and report remain evidence
+of B0; the review ticket contains B1. The Reviewer evaluates C0 against B1, using
+B0 and the change as context. Publish `# ACCEPT` feedback with the move to
+accepted when B1 differs from B0, or `# REWORK` feedback with the unchanged move
+to todo. Both artifacts belong at `reviews/<ticket-id>/<execution-id>.md`; the
+publication boundary binds the review to the report and current ticket. Rework
+starts a distinct execution and can retain C0. A later amendment after a review
+is not implicitly covered by that review and currently blocks rework admission
+until current-spec review can be established.
+
+An explicit `devlegate reset TASK-XXX` is different: it discards continuation
+rights and retires only proven resources to start fresh, while retaining historical
+evidence. An amendment does not automatically reset a worker. See
+[reset and recovery](reset.md).
 
 ## Decommissioning
 
