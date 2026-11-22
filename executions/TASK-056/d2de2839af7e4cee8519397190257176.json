@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "232afb129d350f0c3f1f374fa4c86efe1f60eec3",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "d2de2839af7e4cee8519397190257176",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-mediated stall eligibility and durable worker_stalled intent before retirement, with output, completion, and owned-descendant revalidation.",
+    "Implement restart-safe retirement, preserved execution provenance, and exactly-once continuation through the existing workflow recovery boundary.",
+    "Add bounded deterministic recovery context, operator recovery status, and service-level lifecycle regressions; run the required focused tests, lint, and diff check."
+  ],
+  "report_artifact": "executions/TASK-056/d2de2839af7e4cee8519397190257176.md",
+  "report_sha256": "a0b6acd745d2d0d755d383536367c2b5d4cd545154e1356f658eef20ab5f6953",
+  "resource_generation": "76664a602a40d8dfac3473d914df1963f2a0c2a199251611348abf223765541d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-mediated stall eligibility and durable worker_stalled intent before retirement, with output, completion, and owned-descendant revalidation.",
+      "Implement restart-safe retirement, preserved execution provenance, and exactly-once continuation through the existing workflow recovery boundary.",
+      "Add bounded deterministic recovery context, operator recovery status, and service-level lifecycle regressions; run the required focused tests, lint, and diff check."
+    ],
+    "report": "The ownership-critical recovery transaction and its restart/crash proof cannot be implemented and verified safely within this invocation's available execution budget. The existing interruption path signals before persisting its reason, and stranded-worker recovery does not admit a continuation, so connecting a timeout directly to it would risk incorrect attribution or unsafe recovery.",
+    "summary": "Inspected the existing worker activity monitor, containment supervisor, and workflow recovery boundaries; no implementation changes were made."
+  },
+  "workspace_head": "6c8955acb04df29df234b98377f559d1b44dce84"
+}
