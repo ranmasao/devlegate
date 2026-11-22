@@ -128,6 +128,34 @@ def test_stalled_state_rejects_changed_binding_and_process_loss_recovery(
     assert restored._runtime_store.load()["execution_id"] == "execution-1"
 
 
+def test_stalled_output_evidence_survives_owner_restart(tmp_path, monkeypatch):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    identity = {
+        "execution_id": "execution-1", "pid": 1, "pgid": 1, "sid": 1,
+        "boot_id": "boot", "start_time": 1, "containment_id": "test:group",
+    }
+    _persist_active_execution(
+        engine, "agent_running", "worker-running", worker_identity=identity
+    )
+    activity = WorkerActivity(1, clock=lambda: 0)
+    activity.observe("stderr", b"last error\xff")
+    activity._clock = lambda: 10
+
+    def persist(output):
+        persist_stalled_intent(
+            engine, launch_evidence={"containment": "test:group"},
+            output_evidence=output,
+        )
+        return True
+
+    assert activity.if_idle_with_output(10, persist)
+    restored = ServiceEngine(engine.env_file)
+    assert restored._state["stalled_recovery"]["output_evidence"] == {
+        "stdout": {"base64": "", "truncated": False},
+        "stderr": {"base64": "bGFzdCBlcnJvcv8=", "truncated": False},
+    }
+
+
 @pytest.mark.parametrize("observation", ["absent", "matching-live"])
 def test_restarted_stall_rechecks_containment_before_failing_closed(
     tmp_path, monkeypatch, observation
