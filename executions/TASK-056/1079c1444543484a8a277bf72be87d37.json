@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "949111b96ccb3b3810fee0c67277b60dbfdb2f90",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "1079c1444543484a8a277bf72be87d37",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement one owner-mediated, crash-safe stalled-continuation transaction shared by live recovery and restart reconciliation, with durable worker_stalled provenance and exactly-once successor admission after retirement proof.",
+    "Prepare and persist bounded changed-path evidence and a privacy-safe deterministic recovery prompt, attach it to the successor, and expose stalled/recovering status.",
+    "Exercise the complete handoff across retirement, state-write and admission crash boundaries, including preserved dirty changes and no overlapping workers."
+  ],
+  "report_artifact": "executions/TASK-056/1079c1444543484a8a277bf72be87d37.md",
+  "report_sha256": "09806a71b7c42fd9a85c4e6428b26df1f5418c29f1b189658e57363da4125175",
+  "resource_generation": "b50cf9fe317ad65627118ff00533a777205e2a764987c22b386576639620ec4b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement one owner-mediated, crash-safe stalled-continuation transaction shared by live recovery and restart reconciliation, with durable worker_stalled provenance and exactly-once successor admission after retirement proof.",
+      "Prepare and persist bounded changed-path evidence and a privacy-safe deterministic recovery prompt, attach it to the successor, and expose stalled/recovering status.",
+      "Exercise the complete handoff across retirement, state-write and admission crash boundaries, including preserved dirty changes and no overlapping workers."
+    ],
+    "report": "The continuation and successor admission cross existing resource-generation and lifecycle boundaries and have not been implemented or verified within this invocation; the existing fail-closed behavior remains in place.",
+    "summary": "Captured bounded, byte-exact stdout and stderr evidence in the durable stalled-retirement intent, with validation and restart preservation. Output capture is serialized with the watchdog inactivity decision."
+  },
+  "workspace_head": "f4d905337adc76fc370039a54c393ee638ce3747"
+}
