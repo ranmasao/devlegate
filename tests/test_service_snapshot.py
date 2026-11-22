@@ -13,6 +13,7 @@ from devlegate.runtime import BlockedReason, DevlegateError, ServiceSnapshot
 from devlegate.runtime_store import RuntimeStoreError
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerRunResult
+from devlegate.worker_activity import WorkerActivity
 
 
 def make_engine(tmp_path, monkeypatch):
@@ -327,12 +328,19 @@ def test_status_and_service_publication_can_be_observed_between_generations(
 
 def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
+    now = [0.0]
+    monkeypatch.setattr(
+        "devlegate.runtime.WorkerActivity",
+        lambda warning: WorkerActivity(warning, clock=lambda: now[0]),
+    )
+    callbacks = []
     worker_entered = threading.Event()
     worker_release = threading.Event()
     stop_event = threading.Event()
     result = []
 
     def worker(_workspace, _prompt, **_kwargs):
+        callbacks.append(_kwargs["activity_handler"])
         worker_entered.set()
         durable = engine._runtime_store.load()
         assert durable["phase"] == "agent_running"
@@ -358,12 +366,29 @@ def test_long_worker_publishes_live_snapshot_before_blocking(tmp_path, monkeypat
     assert published["execution"]["stage"] == snapshot.execution_stage
     assert published["live_execution"]["execution_id"] == snapshot.execution_id
     assert published["live_execution"]["stage"] == snapshot.execution_stage
+    assert published["live_execution"]["output_activity"] == {
+        "idle_seconds": 0, "warning": False,
+    }
+    now[0] = 300.0
+    assert engine.published_status_payload()["live_execution"]["output_activity"] == {
+        "idle_seconds": 300, "warning": True,
+    }
+    callbacks[0]("stderr", b"partial")
+    assert engine.published_status_payload()["live_execution"]["output_activity"] == {
+        "idle_seconds": 0, "warning": False,
+    }
+    now[0] += 299
+    callbacks[0]("stdout", b"partial")
+    now[0] += 299
+    activity = engine.published_status_payload()["live_execution"]["output_activity"]
+    assert not activity["warning"]
 
     worker_release.set()
     thread.join(10)
     assert not thread.is_alive()
     assert result == [0]
     assert engine.service_snapshot().worker_running is False
+    assert engine._worker_activity is None
 
 
 def test_worker_running_clears_when_worker_raises(tmp_path, monkeypatch):
