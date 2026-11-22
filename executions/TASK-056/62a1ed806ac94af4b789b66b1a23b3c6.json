@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "ff6bed2902a5ad66f24dde9902030b09c4aaf979",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "62a1ed806ac94af4b789b66b1a23b3c6",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the durable watchdog recovery transaction through the shared recovery boundary, including persisted stalled evidence, exact ownership retirement, restart-safe continuation, and prevention of concurrent replacements.",
+    "Implement configurable inactivity thresholds, owned-descendant checks, synchronized timeout revalidation, warning/status reporting, and deterministic bounded recovery prompt evidence.",
+    "Add the required end-to-end watchdog, durable provenance, workspace preservation, and service-restart regressions; run the complete focused ticket checks."
+  ],
+  "report_artifact": "executions/TASK-056/62a1ed806ac94af4b789b66b1a23b3c6.md",
+  "report_sha256": "fbc8296511571382e4b0ab13345a378e4d1380c05283f1581904f707151ef616",
+  "resource_generation": "f2ea9ba5866b833384351f37172d1b485dccffd0a7723f0448982ae33c446abc",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the durable watchdog recovery transaction through the shared recovery boundary, including persisted stalled evidence, exact ownership retirement, restart-safe continuation, and prevention of concurrent replacements.",
+      "Implement configurable inactivity thresholds, owned-descendant checks, synchronized timeout revalidation, warning/status reporting, and deterministic bounded recovery prompt evidence.",
+      "Add the required end-to-end watchdog, durable provenance, workspace preservation, and service-restart regressions; run the complete focused ticket checks."
+    ],
+    "report": "The invocation reached its available execution limit before the durable recovery handoff and remaining acceptance criteria could be implemented. The new observation hook is foundational and does not activate a watchdog.",
+    "summary": "Added a supervisor activity callback that observes stdout and stderr bytes promptly, including partial output, while retaining bounded stdout event parsing. Added a real-process regression for observing partial output before worker exit."
+  },
+  "workspace_head": "47abc71966e24563e3255c78a61f2a683beba08b"
+}
