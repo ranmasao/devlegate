@@ -113,6 +113,88 @@ class StrandedRecoveryCapabilities(Protocol):
     def recovery_publish_blocked(self, reason: str) -> None: ...
 
 
+class StalledRetirementCapabilities(Protocol):
+    """Owner operations for the write-ahead stalled retirement boundary."""
+
+    def recovery_state(self) -> dict[str, object]: ...
+
+    def recovery_save_state(self, state: str, **values: object) -> None: ...
+
+    def recovery_worker_identity(self, value: object, execution_id: object) -> Any: ...
+
+    def recovery_retire_worker(self, identity: Any, evidence: object) -> None: ...
+
+
+def persist_stalled_intent(
+    owner: StalledRetirementCapabilities, *, launch_evidence: dict[str, object]
+) -> None:
+    """Record the exact owner binding before any stalled retirement is attempted.
+
+    The caller must serialize this transaction with activity observation and
+    establish fresh liveness and membership evidence before invoking it.
+    """
+    state = owner.recovery_state()
+    execution_id = state.get("execution_id")
+    identity = state.get("worker_identity")
+    if (
+        state.get("phase") != "agent_running"
+        or state.get("execution_stage") != "worker-running"
+        or not isinstance(execution_id, str)
+        or not execution_id
+        or not isinstance(identity, dict)
+        or owner.recovery_worker_identity(identity, execution_id) is None
+        or not isinstance(launch_evidence, dict)
+        or launch_evidence.get("containment") != identity.get("containment_id")
+        or not identity.get("containment_id")
+        or state.get("stalled_recovery") is not None
+    ):
+        raise ValueError("stalled retirement binding is unavailable or ambiguous")
+    owner.recovery_save_state(
+        "agent_running",
+        stalled_recovery={
+            "stage": "intent",
+            "reason": "worker_stalled",
+            "execution_id": execution_id,
+            "worker_identity": dict(identity),
+            "launch_evidence": dict(launch_evidence),
+        },
+    )
+
+
+def retire_stalled_intent(owner: StalledRetirementCapabilities) -> None:
+    """Retire a persisted exact binding; replay remains bound to that identity.
+
+    The retirement capability must prove the containment empty before returning.
+    An interrupted or failed retirement leaves the intent intact for reconciliation.
+    """
+    state = owner.recovery_state()
+    intent = state.get("stalled_recovery")
+    if not isinstance(intent, dict) or intent.get("stage") != "intent":
+        raise ValueError("stalled retirement intent is unavailable")
+    execution_id = intent.get("execution_id")
+    identity_value = intent.get("worker_identity")
+    evidence = intent.get("launch_evidence")
+    if (
+        state.get("phase") != "agent_running"
+        or state.get("execution_stage") != "worker-running"
+        or state.get("execution_id") != execution_id
+        or state.get("worker_identity") != identity_value
+        or intent.get("reason") != "worker_stalled"
+        or not isinstance(identity_value, dict)
+        or not isinstance(evidence, dict)
+        or not identity_value.get("containment_id")
+        or evidence.get("containment") != identity_value.get("containment_id")
+    ):
+        raise ValueError("stalled retirement intent no longer matches the worker")
+    identity = owner.recovery_worker_identity(identity_value, execution_id)
+    if identity is None:
+        raise ValueError("stalled retirement identity is invalid")
+    owner.recovery_retire_worker(identity, evidence)
+    owner.recovery_save_state(
+        "agent_running", stalled_recovery={**intent, "stage": "retired"}
+    )
+
+
 def recover_stranded_execution(
     owner: StrandedRecoveryCapabilities, state: dict[str, object]
 ) -> str | None:
