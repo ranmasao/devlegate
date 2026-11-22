@@ -12851,10 +12851,24 @@ class ServiceEngine:
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         try:
+            receipt = None
             if self._state.get("execution_resource_binding") is not None:
                 self._require_execution_generation(clean=False, remote=False)
-                self._execution_generation_binding().operation_receipt("worker")
+                receipt = self._execution_generation_binding().operation_receipt(
+                    "worker"
+                )
             stalled = self._state.get("stalled_recovery")
+            if isinstance(stalled, dict) and stalled.get("stage") == "intent":
+                from devlegate.recovery_transactions import retire_stalled_intent
+
+                if self._state_write_uncertain:
+                    raise ValueError("stalled recovery state write is uncertain")
+                if receipt is None or receipt.get("identity") != self._state.get(
+                    "worker_identity"
+                ):
+                    raise ValueError("stalled recovery generation binding is unproven")
+                retire_stalled_intent(self)
+                stalled = self._state.get("stalled_recovery")
             if isinstance(stalled, dict) and stalled.get("stage") == "retired":
                 from devlegate.recovery_transactions import prove_stalled_retirement
 
