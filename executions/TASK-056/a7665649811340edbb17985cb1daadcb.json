@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "5268ec692fefbe32adfe467be59d4410e26a1e8c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "a7665649811340edbb17985cb1daadcb",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect the configurable inactivity threshold and freshly revalidated output, completion, and owned-descendant observations to the serialized owner transaction.",
+    "Implement restart reconciliation of stalled intent and proven containment retirement, durable prior-attempt provenance, and exactly one continuation carrying bounded deterministic recovery context.",
+    "Add integrated watchdog, containment, restart, and replacement-prompt regressions and complete the full ticket validation."
+  ],
+  "report_artifact": "executions/TASK-056/a7665649811340edbb17985cb1daadcb.md",
+  "report_sha256": "e178a53d7d4406a96d244a89580f7c0fb03a159d25bb391d5a84243004bef54d",
+  "resource_generation": "0470d074adf3bfcf4796db28f3eeadc1f1787c5def13f995407f9a50fba2f677",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect the configurable inactivity threshold and freshly revalidated output, completion, and owned-descendant observations to the serialized owner transaction.",
+      "Implement restart reconciliation of stalled intent and proven containment retirement, durable prior-attempt provenance, and exactly one continuation carrying bounded deterministic recovery context.",
+      "Add integrated watchdog, containment, restart, and replacement-prompt regressions and complete the full ticket validation."
+    ],
+    "report": "The autonomous lifecycle and continuation require coordinated changes to worker supervision, durable recovery, and prompt/provenance handling that could not be safely completed in this invocation. The combined containment and ticket-reset test run exceeded its 120-second timeout; the focused containment and owner transaction checks completed separately.",
+    "summary": "Bound persisted stalled-recovery records to the active worker identity, added a fail-closed guard against ordinary process-loss recovery, and connected the recovery owner to exact-containment retirement with process-identity revalidation. Added owner-level coverage of durable write ordering and failed-write behavior using a real child process."
+  },
+  "workspace_head": "f3cc15fe8f476355b9e48f0f2c991adf0d9ee896"
+}
