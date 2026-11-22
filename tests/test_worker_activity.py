@@ -2,9 +2,11 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import base64
+
 import pytest
 
-from devlegate.worker_activity import WorkerActivity
+from devlegate.worker_activity import OUTPUT_TAIL_BYTES, WorkerActivity
 
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
@@ -43,3 +45,21 @@ def test_late_output_prevents_idle_decision(stream):
     now[0] = 1199.9
     assert tracker.if_idle(600, lambda: calls.append("intent") or True)
     assert calls == ["intent"]
+
+
+def test_idle_evidence_preserves_bounded_bytes_per_stream():
+    now = [0.0]
+    activity = WorkerActivity(1, clock=lambda: now[0])
+    activity.observe("stdout", b"a" * OUTPUT_TAIL_BYTES + b"\xffend")
+    activity.observe("stderr", b"error\x00\n")
+    now[0] = 10
+    captured = []
+    assert activity.if_idle_with_output(
+        10, lambda output: captured.append(output) or True
+    )
+    assert base64.b64decode(captured[0]["stdout"]["base64"]) == (
+        b"a" * (OUTPUT_TAIL_BYTES - 4) + b"\xffend"
+    )
+    assert captured[0]["stdout"]["truncated"] is True
+    assert base64.b64decode(captured[0]["stderr"]["base64"]) == b"error\x00\n"
+    assert captured[0]["stderr"]["truncated"] is False

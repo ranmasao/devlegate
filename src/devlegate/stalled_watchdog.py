@@ -13,7 +13,7 @@ from devlegate.worker_supervisor import observe_worker_identity
 def poll_stalled(owner, execution_id, activity, timeout, process, containment):
     """Return a supervisor decision; never signal on an uncommitted intent."""
 
-    def persist_if_eligible():
+    def persist_if_eligible(output_evidence):
         state = owner.recovery_state()
         identity = owner.recovery_worker_identity(
             state.get("worker_identity"), execution_id
@@ -47,11 +47,13 @@ def poll_stalled(owner, execution_id, activity, timeout, process, containment):
             or member_check(identity.pid) is not False
         ):
             return False
-        persist_stalled_intent(owner, launch_evidence=evidence)
+        persist_stalled_intent(
+            owner, launch_evidence=evidence, output_evidence=output_evidence
+        )
         return True
 
     try:
-        if not activity.if_idle(timeout, persist_if_eligible):
+        if not activity.if_idle_with_output(timeout, persist_if_eligible):
             return None
         retire_stalled_intent(owner)
         return "retired"
