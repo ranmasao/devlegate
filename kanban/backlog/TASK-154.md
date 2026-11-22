@@ -3,325 +3,240 @@
 "title": "Expose bounded virtual revision and diff exploration to workers"
 ---
 
-## Scheduling
-**Deferred architectural follow-up. Keep in backlog until explicitly scheduled.**
-This is not a prerequisite for TASK-153 and must not expand that regression fix.
-Related to TASK-152's future capability isolation, but this ticket does not itself
-claim to implement OS-enforced agent sandboxing.
+## Milestone
 
-## Problem
-Devlegate owns Git/checkpoint/integration while workers operate in ephemeral
-task worktrees. A REWORK worker may see current files and review feedback but
-cannot be assumed to know its cumulative delta from the integrated base or the
-changes in earlier attempts. Requiring the worker to use raw Git commands or
-commit/execution hashes would violate the intended agent-facing abstraction.
+Devlegate 0.5.8 — bounded read-only Change Explorer for implementation workers.
+
+**Scheduling: keep in backlog until explicitly scheduled.** This ticket is
+independent of TASK-153 and does not implement TASK-152's kernel/OS worker
+isolation. Its interface may be delivered before that isolation is complete.
 
 ## Goal
-Expose a narrowly scoped, **read-only Change Explorer** to implementation
-workers. It should describe available task revisions and return factual,
-bounded comparisons without granting Git lifecycle/ref authority or assuming
-Git will always be the sole VCS.
 
-## Worker-facing revision vocabulary
-- `BASE`: current task branch's base on the managed target branch.
-- `HEAD`: latest durable Devlegate-recorded task code checkpoint, including one
-  created after a failed or transport-disconnected execution; before the first
-  code checkpoint, `HEAD` aliases `BASE`.
-- `HEAD-N`: N preceding **actual task checkpoints**, not raw Git parents,
-  executions or model sessions. Zero-change sessions add no revision; stop at
-  the task boundary without inventing an extra `HEAD-N` alias for `BASE`.
-- `WORKTREE`: current editable files, including staged, unstaged and eligible
-  non-ignored untracked files (a mutable endpoint, not a stored commit).
-  Do not expose the Git staging index as a separate worker-facing state.
-- `TARGET`, if useful: latest observable state of the managed integration
-  branch; never silently substitute it for `BASE`.
+Give FRESH/REWORK/RESUME workers a selective way to inspect their own task's
+current and historical code changes without learning Git object IDs, refs,
+execution identifiers or repository lifecycle commands. Deliver three useful
+read-only tools, not a second Git audit, snapshot or integrity subsystem.
 
-No `PREVIOUS` alias, execution ID, commit hash, Git ref, or raw Git argument
-may be exposed in the **worker-facing** interface. Devlegate may retain such
-identities internally for provenance, authorization and consistency. Describe
-rebase/checkpoint alias behavior explicitly: a prior worker checkpoint can be
-historically retained even when Git parentage was rewritten; do not silently
-traverse into unrelated target commits. Squash integration is acceptable and
-must not force the entire worker commit history onto the target branch.
-Devlegate's technical rebase/replay commits are not additional worker-session
-checkpoints. Cross-base comparisons must not silently attribute target-branch
-changes to the worker.
+## Context
 
-## Minimal operations
-1. `revisions()`: cheap, deterministic inventory of accessible virtual
-   revisions and task-checkpoint counts. Provide factual kind/availability/
-   metadata, not invented semantic descriptions or internal IDs.
-2. `changes(from, to, cursor?)`: pageable inventory of added/modified/deleted/
-   renamed paths, file type/mode changes, available before/after byte sizes,
-   and binary/oversized indicators. This operation NEVER returns file bodies,
-   patches, hunks or snippets. Supply added/deleted line counts only when
-   actually computed; unknown is not zero. No project-specific production/tests
-   classification by default. Pagination must be deterministic for unchanged
-   comparison inputs, without hiding changed paths on later pages.
-3. `diff(from, to, path, cursor?)`: exact, bounded unified text diff for
-   **exactly one required file path** per call. `path` must be an explicit
-   repository-relative file path (not a directory, glob, wildcard, path list,
-   absolute path, or arbitrary Git pathspec). For symlinks, compare link text
-   without dereferencing; for submodules, return a bounded structural change
-   summary with explicit `SUBMODULE_CONTENT_UNAVAILABLE`, never a nested patch. No unscoped or
-   multi-file diff API exists. Split a large file diff into honest, bounded
-   response pages/hunk segments with unambiguous progress and continuation;
-   a segment need not be an independently applicable patch. Never build an
-   unbounded whole-branch patch merely to return one file/page.
+Devlegate owns checkpoint publication, Git refs and integration. Workers may
+need to compare their cumulative changes against the admitted product base,
+their last checkpoint, or an earlier attempt. The worker-facing interface must
+be independent of Git terminology beyond virtual task revisions, while its
+first backend may use Git directly.
 
-## Checkpoint, restart, and working-directory semantics
-- Losing model connectivity need not end a Devlegate execution; the harness
-  may reconnect. Once Devlegate has **proven worker retirement**, a failed
-  transport/egress/process execution may still produce a durable checkpoint
-  containing surviving edits, without implying semantic completion or review.
-  Sessions without changed code do not create extra revisions.
-- `changes(HEAD, WORKTREE)` lists paths changed since the latest checkpoint;
-  `diff(HEAD, WORKTREE, path)` provides that ONE file's content delta (including
-  eligible untracked files). `changes(BASE, WORKTREE)` and
-  `diff(BASE, WORKTREE, path)` expose cumulative task changes. Hide the staging
-  index; callers need not know whether edits are staged or unstaged.
-- A read-only diff tool does not authorize retry, resume, worker relaunch,
-  recovery, staging or commit. If old-worker ownership is unresolved, an
-  unsafe mutable worktree must not become an execution authorization just
-  because the tool can list some of its files.
+`WORKTREE` is a **live, mutable view**, not an immutable revision or a
+security attestation. Its contents are already governed by the existing
+execution/workspace ownership boundaries. Change Explorer reports what the
+authorized workspace contains when inspected; it is not responsible for
+independently proving that the worker never touched the Git index, establishing
+an immutable snapshot, or authorizing later checkpoint/integration operations.
 
-## Submodules — parent-repository structural view
+## Required behavior
 
-A submodule is one gitlink entry in the superproject, not an ordinary directory
-to traverse. The gitlink points to a commit in the independently versioned
-submodule, while `.gitmodules` is a separate tracked **text file**. Never
-follow nested Git history or execute fetch, init, update, hooks, checkout,
-textconv or other effects in the nested repository. No nested content patch,
-remote URL, Git object ID or arbitrary nested Git ref is exposed to Worker.
+### Virtual revision vocabulary
 
-### Parent-level changes
+- `BASE` — the admitted task's effective base on the configured target branch.
+- `HEAD` — latest durable Devlegate-recorded task **code checkpoint**, including
+  one retained after a failed/disconnected execution. Before the first such
+  checkpoint, `HEAD` aliases `BASE`.
+- `HEAD-N` — N preceding actual task code checkpoints, not Git parents,
+  sessions or arbitrary commits. Zero-change sessions create no new revision;
+  enumeration stops at the task boundary without inventing a `HEAD-N` for `BASE`.
+- `WORKTREE` — current editable task files, including staged, unstaged and
+  eligible non-ignored untracked files. The Git index is **not** an exposed
+  revision or separate agent-facing state.
+- `TARGET` is optional; if supported, it is the latest observed integration
+  branch state and must not silently replace `BASE`.
 
-- **Added/removed gitlink:** one `changes()` entry for the submodule path,
-  `kind=submodule`, `change=added|deleted`; `diff(path)` returns a bounded
-  structural summary, not nested file additions/deletions.
-- **Pinned revision updated:** one `modified` entry with
-  `pointer_changed=true`, without exposing either commit hash. A changed
-  gitlink does not imply that every internal file changed.
-- **Moved or replaced:** `renamed` with old/new paths only when bounded,
-  trustworthy rename evidence exists; otherwise separate deletion and
-  addition. A gitlink changed into a regular file, symlink or directory (or
-  vice versa) is a type replacement, not an internal file diff. Never infer
-  rename merely from matching URLs, names or sizes.
-- **`.gitmodules` changed:** report it independently as an ordinary text
-  file, subject to the same one-file diff limits. A path/URL/config edit in
-  `.gitmodules` does not by itself prove a gitlink addition, deletion, move
-  or pointer change. Do not automatically expose configured remote URLs
-  as submodule metadata or contact the remote.
+Only these virtual labels and bounded factual metadata are visible to workers.
+No raw Git ref, SHA, execution ID, control identity, arbitrary revision string
+or path supplied by the worker may become Git authority.
 
-### WORKTREE and incomplete state
+Devlegate resolves historical checkpoint identities from existing owner-held
+evidence. Rebase/replay commits do not become additional worker checkpoints;
+retained checkpoints may cease to be ancestors after a rebase. Cross-base
+comparisons must not silently present unrelated target changes as worker edits.
+Squash integration remains valid.
 
-- Separately observe (a) the **superproject-recorded pointer** (which may
-  have a pending staged update), (b) the initialized submodule checkout's
-  commit relative to that pointer, and (c) dirty tracked/untracked contents
-  inside the submodule. The worker still sees no separate `INDEX` revision:
-  report factual pointer-change and shallow checkout-status flags rather than
-  flattening disagreeing states into a fabricated single revision.
-- A changed recorded gitlink is a normal pointer delta. Even when the gitlink
-  is unchanged, `changes(..., WORKTREE)` may return one
-  `kind=submodule, worktree_only=true` entry for proven checkout drift or
-  nested dirtiness. This is **not** a checkpointed superproject code delta.
-  Do not show nested `submodule/path/file` entries or classify an unknown
-  dirty state as clean. Bounded probing may return `unknown` if computing
-  nested status would exceed the established budget.
-- Uninitialized, absent or unobservable checkout does not mean the tracked
-  gitlink was deleted. Report `not_initialized` / `unavailable` without
-  mutating anything. Similarly, an untracked nested Git directory is not
-  automatically a newly added submodule until a parent gitlink records it.
-  Do not descend into tracked submodule boundaries during untracked scanning.
-- State prominently in the returned status/tool guidance that **uncommitted
-  edits inside a submodule are NOT preserved by a normal checkpoint of the
-  superproject**. This read-only tool cannot stage, save, adopt or recover
-  them. Unknown checkout identity, foreign path, locks or uncertain process
-  ownership fail closed; no attempt to fix these states is permitted.
+### Three tools
 
-### One-path diff and agent guidance
+1. `revisions()`: return the available virtual endpoint/checkpoint inventory
+   and factual availability/count metadata; no invented semantic summaries.
+2. `changes(from, to, cursor?)`: return only a bounded, pageable inventory of
+   changed repository-relative paths: add/modify/delete, rename when Git can
+   establish it cheaply, file type/mode, before/after sizes when available and
+   binary/unavailable flags. No file bodies, code snippets, hunks or patches.
+   Unknown statistics remain unknown, not zero.
+3. `diff(from, to, path, cursor?)`: return a bounded unified **text** diff for
+   exactly one explicitly named repository-relative file. Reject absent,
+   multi-file, directory, glob, wildcard, absolute, traversal and arbitrary
+   Git-pathspec arguments. No unscoped branch patch API. A page must clearly
+   distinguish a complete diff from a partial diff; when a useful bounded page
+   cannot be produced economically, return a clear unavailability status.
 
-- `diff(from, to, submodule_path)` returns only the structural summary
-  (add/remove/move/type/pointer and shallow WORKTREE status where provable)
-  and the explicit `SUBMODULE_CONTENT_UNAVAILABLE` status. It never calls
-  Git's recursive submodule diff mode or returns a misleading empty patch.
-  `BINARY_DIFF_UNAVAILABLE` is reserved for binary files, not gitlinks.
-- `diff()` for a path **inside** a tracked submodule is rejected: one-path
-  comparison is scoped to superproject entries. An explicit `.gitmodules`
-  diff is permitted as an ordinary file diff, with standard access/size
-  limits.
-- Tool descriptions must tell agents that submodule pointer/status changes
-  are visible but nested content diffs are not, `.gitmodules` is separate,
-  and dirty nested files have not been saved by the parent checkpoint.
-  All structural results consume normal response budgets and computation
-  limits, with no special unlimited submodule scanning.
+`changes(HEAD, WORKTREE)` and `diff(HEAD, WORKTREE, path)` show changes since
+the latest checkpoint. `BASE` to `WORKTREE` shows cumulative task changes,
+including eligible untracked files. Use ordinary Git/worktree observations to
+combine staged and unstaged changes without exposing index internals. Do **not**
+implement independent index-tamper detection as a Change Explorer obligation.
 
-## Oversized, binary, and nonregular files
-- **File size**, **size of the resulting patch**, and **computational cost**
-  are independent. Enforce service-owned bounded computation (including
-  time, memory, I/O and subprocess output) separately from bounded response
-  size. A large text file may have a cheap small diff; try to serve it when
-  economically feasible, otherwise return an explicit `TOO_LARGE` or
-  `TOO_EXPENSIVE` outcome without hiding the file from `changes()`.
-  Output pagination does not itself bound the cost of diff construction.
-  Beware giant add/delete and very long text lines.
-- First-version binary policy: inventory a changed binary's factual
-  added/modified/deleted/renamed state, before/after sizes where cheap,
-  type and mode changes. Do **not** emit binary Git patches, raw byte
-  fragments or hex dumps; `diff()` reports `BINARY_DIFF_UNAVAILABLE`.
-  Equal file size never proves identical content. Binary files unchanged
-  between the compared revisions must not be scanned just because they
-  exist elsewhere in repository history. Domain-aware archive/image/
-  database/model inspection belongs to separate specialized tools.
-- Distinguish regular text, binary or unknown, symlinks and submodules.
-  Inspect symlink targets as link text only (never follow the symlink);
-  expose submodule changes structurally without traversing their history,
-  as specified in the submodule contract. Do not classify solely by extension. A tracked Git LFS pointer is not proof
-  that the referenced external asset has been read.
-- If a text comparison cannot be completed within the work budget, report
-  unavailable or incomplete explicitly; do not claim a truncated patch
-  is complete, silently skip changed files or replace unknown line counts
-  with zero. Do not promise arbitrary hunk/page navigation over giant
-  files without a bounded algorithm to find those hunks.
+The tools never fetch, stage, commit, reconcile, launch, retry or otherwise
+modify Git or workflow state. Their output cannot grant worker admission,
+retirement, checkpoint validity or integration permission.
 
-## Transport, ownership and role boundary
+### WORKTREE observation and paging
 
-- Expose three separate agent tools `revisions`, `changes`, and `diff`
-  through a thin OpenCode tool adapter or MCP adapter. The worker-facing schema
-  is transport-neutral, and the backend is a Devlegate-owned Python component
-  using its existing read-only Git observations. An OpenCode adapter is a
-  minimal first delivery; introducing a mandatory MCP server, a speculative
-  generic VCS provider or a new runtime dependency is unnecessary.
-- The privileged backend must remain **outside the worker sandbox**. A child
-  launched by the Landlock-restricted worker inherits those restrictions and
-  cannot act as a privileged Git reader. Bind every request to a current
-  authorized worker execution, its exact managed workspace and permitted
-  virtual revision namespace; do not take repository paths, control identities,
-  Git refs, arbitrary commands or worker-supplied execution identifiers as
-  authority. Permit only the three named, read-only operations on that endpoint.
-- TASK-152 separately owns actual kernel/OS capability isolation, including
-  Landlock. TASK-154 does NOT claim that a custom tool or MCP protocol makes
-  direct `git`/shell access impossible. Tool availability may be built and
-  tested independently of full isolation, but neither privileged IPC access
-  nor OS isolation can be inferred merely from tool descriptions. Reject
-  requests outside the active authorization boundary without side effects.
+- `WORKTREE` is observed on demand, using ordinary bounded Git status/diff and
+  safe file reads where needed. Do not independently attest it by rehashing
+  every file, scanning it twice or comparing an additional synthesized
+  snapshot against the original. No separate WORKTREE integrity record.
+- Content can change between calls or pages while a worker edits files.
+  Return a clearly marked **live/best-effort observation**; pages involving
+  `WORKTREE` are not promised to form an atomic snapshot or an exact,
+  cross-call consistent history. A cheap detected invalid continuation may
+  return `STALE_CURSOR`, but proving that all mutable bytes remain identical
+  is explicitly **not required**. Do not use stat-only equality to claim such
+  proof either.
+- Cursor continuation must remain tied to the authorized query and bounded
+  output, and cannot be forged to expand access or quotas. Immutable revision
+  comparisons should paginate deterministically without missing or repeating
+  records. For changing `WORKTREE` inputs, document that re-querying may be
+  necessary; never label an incomplete page as a complete snapshot.
+- These inspection rules are separate from existing strict worker ownership,
+  checkpoint, Git publication and reconciliation proofs. If the service cannot
+  safely identify the calling worker and its workspace, fail closed rather
+  than allowing arbitrary filesystem reads.
 
-## Response size, compute budget and pagination
+### Special files and submodules
 
-**Provisional first-version defaults**, evaluated with focused real-world traces;
-they are bounded service-owned policy, not agent-controlled ways to request more:
+- Symlinks are represented by link text, never dereferenced. Reject paths that
+  escape the authorized repository or enter another workspace.
+- Submodules are **single gitlink entries in the parent repository**.
+  Report parent-level add/delete/pointer/type changes and optional rename
+  evidence. The file `.gitmodules` is an independent ordinary text file.
+  Never enter submodule Git history, follow its remotes or return nested
+  submodule file patches, refs, URLs or object IDs.
+- For `WORKTREE`, ordinary shallow parent Git status may indicate submodule
+  checkout drift, dirtiness or unavailable/uninitialized state. Report only
+  what can be observed cheaply; unknown is not clean. No independent
+  three-way pointer/index/checkout attestation or recursive nested scan is
+  required. Staged parent gitlink changes still count as parent-level changes.
+  Uncommitted nested edits are **not** saved by a superproject checkpoint;
+  make this limitation clear in the tool guidance.
+- `diff` on a submodule path yields a bounded structural summary and
+  `SUBMODULE_CONTENT_UNAVAILABLE`. Reject a path inside a tracked submodule.
+- Binary changes remain visible in `changes`; `diff` reports
+  `BINARY_DIFF_UNAVAILABLE` rather than raw bytes/hex patches. Do not classify
+  solely by file extension or assume equal sizes mean equal contents. No
+  scanning of unrelated unchanged historical binaries. A Git LFS pointer
+  does not imply external LFS content was read.
 
-| Scope | Default limit |
+### Bounded output and reasonable computation
+
+Retain first-version response limits as **service-owned defaults**:
+
+| Scope | Limit |
 | --- | --- |
-| `changes()` | At most 30 file records per page, with an opaque cursor |
-| `diff()` | At most 8 KiB of serialized diff payload AND 120 text lines per page; whichever is reached first |
-| Total Change Explorer response payload across an execution | At most 64 KiB, counting pages of all three tools, not a fresh quota for every call or reconnect |
-| Individual line | A separately enforced bounded line size; reject with `LINE_TOO_LONG` rather than return a huge line or misleading partial text |
-| Backend effort | Independent configured limits on elapsed work, CPU/memory, bytes read, and subprocess/output buffering; no unlimited diff construction prior to pagination |
+| `changes()` | 30 path records per page |
+| `diff()` | 8 KiB serialized payload and 120 text lines per page, whichever is reached first |
+| All three tools combined | 64 KiB serialized output budget per execution |
+| Single line | Bounded; overlong lines report `LINE_TOO_LONG` |
 
-- Response budgets measure **serialized UTF-8 bytes including metadata** and
-  exclude no-cost assumptions about tokenizer internals. They are conservative
-  context-budget proxies, not promises of an exact LLM token count. A useful
-  small file diff may fit even when the full file is large. Avoid rejecting
-  solely on whole-file size when a bounded algorithm can produce a cheap
-  small diff.
-- Enforce the aggregate budget per **execution**, including repeated pages,
-  tool retries and reconnect/restart. Do not let a fresh adapter process or
-  a changed tool name replenish it. Account only actual delivered response
-  bytes, consistently across delivery failures; specify the durable metering
-  boundary without granting the worker state-mutation authority. Budget
-  accounting does not authorize Git/resource changes.
-- Every pageable reply explicitly identifies `complete` / `has_more`,
-  supplies `next_cursor` only if a continuation is valid, and distinguishes
-  omitted information from a complete empty diff. Return stable,
-  deterministic pages for immutable revisions. For mutable `WORKTREE`, bind
-  opaque cursors to a verified stable observation or fail with `STALE_CURSOR`;
-  timestamps and sizes alone do not prove equal content. Cursors may not be
-  forged to skip authorization or bypass budgets.
-- Ordinary pagination is not an error: `has_more=true` means a partial
-  answer. If limits prevent a meaningful page, return an explicit bounded
-  failure. Use clear machine statuses such as `TOO_LARGE`,
-  `TOO_EXPENSIVE`, `BINARY_DIFF_UNAVAILABLE`, `LINE_TOO_LONG`,
-  `STALE_CURSOR` and `BUDGET_EXHAUSTED`; if any partial payload is returned
-  under an error/truncation status, mark it as incomplete, not authoritative
-  full history. Unknown file statistics must remain unknown, never zero.
-- All output paths, revision labels, cursors and diff headers must be
-  worker-safe: no leaked Git object IDs, refs, execution IDs, external paths,
-  control state, privileged endpoint identities or credential material. The
-  change inventory remains accessible even when a file's content diff is
-  unavailable or too expensive.
+Count serialized UTF-8 bytes including metadata. Apply the aggregate execution
+budget across ordinary calls/reconnects through existing owner-held accounting;
+a tool process restart must not grant a fresh full budget. Prefer straightforward
+accounting at the trusted response boundary rather than exactly-once delivery
+receipts or a new metering subsystem.
 
-## Agent-facing contract and selective reading
+The backend must avoid unlimited buffering, unbounded whole-branch diff
+construction and recursive workspace traversal. Use safe command options,
+bounded reads/output and the existing execution infrastructure. Expensive
+inputs may return `TOO_EXPENSIVE` or `TOO_LARGE` rather than forcing a giant
+diff into memory just to paginate it. Keep timeout/effort policy pragmatic and
+configurable if needed; **do not require a separate fixed 3-second/128-MiB
+sandbox or an independently metered CPU/memory/I/O attestation pipeline**.
 
-The actual tool schemas/descriptions must carry concise operational guidance
-in addition to ordinary safety constraints, so the worker sees it when tools
-are presented. Normative descriptions, subject to exact adapter syntax:
+Every response distinguishes `complete`, `has_more` and valid continuation.
+Unknown file/line statistics are not fabricated. Normal pagination is not
+an error; bounded failures such as `BUDGET_EXHAUSTED`, `TOO_EXPENSIVE`,
+`LINE_TOO_LONG` or `BINARY_DIFF_UNAVAILABLE` are explicit and must not
+masquerade as an empty or complete diff. Immutable comparisons should provide
+stable pages when inexpensive to do so.
 
-- **`revisions()`:** List available virtual task checkpoints and endpoints.
-  These are task states, not raw Git commits; use the inventory to select only
-  useful comparisons.
-- **`changes(from, to, cursor?)`:** List *only paths and metadata* of changed
-  files. Prefer this before requesting individual diffs. Page only as far as
-  necessary for the task. This tool never returns code or patch text.
-- **`diff(from, to, path, cursor?)`:** Return a bounded text diff of *one
-  explicit file*. Identify the file using `changes` first, then request
-  further pages only if needed for the current unresolved requirement.
-  A page with `has_more=true` is not the full diff. Binary, oversized and
-  computationally expensive diffs may be unavailable; do not infer absence
-  of changes from an unavailable page.
-- Add at most one brief general Worker reminder if needed: prefer selective
-  inspection that advances the primary ticket blocker; avoid exhausting every
-  diff page by habit. Do not duplicate the complete tool-use instructions in
-  the core contract or introduce a new planning subsystem (TASK-146 handles
-  general worker prioritization).
+### Tool authority and delivery
 
-## Constraints
-- Strictly read-only; tool resolves virtual names through owner-held metadata
-  and a backend that initially uses Git. No arbitrary shell/Git commands,
-  arbitrary refs, Git mutations or exposure of managed control repositories,
-  secrets or other task workspaces. Disable external diff/textconv execution;
-  enforce path containment for untracked files and symlinks.
-- Protect oversized/binary content as specified above. Never treat an
-  output-size limit as a sufficient computational bound. Use opaque page
-  cursors and stable comparison observations, or explicit stale-state
-  rejection when `WORKTREE` changes. A stat-only check is not proof that
-  mutable content is byte-identical; if stable observation is unaffordable,
-  reject cross-page consistency claims.
-- Expose deterministic facts, not LLM-generated interpretation. Git commit
-  messages and report prose, if ever exposed, must be marked as unverified
-  author-supplied descriptions.
-- Work with a single currently managed target branch, whichever branch name
-  Devlegate configured, and with a task line rebased or squashed by the owner.
-  Do not assume `main`/ `master`, Python, `src/`, `tests/` or one
-  commit per arbitrary VCS history event.
-- Prefer extending existing stdlib-oriented owner/provider/tool contracts;
-  no new VCS framework, migration path, hardcoded toolchain, or pre-generated
-  multi-megabyte Change Context.
+- Implement a small Devlegate-owned Python read-only backend plus a thin
+  OpenCode adapter exposing `revisions`, `changes` and `diff`; a mandatory MCP
+  server, generic VCS framework and new runtime dependency are out of scope.
+- Keep privileged Git observation **outside** the worker's Landlock-restricted
+  process. Bind tool calls to a currently authorized execution, its exact
+  managed task workspace and the permitted virtual revision namespace using
+  Devlegate-held identity, not caller-supplied IDs, paths, Git refs or commands.
+  The agent must not be able to turn a read request into privileged Git access
+  to other tickets, control, product secrets or external paths.
+- TASK-152 owns OS-enforced prevention of direct worker Git/shell access. A
+  custom tool does not itself constitute that isolation; test it independently
+  without claiming more protection than implemented.
+- Tool descriptions should succinctly direct workers to list revisions,
+  inspect changed paths first, and request only specific file diffs/pages
+  useful to their current task. No automatic exhaustive page reading or
+  pre-generated multi-megabyte Change Context.
 
-## Acceptance
-Use disposable repositories/workspaces to prove first execution, multiple
-checkpoints and a zero-change session, REWORK cumulative BASE→WORKTREE diff,
-target advancement/rebase, squash, non-ancestor retained checkpoint, unrelated
-commits, staged/unstaged/untracked and ignored files, failed and zero-delta
-checkpoint sessions, oversized text/very long lines, large files with small
-diffs, changed equal-size binaries, unchanged historical binaries, symlinks,
-submodules (gitlink add/delete/update, move/type change, independent
-`.gitmodules` edits, staged pointer versus checkout, dirty/uninitialized state,
-no nested file traversal, and explicit unavailable content), unknown (not zero)
-statistics, stale paged WORKTREE observations,
-computation/output limits and tool-access limits. Assert no Git/execution identities leak and tool reads cannot stage, retry or
-  authorize a worker. Additionally test that `diff` rejects absent path,
-  multi-file requests, wildcards, directories, absolute/traversal paths,
-  symlink escape and other workspaces; `changes` never returns patch bodies;
-  each page meets both byte and line caps; continuation does not repeat/skip
-  content for stable revisions; `WORKTREE` mutation yields `STALE_CURSOR`;
-  aggregate budget survives retries/reconnect/restart and fails closed;
-  oversized lines, large low-delta files, forged cursors, expensive diff
-  construction and binary/unavailable patches report precise statuses.
-  Exercise the three actual tool descriptions through the adapter and confirm
-  their selective-reading/pagination guidance is present. Validate default
-  concise responses and focused/full project checks.
+## Acceptance criteria
+
+1. A worker can inspect available `BASE`, `HEAD`, older real checkpoints
+   and its current `WORKTREE` through exactly three read-only tools, with no
+   raw Git/execution identities or additional index-facing revision.
+2. `changes` lists factual paths/metadata without code; `diff` requires one
+   valid file path and returns bounded text, explicit non-text status or
+   explicit cost/unavailability. Both work for first execution and cumulative
+   REWORK changes.
+3. Staged, unstaged and eligible untracked worker edits appear without extra
+   hashing, double scanning, independent WORKTREE attestation or index-tamper
+   detection. A mutable observation is labeled accordingly and does not claim
+   cross-page snapshot consistency.
+4. Historical checkpoint enumeration respects actual durable task checkpoints,
+   zero-change sessions, rebase/replay, squash and rewritten ancestry without
+   folding in unrelated product history.
+5. Tool authorization prevents access to other workspaces and privileged
+   control identity; reads do not modify Git or authorize workflow transitions.
+6. Response limits, bounded expensive-input handling, clear pagination and
+   per-execution output quotas are enforced without a new generic audit,
+   resource accounting or VCS subsystem.
+
+## Required regressions
+
+Use disposable repositories/workspaces and targeted adapter/owner tests:
+
+- First execution (`HEAD` aliases `BASE`), multiple checkpoints, zero-code-delta
+  session, failed/disconnected checkpoint retained after proven retirement,
+  REWORK cumulative changes and a non-ancestor checkpoint after rebase.
+- Staged + unstaged + untracked edits, ignored-file exclusion, `HEAD` versus
+  `WORKTREE` and `BASE` versus `WORKTREE`; verify no separate index revision,
+  double file hash, full-tree verification or mutation is required.
+- Immutable page continuation is stable. A file changing between `WORKTREE`
+  pages produces a documented best-effort view or a cheap `STALE_CURSOR`
+  rejection; do not test/require content-hash snapshot consistency.
+- Reject missing `diff` path, globs, directories, traversal, absolute paths,
+  symlink escape, cross-ticket/workspace access, forged cursor and unauthorized
+  worker identity. Verify no source Git IDs, refs or execution IDs leak.
+- Parent submodule gitlink add/remove/update and `.gitmodules` change;
+  shallow dirty/uninitialized/unknown state when observable, no nested
+  traversal, and `SUBMODULE_CONTENT_UNAVAILABLE` for the submodule path.
+- Large text with small diff, huge line, binary same-size modification,
+  unchanged historical binary and expensive comparison. Results must remain
+  bounded and explicit about unknown/unavailable data.
+- Aggregate response cap across ordinary calls and reconnects, per-page
+  byte/line/path caps, and the three actual OpenCode tool descriptions.
+  Existing full project CI and lint remain the quality gate.
 
 ## Boundaries
-Backlog only. Do not modify TASK-153, existing execution records, historical
-worker checkpoints or real operator assets while implementing this later.
+
+Modify only the Change Explorer and necessary narrowly scoped integration,
+tests and documentation. No changes to TASK-153, TASK-152, other tickets,
+historical execution/review evidence, active worker resources or real operator
+assets. No migrations, speculative VCS abstraction, independent Git forensic
+audit, mandatory WORKTREE snapshot/hash pipeline, OS sandbox implementation
+or generic retry/recovery mechanism.
