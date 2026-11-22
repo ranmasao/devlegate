@@ -1,0 +1,40 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "f402015b88537c3deec168a28b2e6ca3f570207d",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "971340e8c455414496eb2fad233d2b0e",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement owner-mediated activity timing, warning status, and fail-closed descendant checks for active worker attempts.",
+    "Integrate durable worker_stalled classification and exact containment retirement with crash-safe recovery and single replacement admission.",
+    "Preserve execution evidence and workspace changes, and inject bounded deterministic recovery context into the replacement prompt.",
+    "Add and run end-to-end watchdog, restart, provenance, prompt privacy, and lifecycle regressions."
+  ],
+  "report_artifact": "executions/TASK-056/971340e8c455414496eb2fad233d2b0e.md",
+  "report_sha256": "e8f8304cb9036b9077b2e1ebaa76152c2bb3b5f3c981360c4f0351875558138f",
+  "resource_generation": "0f254ba6d8836617e867fcb5bcd7d8522d9996074282ef1ec0c315025bf0fd11",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement owner-mediated activity timing, warning status, and fail-closed descendant checks for active worker attempts.",
+      "Integrate durable worker_stalled classification and exact containment retirement with crash-safe recovery and single replacement admission.",
+      "Preserve execution evidence and workspace changes, and inject bounded deterministic recovery context into the replacement prompt.",
+      "Add and run end-to-end watchdog, restart, provenance, prompt privacy, and lifecycle regressions."
+    ],
+    "report": "The crash-safe retirement and replacement handoff was not established in this invocation; implementing a direct restart without integrating the existing lifecycle and recovery transactions would risk concurrent workers or lost provenance.",
+    "summary": "Fixed the reported lint violations in execution containment while preserving the existing process-membership observation."
+  },
+  "workspace_head": "8a20ebfd9ef0244dedc79c3b5fe18b5c5163350f"
+}
