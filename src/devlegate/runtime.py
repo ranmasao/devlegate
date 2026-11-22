@@ -797,6 +797,15 @@ class ServiceEngine:
             WorkerActivity(self.worker_warning_seconds)
         except ValueError as error:
             raise DevlegateError(f"invalid WORKER_WARNING_SECONDS: {error}") from error
+        try:
+            self.worker_recovery_seconds = float(
+                setting("WORKER_RECOVERY_SECONDS", "600")
+            )
+            WorkerActivity(self.worker_recovery_seconds)
+            if self.worker_recovery_seconds < self.worker_warning_seconds:
+                raise ValueError("recovery threshold precedes warning threshold")
+        except ValueError as error:
+            raise DevlegateError(f"invalid WORKER_RECOVERY_SECONDS: {error}") from error
         self.read_only = read_only
         self._locator = RuntimeLocator.from_config(self.env_file, self.repo, config)
         self.state_dir = self._locator.state_dir
@@ -5044,6 +5053,7 @@ class ServiceEngine:
             self._worker_activity = (execution_id, activity)
         try:
             try:
+                from devlegate.stalled_watchdog import poll_stalled
                 from devlegate.ticket_reset import ResetStop, poll_worker
 
                 worker_run = self._workers.run(
@@ -5053,6 +5063,10 @@ class ServiceEngine:
                     stop_request=ResetStop(self, selected_ticket.id),
                     owner_poll=lambda: poll_worker(self),
                     activity_handler=activity.observe,
+                    watchdog_poll=lambda process, containment: poll_stalled(
+                        self, execution_id, activity, self.worker_recovery_seconds,
+                        process, containment,
+                    ),
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -5078,7 +5092,12 @@ class ServiceEngine:
             with self._snapshot_lock:
                 if self._worker_activity == (execution_id, activity):
                     self._worker_activity = None
-            if worker_returned and worker_run.worker_group_retired:
+            if (
+                worker_returned
+                and worker_run.worker_group_retired
+                and worker_run.interruption_kind != "worker_stalled"
+                and self._state.get("stalled_recovery") is None
+            ):
                 binding = self._execution_generation_binding()
                 if binding.operation_pending("worker"):
                     binding.finish_operation(
@@ -5092,6 +5111,8 @@ class ServiceEngine:
                 )
             self._publish_service_snapshot(lifecycle="processing", worker_running=False)
             self._refresh_published_status()
+        if self._state.get("stalled_recovery") is not None:
+            raise DevlegateError("stalled worker recovery requires reconciliation")
         if not worker_run.worker_group_retired:
             reset = self._state.get("ticket_reset")
             if isinstance(reset, dict) and reset.get("ticket_id") == selected_ticket.id:
