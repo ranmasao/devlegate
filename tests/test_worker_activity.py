@@ -27,3 +27,19 @@ def test_partial_bytes_reset_warning_at_boundary(stream):
 def test_invalid_warning_threshold_is_rejected(value):
     with pytest.raises(ValueError):
         WorkerActivity(value)
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+def test_late_output_prevents_idle_decision(stream):
+    now = [0.0]
+    tracker = WorkerActivity(300, clock=lambda: now[0])
+    calls = []
+    now[0] = 300
+    assert tracker.snapshot()["warning"]
+    now[0] = 599.9
+    tracker.observe(stream, b"partial")
+    now[0] = 600
+    assert not tracker.if_idle(600, lambda: calls.append("intent") or True)
+    now[0] = 1199.9
+    assert tracker.if_idle(600, lambda: calls.append("intent") or True)
+    assert calls == ["intent"]

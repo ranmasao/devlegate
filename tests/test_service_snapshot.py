@@ -128,6 +128,78 @@ def test_stalled_state_rejects_changed_binding_and_process_loss_recovery(
     assert restored._runtime_store.load()["execution_id"] == "execution-1"
 
 
+@pytest.mark.parametrize("committed", [False, True])
+def test_watchdog_store_failure_at_live_supervisor_boundary(
+    tmp_path, monkeypatch, committed
+):
+    from devlegate.stalled_watchdog import poll_stalled
+    from devlegate.worker_supervisor import _run_opencode
+
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    activity = WorkerActivity(1, clock=lambda: 0)
+    activity._clock = lambda: 20
+    evidence = {"containment": "test:group"}
+    monkeypatch.setattr(engine._workers, "analysis_launch_evidence", lambda _: evidence)
+    retired = []
+    monkeypatch.setattr(
+        engine, "recovery_retire_worker", lambda *args: retired.append(args)
+    )
+    replace = engine._runtime_store.replace
+
+    class Containment:
+        identity = "test:group"
+
+        def spawn(self, command, **kwargs):
+            return subprocess.Popen(command, **kwargs)
+
+        def has_other_processes(self, pid):
+            return False
+
+        def request_graceful(self, pid):
+            pass
+
+        def force_terminate(self):
+            pass
+
+        def wait_empty(self, timeout):
+            return True
+
+        def destroy(self):
+            pass
+
+    def record(identity):
+        _persist_active_execution(
+            engine, "agent_running", "worker-running",
+            worker_identity=identity.as_dict(),
+        )
+
+        def fail(state):
+            if committed:
+                replace(state)
+            raise OSError("injected uncertain store write")
+
+        monkeypatch.setattr(engine._runtime_store, "replace", fail)
+
+    result = _run_opencode(
+        [sys.executable, "-c", "import time; time.sleep(60)"], "prompt",
+        execution_id="execution-1", worker_identity_handler=record,
+        interruption_handler=lambda kind: engine._save_state(
+            "agent_running", execution_interruption_kind=kind
+        ),
+        containment=Containment(),
+        watchdog_poll=lambda process, containment: poll_stalled(
+            engine, "execution-1", activity, 10, process, containment
+        ), show_worker_output=False,
+    )
+    assert engine._state_write_uncertain
+    assert not retired
+    assert result.interruption_kind == "operator_abort"
+    assert "interruption persistence failed" in result.transport_error
+    stored = engine._runtime_store.load()
+    assert (stored.get("stalled_recovery") is not None) is committed
+    assert stored.get("execution_interruption_kind") is None
+
+
 def test_service_snapshot_is_deeply_immutable_and_replaced(tmp_path, monkeypatch):
     engine, _state = make_engine(tmp_path, monkeypatch)
     first = engine.service_snapshot()
