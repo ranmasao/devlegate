@@ -203,6 +203,8 @@ def recover_stranded_execution(
     An operator abort remains an interruption mechanism.  It is recorded and
     never converted here into continuation intent or an automatic retry.
     """
+    if state.get("stalled_recovery") is not None:
+        raise ValueError("stalled recovery requires explicit reconciliation")
     try:
         kind = interruption_kind(state)
     except ValueError as error:

@@ -735,10 +735,17 @@ class WorkerSupervisor:
             raise WorkerSupervisionError("worker retirement cannot be proved")
         if evidence is None:
             raise WorkerSupervisionError("worker launch-root evidence is unavailable")
-        if evidence["containment"] != identity.containment_id:
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("containment") != identity.containment_id
+        ):
             raise WorkerSupervisionError("worker containment identity changed")
+        observation = observe_worker_identity(identity)
+        if observation == "indeterminate":
+            raise WorkerSupervisionError("worker process identity is ambiguous")
+        pid = identity.pid if observation == "matching-live" else None
         if self.containment_provider.recover_launch(
-            identity.execution_id, evidence, pid=identity.pid, terminate=True,
+            identity.execution_id, evidence, pid=pid, terminate=True,
         ) != "absent":
             raise WorkerSupervisionError("worker containment remains populated")
 
