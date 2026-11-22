@@ -10,6 +10,7 @@ import time
 
 from devlegate.execution_containment import (
     DurableDeterministicContainmentProvider,
+    ExecutionContainment,
     LinuxCgroupContainmentProvider,
     _launcher_command,
     default_containment_provider,
@@ -18,6 +19,30 @@ from devlegate.execution_containment import (
 
 def test_default_provider_is_production_cgroup_provider():
     assert isinstance(default_containment_provider(), LinuxCgroupContainmentProvider)
+
+
+def test_member_observation_includes_nested_execution_groups(tmp_path):
+    (tmp_path / "cgroup.procs").write_text("123\n", encoding="ascii")
+    child = tmp_path / "tool"
+    child.mkdir()
+    (child / "cgroup.procs").write_text("456\n", encoding="ascii")
+    boundary = ExecutionContainment(tmp_path, recursive_kill=True)
+
+    assert boundary.has_other_processes(123) is True
+    (child / "cgroup.procs").write_text("", encoding="ascii")
+    assert boundary.has_other_processes(123) is False
+
+
+def test_member_observation_fails_closed_on_incomplete_evidence(tmp_path):
+    boundary = ExecutionContainment(tmp_path, recursive_kill=True)
+    assert boundary.has_other_processes(123) is None
+    (tmp_path / "cgroup.procs").write_text("456\n", encoding="ascii")
+    assert boundary.has_other_processes(123) is None
+    (tmp_path / "cgroup.procs").write_text("123\ninvalid\n", encoding="ascii")
+    assert boundary.has_other_processes(123) is None
+    (tmp_path / "cgroup.procs").write_text("123\n", encoding="ascii")
+    (tmp_path / "tool").mkdir()
+    assert boundary.has_other_processes(123) is None
 
 
 def test_isolated_joiner_blocks_startup_hook_before_membership(tmp_path, monkeypatch):
