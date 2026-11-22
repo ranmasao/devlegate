@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from devlegate.execution_containment import (
     DurableDeterministicContainmentProvider,
@@ -42,6 +43,25 @@ def test_member_observation_fails_closed_on_incomplete_evidence(tmp_path):
     assert boundary.has_other_processes(123) is None
     (tmp_path / "cgroup.procs").write_text("123\n", encoding="ascii")
     (tmp_path / "tool").mkdir()
+    assert boundary.has_other_processes(123) is None
+
+
+def test_member_observation_fails_closed_when_membership_changes(tmp_path, monkeypatch):
+    procs = tmp_path / "cgroup.procs"
+    procs.write_text("123\n", encoding="ascii")
+    original = Path.read_text
+    reads = 0
+
+    def changing_read(path, *args, **kwargs):
+        nonlocal reads
+        if path == procs:
+            reads += 1
+            if reads == 2:
+                return "123\n456\n"
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", changing_read)
+    boundary = ExecutionContainment(tmp_path, recursive_kill=True)
     assert boundary.has_other_processes(123) is None
 
 
