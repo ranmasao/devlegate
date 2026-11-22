@@ -12307,6 +12307,9 @@ class ServiceEngine:
     def recovery_worker_observation(self, identity) -> str:
         return self._workers.observe(identity)
 
+    def recovery_retire_worker(self, identity, evidence: object) -> None:
+        self._workers.retire(identity, evidence=evidence)
+
     @staticmethod
     def recovery_worker_identity(value: object, execution_id: object):
         return _worker_identity_from_value(value, execution_id)
