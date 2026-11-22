@@ -2304,7 +2304,7 @@ def _execution_projection(
     else:
         state = "idle"
     title = snapshot.bound_ticket_title if snapshot.bound_ticket_id else None
-    return {
+    result = {
         "state": state,
         "phase": phase,
         "stage": stage if has_bound_execution else None,
@@ -2312,6 +2312,11 @@ def _execution_projection(
         "ticket_id": snapshot.bound_ticket_id,
         "ticket_title": title,
     }
+    if state == "running" and isinstance(live_execution, dict):
+        activity = live_execution.get("output_activity")
+        if isinstance(activity, dict):
+            result["output_activity"] = activity
+    return result
 
 
 def _service_owns_execution(
@@ -2431,6 +2436,10 @@ def _render_status_text(
             )
     if execution["state"] != "idle":
         lines.extend(["", _active_execution_grid(execution)])
+        activity = execution.get("output_activity")
+        if isinstance(activity, dict) and isinstance(activity.get("idle_seconds"), int):
+            warning = " (warning)" if activity.get("warning") is True else ""
+            lines.append(f"Worker output idle: {activity['idle_seconds']}s{warning}")
         if execution["state"] == "unverified":
             lines.append("Live ownership evidence is unavailable.")
         elif execution["state"] == "recovery-required":
