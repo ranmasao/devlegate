@@ -130,7 +130,8 @@ class StalledRetirementCapabilities(Protocol):
 
 
 def persist_stalled_intent(
-    owner: StalledRetirementCapabilities, *, launch_evidence: dict[str, object]
+    owner: StalledRetirementCapabilities, *, launch_evidence: dict[str, object],
+    output_evidence: dict[str, object] | None = None,
 ) -> None:
     """Record the exact owner binding before any stalled retirement is attempted.
 
@@ -161,6 +162,10 @@ def persist_stalled_intent(
             "execution_id": execution_id,
             "worker_identity": dict(identity),
             "launch_evidence": dict(launch_evidence),
+            **(
+                {"output_evidence": output_evidence}
+                if output_evidence is not None else {}
+            ),
         },
     )
 

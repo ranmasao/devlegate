@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import base64
 import os
 import signal
 import subprocess
@@ -158,11 +159,14 @@ def test_supervisor_retires_only_after_stalled_intent(monkeypatch):
 
         def recovery_retire_worker(self, identity, evidence):
             assert self.state["stalled_recovery"]["stage"] == "intent"
+            output = self.state["stalled_recovery"]["output_evidence"]
+            assert base64.b64decode(output["stdout"]["base64"]) == b"last output\xff"
             self.events.append("retire")
             os.kill(identity.pid, signal.SIGKILL)
 
     owner = Owner()
     activity = WorkerActivity(1, clock=lambda: 0)
+    activity.observe("stdout", b"last output\xff")
     activity._clock = lambda: 20
     result = _run_opencode(
         [sys.executable, "-c", "import time; time.sleep(60)"], "prompt",

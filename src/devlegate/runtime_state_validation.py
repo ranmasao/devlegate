@@ -9,6 +9,7 @@ from devlegate.clean_reset import validate_reset_intent
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
 from devlegate.ticket_reset import validate as validate_ticket_reset
+from devlegate.worker_activity import valid_output_evidence
 from devlegate.worker_supervisor import WorkerProcessIdentity
 
 
@@ -99,7 +100,7 @@ def validate_state_invariant(state: dict[str, object]) -> None:
         identity = state.get("worker_identity")
         if (
             not isinstance(stalled, dict)
-            or set(stalled) != {
+            or set(stalled) - {"output_evidence"} != {
                 "stage", "reason", "execution_id", "worker_identity", "launch_evidence"
             }
             or stalled.get("stage") not in {"intent", "retired"}
@@ -113,6 +114,10 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             or not isinstance(stalled.get("launch_evidence"), dict)
             or stalled["launch_evidence"].get("containment")
             != identity.get("containment_id")
+            or (
+                "output_evidence" in stalled
+                and not valid_output_evidence(stalled["output_evidence"])
+            )
         ):
             raise DevlegateError("invalid stalled recovery binding")
         _worker_identity_from_value(identity, state.get("execution_id"))
