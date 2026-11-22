@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "183776d7d8615951c47adb9fc78fb8150fff7363",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "97ac4268d4ef4815896fdb5e99399871",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the durable, idempotent stalled-attempt provenance and single replacement admission against the preserved workspace for both live and restarted recovery.",
+    "Capture bounded worker output before stream disposal, render and inject deterministic privacy-preserving recovery context, and expose stalled/recovering status.",
+    "Add end-to-end owner and crash-boundary coverage for intent and retirement recovery, preserved edits, single replacement, and existing lifecycle semantics; run the whole-ticket focused validation."
+  ],
+  "report_artifact": "executions/TASK-056/97ac4268d4ef4815896fdb5e99399871.md",
+  "report_sha256": "cf44f5df6c77bc196708f618ad28bcf2c15c7493a732ec161115a4351ec93809",
+  "resource_generation": "0295b6aeb0eccf857881129809445f660fb8813849a71c000f10eccc4db37147",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the durable, idempotent stalled-attempt provenance and single replacement admission against the preserved workspace for both live and restarted recovery.",
+      "Capture bounded worker output before stream disposal, render and inject deterministic privacy-preserving recovery context, and expose stalled/recovering status.",
+      "Add end-to-end owner and crash-boundary coverage for intent and retirement recovery, preserved edits, single replacement, and existing lifecycle semantics; run the whole-ticket focused validation."
+    ],
+    "report": "The available execution context is exhausted before the continuation protocol and its crash-safety proof can be implemented safely. Current reconciliation still fails closed after proving retirement and does not start a replacement.",
+    "summary": "Added restart handling for persisted stall-retirement intents, gated on the matching execution-generation receipt and followed by a fresh containment-absence proof. Added a regression ensuring missing generation proof prevents retirement."
+  },
+  "workspace_head": "dddc32df76072ec1e144acc20d9d1bda9060448e"
+}
