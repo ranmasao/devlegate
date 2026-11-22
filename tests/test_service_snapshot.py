@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: EUPL-1.2
 # ruff: noqa: I001
 import dataclasses
+import os
+import signal
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -14,6 +18,11 @@ from devlegate.runtime_store import RuntimeStoreError
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_activity import WorkerActivity
+from devlegate.recovery_transactions import (
+    persist_stalled_intent,
+    retire_stalled_intent,
+)
+from devlegate.worker_supervisor import _capture_worker_identity
 
 
 def make_engine(tmp_path, monkeypatch):
@@ -44,6 +53,79 @@ def _persist_active_execution(
         execution_stage=stage,
         worker_identity=worker_identity,
     )
+
+
+@pytest.mark.parametrize("fail_write", [False, True])
+def test_stalled_transaction_owner_writes_before_process_retirement(
+    tmp_path, monkeypatch, fail_write
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        identity = _capture_worker_identity(process, "execution-1", "test:group")
+        _persist_active_execution(
+            engine, "agent_running", "worker-running",
+            worker_identity=identity.as_dict(),
+        )
+        evidence = {"containment": "test:group"}
+
+        def retire(execution_id, observed, *, pid, terminate):
+            assert engine._runtime_store.load()["stalled_recovery"]["stage"] == "intent"
+            assert (execution_id, observed, pid, terminate) == (
+                identity.execution_id, evidence, process.pid, True
+            )
+            os.killpg(pid, signal.SIGKILL)
+            process.wait(timeout=5)
+            return "absent"
+
+        monkeypatch.setattr(
+            engine._workers.containment_provider,
+            "recover_launch", retire, raising=False,
+        )
+        if fail_write:
+            def fail(_state):
+                raise OSError("failed durable write")
+
+            monkeypatch.setattr(engine._runtime_store, "replace", fail)
+            with pytest.raises(OSError):
+                persist_stalled_intent(engine, launch_evidence=evidence)
+            assert process.poll() is None
+        else:
+            persist_stalled_intent(engine, launch_evidence=evidence)
+            retire_stalled_intent(engine)
+            assert process.poll() is not None
+            assert (
+                engine._runtime_store.load()["stalled_recovery"]["stage"] == "retired"
+            )
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def test_stalled_state_rejects_changed_binding_and_process_loss_recovery(
+    tmp_path, monkeypatch
+):
+    from devlegate.recovery_transactions import recover_stranded_execution
+
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    identity = {
+        "execution_id": "execution-1", "pid": 1, "pgid": 1, "sid": 1,
+        "boot_id": "boot", "start_time": 1, "containment_id": "test:group",
+    }
+    _persist_active_execution(
+        engine, "agent_running", "worker-running", worker_identity=identity
+    )
+    persist_stalled_intent(engine, launch_evidence={"containment": "test:group"})
+    restored = ServiceEngine(engine.env_file)
+    with pytest.raises(ValueError, match="explicit reconciliation"):
+        recover_stranded_execution(restored, restored._state)
+    with pytest.raises(DevlegateError, match="stalled recovery binding"):
+        restored._save_state("agent_running", execution_id="another")
+    assert restored._runtime_store.load()["execution_id"] == "execution-1"
 
 
 def test_service_snapshot_is_deeply_immutable_and_replaced(tmp_path, monkeypatch):
