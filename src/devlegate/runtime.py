@@ -193,6 +193,7 @@ from devlegate.tickets import (
     load_ticket_store,
     validate_workflow_transition,
 )
+from devlegate.worker_activity import WorkerActivity
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
@@ -789,6 +790,13 @@ class ServiceEngine:
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
+        try:
+            self.worker_warning_seconds = float(
+                setting("WORKER_WARNING_SECONDS", "300")
+            )
+            WorkerActivity(self.worker_warning_seconds)
+        except ValueError as error:
+            raise DevlegateError(f"invalid WORKER_WARNING_SECONDS: {error}") from error
         self.read_only = read_only
         self._locator = RuntimeLocator.from_config(self.env_file, self.repo, config)
         self.state_dir = self._locator.state_dir
@@ -845,6 +853,7 @@ class ServiceEngine:
         self._validate()
         self._state = self._load_state()
         self._snapshot_lock = threading.Lock()
+        self._worker_activity: tuple[str, WorkerActivity] | None = None
         self._published_status_snapshot: StatusSnapshot | None = None
         self._published_live_execution: dict[str, object] | None = None
         self._published_retry_candidates: tuple[dict[str, str], ...] = ()
@@ -1038,11 +1047,17 @@ class ServiceEngine:
         with self._snapshot_lock:
             snapshot = self._published_status_snapshot
             live_execution = self._published_live_execution
+            activity = self._worker_activity
         if snapshot is None:
             raise DevlegateError("service status view is not ready")
         result = snapshot.as_dict()
         if live_execution is not None:
             result["live_execution"] = dict(live_execution)
+            if (
+                activity is not None
+                and live_execution.get("execution_id") == activity[0]
+            ):
+                result["live_execution"]["output_activity"] = activity[1].snapshot()
         return result
 
     def published_retry_candidates_view(self) -> tuple[dict[str, str], ...]:
@@ -5024,6 +5039,9 @@ class ServiceEngine:
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
         )
+        activity = WorkerActivity(self.worker_warning_seconds)
+        with self._snapshot_lock:
+            self._worker_activity = (execution_id, activity)
         try:
             try:
                 from devlegate.ticket_reset import ResetStop, poll_worker
@@ -5034,6 +5052,7 @@ class ServiceEngine:
                     execution_id=execution_id,
                     stop_request=ResetStop(self, selected_ticket.id),
                     owner_poll=lambda: poll_worker(self),
+                    activity_handler=activity.observe,
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -5056,6 +5075,9 @@ class ServiceEngine:
                 return 0
             worker_returned = True
         finally:
+            with self._snapshot_lock:
+                if self._worker_activity == (execution_id, activity):
+                    self._worker_activity = None
             if worker_returned and worker_run.worker_group_retired:
                 binding = self._execution_generation_binding()
                 if binding.operation_pending("worker"):
