@@ -418,14 +418,19 @@ class ExecutionContainment:
         immediately before any action based on inactivity.  An unavailable or
         changing hierarchy is not evidence that the worker is alone.
         """
-        if not isinstance(worker_pid, int) or isinstance(worker_pid, bool) or worker_pid <= 0:
+        if (
+            not isinstance(worker_pid, int)
+            or isinstance(worker_pid, bool)
+            or worker_pid <= 0
+        ):
             return None
         members: set[int] = set()
         pending = [self.path]
         try:
             while pending:
                 group = pending.pop()
-                for value in (group / "cgroup.procs").read_text(encoding="ascii").split():
+                values = (group / "cgroup.procs").read_text(encoding="ascii").split()
+                for value in values:
                     pid = int(value)
                     if pid <= 0:
                         return None
