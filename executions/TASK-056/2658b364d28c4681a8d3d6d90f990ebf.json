@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "e5f3ec65082cf15ca257925ae0191b372610acb5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "2658b364d28c4681a8d3d6d90f990ebf",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect the transaction seam to the serialized runtime owner, including fresh activity, completion, process identity and owned-descendant checks before persisting intent; implement restart reconciliation using exact containment retirement proof.",
+    "Implement configurable recovery threshold, durable stalled provenance and a single restart-safe continuation preserving workspace and reports, including deterministic bounded recovery context and status.",
+    "Add owner-level and process-boundary regressions for the complete stalled handoff and existing lifecycle semantics, then run the ticket's final focused checks."
+  ],
+  "report_artifact": "executions/TASK-056/2658b364d28c4681a8d3d6d90f990ebf.md",
+  "report_sha256": "2c01add77a8a708886935a45d7db018cb22b51d58bcd99b0be7bb84ea60b78ec",
+  "resource_generation": "8a9218c713446a9a1d21427d5c46a3eb1ace3a47312997ae9eb9d6a2480eec5d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect the transaction seam to the serialized runtime owner, including fresh activity, completion, process identity and owned-descendant checks before persisting intent; implement restart reconciliation using exact containment retirement proof.",
+      "Implement configurable recovery threshold, durable stalled provenance and a single restart-safe continuation preserving workspace and reports, including deterministic bounded recovery context and status.",
+      "Add owner-level and process-boundary regressions for the complete stalled handoff and existing lifecycle semantics, then run the ticket's final focused checks."
+    ],
+    "report": "The implementation remains incomplete: the new transaction seam is not wired into worker supervision or restart recovery, and the continuation admission and prompt require additional lifecycle work. This invocation is ending before those changes could be implemented and verified safely.",
+    "summary": "Added a write-ahead stalled-retirement transaction seam that binds retirement to the recorded worker identity and containment evidence, with replay and persistence-failure regressions."
+  },
+  "workspace_head": "4f8c037009b88dbd5de2e87541333d6599df0ce0"
+}
