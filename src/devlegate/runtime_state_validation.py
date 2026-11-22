@@ -94,6 +94,28 @@ def validate_state_invariant(state: dict[str, object]) -> None:
     except ValueError as error:
         raise DevlegateError(str(error)) from error
     phase = state["phase"]
+    stalled = state.get("stalled_recovery")
+    if stalled is not None:
+        identity = state.get("worker_identity")
+        if (
+            not isinstance(stalled, dict)
+            or set(stalled) != {
+                "stage", "reason", "execution_id", "worker_identity", "launch_evidence"
+            }
+            or stalled.get("stage") not in {"intent", "retired"}
+            or stalled.get("reason") != "worker_stalled"
+            or phase != "agent_running"
+            or state.get("execution_stage") != "worker-running"
+            or stalled.get("execution_id") != state.get("execution_id")
+            or not isinstance(identity, dict)
+            or stalled.get("worker_identity") != identity
+            or not identity.get("containment_id")
+            or not isinstance(stalled.get("launch_evidence"), dict)
+            or stalled["launch_evidence"].get("containment")
+            != identity.get("containment_id")
+        ):
+            raise DevlegateError("invalid stalled recovery binding")
+        _worker_identity_from_value(identity, state.get("execution_id"))
     admission = state.get("abandonment_admission")
     if admission is not None:
         try:
