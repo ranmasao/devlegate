@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "9d892d666f47646773d02aeb030be3bf98406c43",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "5b0181480ced4d84bc93d2dad1736930",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-mediated recovery threshold, activity and identity revalidation, durable worker_stalled attribution, exact containment retirement, and restart-safe single continuation through the existing recovery boundary.",
+    "Record bounded worker output and repository-relative changes, render and inject deterministic recovery context, and expose stalled/recovering status.",
+    "Add focused end-to-end and restart/ownership regressions covering the complete watchdog handoff and existing lifecycle semantics."
+  ],
+  "report_artifact": "executions/TASK-056/5b0181480ced4d84bc93d2dad1736930.md",
+  "report_sha256": "69d88d84988e7c54d8f6f67a0fa79db3854496fc4c968321ecaf0444bab839a2",
+  "resource_generation": "67c5f532a4ebdce82e2a56e52313409db83d1e5e39e279d03e378ca7f0386d3f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-mediated recovery threshold, activity and identity revalidation, durable worker_stalled attribution, exact containment retirement, and restart-safe single continuation through the existing recovery boundary.",
+      "Record bounded worker output and repository-relative changes, render and inject deterministic recovery context, and expose stalled/recovering status.",
+      "Add focused end-to-end and restart/ownership regressions covering the complete watchdog handoff and existing lifecycle semantics."
+    ],
+    "report": "The crash-safe stall-to-continuation transaction was not implemented in this invocation; the membership check is only a safety prerequisite and does not authorize watchdog retirement.",
+    "summary": "Strengthened execution cgroup membership observation to reject changing process or hierarchy snapshots before they can be used as evidence that a worker is alone."
+  },
+  "workspace_head": "258d4f0b642df95b5c15b0585ca912c422169457"
+}
