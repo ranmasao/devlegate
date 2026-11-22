@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "c4af87cb8c2e8e61cd852a41ef024c3444c08e7b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "59f1ae87b2e645479743e61db49a8ae3",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Connect owner-thread inactivity detection to durable stalled intent and exact containment retirement, including safe handling of failed or uncertain state writes without triggering ResetStop's automatic termination.",
+    "Implement restart reconciliation and exactly-once continuation with durable stalled provenance, preserved workspace and deterministic bounded recovery context.",
+    "Add owner-level and restart-boundary regressions, then run the required focused tests, lint and diff checks."
+  ],
+  "report_artifact": "executions/TASK-056/59f1ae87b2e645479743e61db49a8ae3.md",
+  "report_sha256": "b760512849c6b03ae9cd3c0b61870a258ef7db00d9447f694cd90e318c28bbfa",
+  "resource_generation": "c76645d7522aac44e1ce37e9ed2d83396c4f614f172d5ffb0158b38a3c89d4a7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Connect owner-thread inactivity detection to durable stalled intent and exact containment retirement, including safe handling of failed or uncertain state writes without triggering ResetStop's automatic termination.",
+      "Implement restart reconciliation and exactly-once continuation with durable stalled provenance, preserved workspace and deterministic bounded recovery context.",
+      "Add owner-level and restart-boundary regressions, then run the required focused tests, lint and diff checks."
+    ],
+    "report": "The existing supervisor converts owner-poll exceptions into an operator-abort signal, and ResetStop also requests termination after an uncertain runtime-store write. The continuation and supervisor handoff have not been established; wiring retirement before resolving these interactions would risk violating the required write-before-signal and no-concurrent-worker guarantees. No implementation edits were made.",
+    "summary": "Inspected the carried-forward watchdog, containment retirement, and workflow recovery integration boundaries."
+  },
+  "workspace_head": "8131b5156c9273eea378a77c292adc776f77ee49"
+}
