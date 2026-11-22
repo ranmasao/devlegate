@@ -411,6 +411,36 @@ class ExecutionContainment:
             raise ContainmentError("malformed cgroup.events")
         return state.endswith("1")
 
+    def has_other_processes(self, worker_pid: int) -> bool | None:
+        """Observe execution members other than the worker, or fail closed.
+
+        The result is a snapshot, not a reservation: callers must recheck it
+        immediately before any action based on inactivity.  An unavailable or
+        changing hierarchy is not evidence that the worker is alone.
+        """
+        if not isinstance(worker_pid, int) or isinstance(worker_pid, bool) or worker_pid <= 0:
+            return None
+        members: set[int] = set()
+        pending = [self.path]
+        try:
+            while pending:
+                group = pending.pop()
+                for value in (group / "cgroup.procs").read_text(encoding="ascii").split():
+                    pid = int(value)
+                    if pid <= 0:
+                        return None
+                    members.add(pid)
+                for child in group.iterdir():
+                    if child.is_symlink():
+                        return None
+                    if child.is_dir():
+                        pending.append(child)
+        except (OSError, ValueError, UnicodeError):
+            return None
+        if worker_pid not in members:
+            return None
+        return bool(members - {worker_pid})
+
     def request_graceful(self, pid: int | None) -> None:
         if pid is not None:
             try:
