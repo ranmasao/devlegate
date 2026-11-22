@@ -249,6 +249,32 @@ def _wait_process(process, timeout: float | None = None):
             time.sleep(min(WORKER_WAIT_INTERVAL, deadline - time.monotonic()))
 
 
+def _observed_stdout_lines(stream, activity):
+    """Yield bounded JSONL records while observing bytes before line completion."""
+    pending = bytearray()
+    oversized = False
+    read = getattr(stream, "read1", stream.read)
+    while chunk := read(4096):
+        if activity is not None:
+            activity("stdout", chunk)
+        for part in chunk.splitlines(keepends=True):
+            # JSONL is delimited by LF, not the other separators recognised by
+            # bytes.splitlines. Process those separators as ordinary bytes.
+            if not oversized:
+                pending.extend(part)
+                if len(pending) > MAX_STDOUT_EVENT_BYTES:
+                    oversized = True
+                    pending.clear()
+            if part.endswith(b"\n"):
+                yield None if oversized else bytes(pending)
+                pending.clear()
+                oversized = False
+    if oversized:
+        yield None
+    elif pending:
+        yield bytes(pending)
+
+
 _HOST_CONTROL_ENVIRONMENT = frozenset(
     {
         "NOTIFY_SOCKET",
@@ -305,6 +331,7 @@ def _run_opencode(
     prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
     owner_poll: Callable[[], None] | None = None,
+    activity_handler: Callable[[str, bytes], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -367,16 +394,10 @@ def _run_opencode(
     def consume_stdout() -> None:
         nonlocal transport_error
         assert process.stdout is not None
-        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
-            if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
+        for raw_line in _observed_stdout_lines(process.stdout, activity_handler):
+            if raw_line is None:
                 transport_error = "stdout event exceeds maximum size"
                 _log(f"OpenCode protocol error: {transport_error}")
-                if not raw_line.endswith(b"\n"):
-                    while discarded := process.stdout.readline(
-                        MAX_STDOUT_EVENT_BYTES + 1
-                    ):
-                        if discarded.endswith(b"\n"):
-                            break
                 continue
             try:
                 event = json.loads(raw_line.decode("utf-8"))
@@ -431,7 +452,10 @@ def _run_opencode(
 
     def consume_stderr() -> None:
         assert process.stderr is not None
-        while raw_chunk := process.stderr.read(4096):
+        read = getattr(process.stderr, "read1", process.stderr.read)
+        while raw_chunk := read(4096):
+            if activity_handler is not None:
+                activity_handler("stderr", raw_chunk)
             write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
 
     stdout_thread = threading.Thread(target=consume_stdout, daemon=True)
@@ -730,6 +754,7 @@ class WorkerSupervisor:
         prompt_delivered_handler: Callable[[], None] | None = None,
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
+        activity_handler: Callable[[str, bytes], None] | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -854,6 +879,7 @@ export default tool({
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
                 owner_poll=evidence.poll if evidence is not None else owner_poll,
+                activity_handler=activity_handler,
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:
