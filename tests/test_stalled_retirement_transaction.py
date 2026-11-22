@@ -8,6 +8,7 @@ import pytest
 
 from devlegate.recovery_transactions import (
     persist_stalled_intent,
+    prove_stalled_retirement,
     retire_stalled_intent,
 )
 
@@ -41,6 +42,9 @@ class Owner:
         self.events.append(("retire", identity, evidence))
         if self.fail_retire:
             raise OSError("retirement interrupted")
+
+    def recovery_prove_worker_retired(self, identity, evidence):
+        self.events.append(("prove", identity, evidence))
 
 
 def test_stalled_intent_is_durable_before_retirement():
@@ -96,3 +100,19 @@ def test_retirement_save_failure_preserves_intent_for_reconciliation():
     restarted.state = copy.deepcopy(owner.state)
     retire_stalled_intent(restarted)
     assert restarted.state["stalled_recovery"]["stage"] == "retired"
+
+
+def test_retirement_receipt_requires_fresh_exact_proof():
+    owner = Owner()
+    persist_stalled_intent(owner, launch_evidence={"containment": "group"})
+    with pytest.raises(ValueError, match="receipt is unavailable"):
+        prove_stalled_retirement(owner)
+    retire_stalled_intent(owner)
+    prove_stalled_retirement(owner)
+    assert owner.events[-1][0] == "prove"
+    owner.state["worker_identity"] = {
+        "execution_id": "other", "containment_id": "group"
+    }
+    with pytest.raises(ValueError, match="no longer matches"):
+        prove_stalled_retirement(owner)
+    assert owner.events[-1][0] == "prove"
