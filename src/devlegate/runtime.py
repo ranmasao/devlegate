@@ -12331,6 +12331,20 @@ class ServiceEngine:
     def recovery_retire_worker(self, identity, evidence: object) -> None:
         self._workers.retire(identity, evidence=evidence)
 
+    def recovery_prove_worker_retired(self, identity, evidence: object) -> None:
+        from devlegate.execution_containment import ContainmentError
+
+        try:
+            observation = self._workers.recover_analysis(
+                identity.execution_id, evidence, identity, terminate=False
+            )
+        except ContainmentError as error:
+            raise ValueError(
+                "stalled worker containment retirement is unproven"
+            ) from error
+        if observation != "absent":
+            raise ValueError("stalled worker containment retirement is unproven")
+
     @staticmethod
     def recovery_worker_identity(value: object, execution_id: object):
         return _worker_identity_from_value(value, execution_id)
@@ -12840,6 +12854,11 @@ class ServiceEngine:
             if self._state.get("execution_resource_binding") is not None:
                 self._require_execution_generation(clean=False, remote=False)
                 self._execution_generation_binding().operation_receipt("worker")
+            stalled = self._state.get("stalled_recovery")
+            if isinstance(stalled, dict) and stalled.get("stage") == "retired":
+                from devlegate.recovery_transactions import prove_stalled_retirement
+
+                prove_stalled_retirement(self)
             return recover_stranded_execution(self, self._state)
         except (ValueError, ExecutionWorkspaceError, OSError) as error:
             raise DevlegateError(str(error)) from error

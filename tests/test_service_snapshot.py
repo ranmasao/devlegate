@@ -128,6 +128,37 @@ def test_stalled_state_rejects_changed_binding_and_process_loss_recovery(
     assert restored._runtime_store.load()["execution_id"] == "execution-1"
 
 
+@pytest.mark.parametrize("observation", ["absent", "matching-live"])
+def test_restarted_stall_rechecks_containment_before_failing_closed(
+    tmp_path, monkeypatch, observation
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    identity = {
+        "execution_id": "execution-1", "pid": 1, "pgid": 1, "sid": 1,
+        "boot_id": "boot", "start_time": 1, "containment_id": "test:group",
+    }
+    _persist_active_execution(
+        engine, "agent_running", "worker-running", worker_identity=identity
+    )
+    evidence = {"containment": "test:group"}
+    persist_stalled_intent(engine, launch_evidence=evidence)
+    monkeypatch.setattr(engine, "recovery_retire_worker", lambda *_: None)
+    retire_stalled_intent(engine)
+    restored = ServiceEngine(engine.env_file)
+    calls = []
+
+    def observe(execution_id, recorded, worker, *, terminate):
+        calls.append((execution_id, recorded, worker.as_dict(), terminate))
+        return observation
+
+    monkeypatch.setattr(restored._workers, "recover_analysis", observe)
+    expected = "explicit reconciliation" if observation == "absent" else "unproven"
+    with pytest.raises(DevlegateError, match=expected):
+        restored._reconcile_stranded_execution()
+    assert calls == [("execution-1", evidence, identity, False)]
+    assert restored._runtime_store.load()["stalled_recovery"]["stage"] == "retired"
+
+
 @pytest.mark.parametrize("committed", [False, True])
 def test_watchdog_store_failure_at_live_supervisor_boundary(
     tmp_path, monkeypatch, committed
