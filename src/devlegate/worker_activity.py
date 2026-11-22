@@ -34,3 +34,10 @@ class WorkerActivity:
         with self._lock:
             idle = max(0.0, self._clock() - self._last_output)
         return {"idle_seconds": int(idle), "warning": idle >= self._warning_seconds}
+
+    def if_idle(self, seconds: float, action: Callable[[], bool]) -> bool:
+        """Serialize an idle decision with output observation and its intent write."""
+        with self._lock:
+            if self._clock() - self._last_output < seconds:
+                return False
+            return action()
