@@ -159,6 +159,39 @@ def test_restarted_stall_rechecks_containment_before_failing_closed(
     assert restored._runtime_store.load()["stalled_recovery"]["stage"] == "retired"
 
 
+def test_restart_refuses_stall_retirement_without_generation_proof(
+    tmp_path, monkeypatch
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        start_new_session=True,
+    )
+    try:
+        identity = _capture_worker_identity(process, "execution-1", "test:group")
+        _persist_active_execution(
+            engine, "agent_running", "worker-running",
+            worker_identity=identity.as_dict(),
+        )
+        evidence = {"containment": "test:group"}
+        persist_stalled_intent(engine, launch_evidence=evidence)
+        restored = ServiceEngine(engine.env_file)
+        calls = []
+
+        monkeypatch.setattr(
+            restored, "recovery_retire_worker", lambda *args: calls.append(args)
+        )
+        with pytest.raises(DevlegateError, match="generation binding is unproven"):
+            restored._reconcile_stranded_execution()
+        assert calls == []
+        assert process.poll() is None
+        assert restored._runtime_store.load()["stalled_recovery"]["stage"] == "intent"
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
 @pytest.mark.parametrize("committed", [False, True])
 def test_watchdog_store_failure_at_live_supervisor_boundary(
     tmp_path, monkeypatch, committed
