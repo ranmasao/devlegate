@@ -332,6 +332,7 @@ def _run_opencode(
     containment=None,
     owner_poll: Callable[[], None] | None = None,
     activity_handler: Callable[[str, bytes], None] | None = None,
+    watchdog_poll: Callable[[object, object], str | None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -567,7 +568,7 @@ def _run_opencode(
 
     if identity_error is not None:
         returncode = finish_interrupted()
-    elif stop_request is None and owner_poll is None:
+    elif stop_request is None and owner_poll is None and watchdog_poll is None:
         try:
             returncode = _wait_process(process)
         except KeyboardInterrupt:
@@ -578,6 +579,21 @@ def _run_opencode(
             try:
                 if owner_poll is not None:
                     owner_poll()
+                if watchdog_poll is not None and process.poll() is None:
+                    decision = watchdog_poll(process, containment)
+                    if decision == "retired":
+                        interruption_kind = "worker_stalled"
+                        returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
+                        break
+                    if decision == "failed":
+                        transport_error = (
+                            "watchdog decision failed; recovery not authorized"
+                        )
+                        # This is the existing service failure-safety stop, not
+                        # a watchdog retirement or stalled attribution.
+                        interrupt("operator_abort")
+                        returncode = finish_interrupted()
+                        break
                 returncode = _wait_process(process, WORKER_WAIT_INTERVAL)
                 break
             except subprocess.TimeoutExpired:
@@ -620,9 +636,13 @@ def _run_opencode(
         transport_error = transport_error or prompt_error
     try:
         group_retired = (
-            containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
-            if containment is not None
-            else worker_identity_handler is None
+            True
+            if interruption_kind == "worker_stalled"
+            else (
+                containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
+                if containment is not None
+                else worker_identity_handler is None
+            )
         )
     except (ContainmentError, OSError):
         group_retired = False
@@ -638,7 +658,7 @@ def _run_opencode(
         if detail:
             populated_error = f"{populated_error}: {detail}"
         transport_error = transport_error or populated_error
-    elif containment is not None:
+    elif containment is not None and interruption_kind != "worker_stalled":
         try:
             containment.destroy()
         except ContainmentError as error:
@@ -762,6 +782,7 @@ class WorkerSupervisor:
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
         activity_handler: Callable[[str, bytes], None] | None = None,
+        watchdog_poll: Callable[[object, object], str | None] | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -887,6 +908,7 @@ export default tool({
                 containment=containment,
                 owner_poll=evidence.poll if evidence is not None else owner_poll,
                 activity_handler=activity_handler,
+                watchdog_poll=watchdog_poll,
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:
