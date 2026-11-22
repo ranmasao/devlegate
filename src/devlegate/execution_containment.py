@@ -424,24 +424,31 @@ class ExecutionContainment:
             or worker_pid <= 0
         ):
             return None
-        members: set[int] = set()
-        pending = [self.path]
-        try:
+        def snapshot() -> dict[Path, frozenset[int]]:
+            groups: dict[Path, frozenset[int]] = {}
+            pending = [self.path]
             while pending:
                 group = pending.pop()
                 values = (group / "cgroup.procs").read_text(encoding="ascii").split()
-                for value in values:
-                    pid = int(value)
-                    if pid <= 0:
-                        return None
-                    members.add(pid)
+                members = frozenset(int(value) for value in values)
+                if any(pid <= 0 for pid in members):
+                    raise ValueError("invalid cgroup member")
+                groups[group] = members
                 for child in group.iterdir():
                     if child.is_symlink():
-                        return None
+                        raise ValueError("symlink in cgroup hierarchy")
                     if child.is_dir():
                         pending.append(child)
+            return groups
+
+        try:
+            first = snapshot()
+            second = snapshot()
         except (OSError, ValueError, UnicodeError):
             return None
+        if first != second:
+            return None
+        members = set().union(*second.values())
         if worker_pid not in members:
             return None
         return bool(members - {worker_pid})
