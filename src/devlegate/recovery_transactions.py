@@ -124,6 +124,10 @@ class StalledRetirementCapabilities(Protocol):
 
     def recovery_retire_worker(self, identity: Any, evidence: object) -> None: ...
 
+    def recovery_prove_worker_retired(
+        self, identity: Any, evidence: object
+    ) -> None: ...
+
 
 def persist_stalled_intent(
     owner: StalledRetirementCapabilities, *, launch_evidence: dict[str, object]
@@ -193,6 +197,37 @@ def retire_stalled_intent(owner: StalledRetirementCapabilities) -> None:
     owner.recovery_save_state(
         "agent_running", stalled_recovery={**intent, "stage": "retired"}
     )
+
+
+def prove_stalled_retirement(owner: StalledRetirementCapabilities) -> None:
+    """Revalidate a retirement receipt against its original containment.
+
+    A persisted stage is not itself proof that the launch boundary is absent.
+    This observation is deliberately non-destructive and never admits work.
+    """
+    state = owner.recovery_state()
+    receipt = state.get("stalled_recovery")
+    if not isinstance(receipt, dict) or receipt.get("stage") != "retired":
+        raise ValueError("stalled retirement receipt is unavailable")
+    identity_value = receipt.get("worker_identity")
+    execution_id = receipt.get("execution_id")
+    evidence = receipt.get("launch_evidence")
+    if (
+        state.get("phase") != "agent_running"
+        or state.get("execution_stage") != "worker-running"
+        or state.get("execution_id") != execution_id
+        or state.get("worker_identity") != identity_value
+        or receipt.get("reason") != "worker_stalled"
+        or not isinstance(identity_value, dict)
+        or not isinstance(evidence, dict)
+        or not identity_value.get("containment_id")
+        or evidence.get("containment") != identity_value.get("containment_id")
+    ):
+        raise ValueError("stalled retirement receipt no longer matches the worker")
+    identity = owner.recovery_worker_identity(identity_value, execution_id)
+    if identity is None:
+        raise ValueError("stalled retirement identity is invalid")
+    owner.recovery_prove_worker_retired(identity, evidence)
 
 
 def recover_stranded_execution(
