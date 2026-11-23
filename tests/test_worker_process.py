@@ -51,6 +51,19 @@ def test_activity_observes_partial_stdout_and_stderr_before_worker_exits(tmp_pat
     assert not thread.is_alive()
 
 
+def test_activity_callback_failure_is_reported_and_pipes_are_drained():
+    def fail(_stream, _chunk):
+        raise RuntimeError("observer unavailable")
+
+    result = _run_opencode(
+        [sys.executable, "-c", "import os; os.write(1, b'{}\\n'); os.write(2, b'x' * 200000)"],
+        "prompt",
+        show_worker_output=False,
+        activity_handler=fail,
+    )
+    assert result.transport_error == "worker activity observation failed: observer unavailable"
+
+
 @pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):

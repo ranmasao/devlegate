@@ -365,6 +365,7 @@ def _run_opencode(
         worker_started_handler()
     output_lock = threading.Lock()
     transport_error: str | None = None
+    activity_error: str | None = None
     prompt_error: str | None = None
     log_error: str | None = None
 
@@ -388,10 +389,19 @@ def _run_opencode(
             if show_worker_output:
                 _write_rendered_worker_text(rendered, stream)
 
+    def observe_activity(stream: str, data: bytes) -> None:
+        nonlocal activity_error
+        if activity_handler is not None:
+            try:
+                activity_handler(stream, data)
+            except Exception as error:
+                # Keep draining both pipes, but never hide a broken observer.
+                activity_error = f"worker activity observation failed: {error}"
+
     def consume_stdout() -> None:
         nonlocal transport_error
         assert process.stdout is not None
-        lines = iter(_observed_stdout_lines(process.stdout, activity_handler))
+        lines = iter(_observed_stdout_lines(process.stdout, observe_activity))
         for raw_line in lines:
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
                 transport_error = "stdout event exceeds maximum size"
@@ -456,8 +466,7 @@ def _run_opencode(
         assert process.stderr is not None
         read = getattr(process.stderr, "read1", process.stderr.read)
         while raw_chunk := read(4096):
-            if activity_handler is not None:
-                activity_handler("stderr", raw_chunk)
+            observe_activity("stderr", raw_chunk)
             write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
 
     stdout_thread = threading.Thread(target=consume_stdout, daemon=True)
@@ -614,6 +623,8 @@ def _run_opencode(
     prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
     if identity_error is not None:
         transport_error = identity_error
+    elif activity_error is not None:
+        transport_error = activity_error
     elif log_error is not None:
         transport_error = log_error
     elif interruption_error is not None:
