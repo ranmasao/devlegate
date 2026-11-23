@@ -15,8 +15,9 @@ isolation. Its interface may be delivered before that isolation is complete.
 
 Give FRESH/REWORK/RESUME workers a selective way to inspect their own task's
 current and historical code changes without learning Git object IDs, refs,
-execution identifiers or repository lifecycle commands. Deliver three useful
-read-only tools, not a second Git audit, snapshot or integrity subsystem.
+execution identifiers or repository lifecycle commands. Deliver four focused
+read-only tools, including an on-demand Git-compatible diff hygiene check, not
+a second Git audit, snapshot or integrity subsystem.
 
 ## Context
 
@@ -60,7 +61,7 @@ retained checkpoints may cease to be ancestors after a rebase. Cross-base
 comparisons must not silently present unrelated target changes as worker edits.
 Squash integration remains valid.
 
-### Three tools
+### Four tools
 
 1. `revisions()`: return the available virtual endpoint/checkpoint inventory
    and factual availability/count metadata; no invented semantic summaries.
@@ -75,14 +76,39 @@ Squash integration remains valid.
    Git-pathspec arguments. No unscoped branch patch API. A page must clearly
    distinguish a complete diff from a partial diff; when a useful bounded page
    cannot be produced economically, return a clear unavailability status.
+4. `check(from, to, cursor?)`: perform an **on-demand, non-mutating, diagnostic**
+   check of introduced changes for Git-compatible whitespace errors and
+   unresolved conflict markers, corresponding to `git diff --check`. Reuse
+   Git's own diff/check semantics where practical, including the repository's
+   applicable `core.whitespace` policy; do not approximate them with a generic
+   linter or flag all whitespace-only/style changes as errors. Return bounded
+   repository-relative paths, line numbers, diagnostic kinds, and short
+   offending-line excerpts when safe and available. Distinguish `clean`
+   (fully checked and no findings), `findings`, `partial`, and
+   `unavailable`; a truncated or failed scan must **never** claim clean.
+   The result is advice for the worker, **not** an acceptance veto or automatic
+   source-code correction. A legitimate project/style convention may intentionally
+   use whitespace that Git flags; the worker must be able to inspect and decide.
 
-`changes(HEAD, WORKTREE)` and `diff(HEAD, WORKTREE, path)` show changes since
+`check(HEAD, WORKTREE)` examines changes since the last task checkpoint,
+whereas `check(BASE, WORKTREE)` covers cumulative work. Like the virtual
+`changes` and `diff` operations, a WORKTREE comparison includes eligible
+tracked staged/unstaged and non-ignored untracked files; this is an explicit
+scope extension compared with bare `git diff --check`, which normally checks
+only unstaged tracked changes. Preserve Git's *diagnostic rules*, not its
+implicit index-only scope. Untracked files must be checked safely without
+modifying/staging the index; an uncheckable/expensive input must be reported as
+unavailable rather than silently omitted. Do not expose arbitrary Git options,
+external path selectors, command execution, or a fifth independent validation
+subsystem.
+
+`changes(HEAD, WORKTREE) and `diff(HEAD, WORKTREE, path)` show changes since
 the latest checkpoint. `BASE` to `WORKTREE` shows cumulative task changes,
 including eligible untracked files. Use ordinary Git/worktree observations to
 combine staged and unstaged changes without exposing index internals. Do **not**
 implement independent index-tamper detection as a Change Explorer obligation.
 
-The tools never fetch, stage, commit, reconcile, launch, retry or otherwise
+The tools never fetch, stage, commit, reconcile, launch, retry, auto-fix or otherwise
 modify Git or workflow state. Their output cannot grant worker admission,
 retirement, checkpoint validity or integration permission.
 
@@ -141,7 +167,8 @@ Retain first-version response limits as **service-owned defaults**:
 | --- | --- |
 | `changes()` | 30 path records per page |
 | `diff()` | 8 KiB serialized payload and 120 text lines per page, whichever is reached first |
-| All three tools combined | 64 KiB serialized output budget per execution |
+| `check()` | 8 KiB serialized output and 30 diagnostic records per page, whichever is reached first |
+| All four tools combined | 64 KiB serialized output budget per execution |
 | Single line | Bounded; overlong lines report `LINE_TOO_LONG` |
 
 Count serialized UTF-8 bytes including metadata. Apply the aggregate execution
@@ -168,7 +195,7 @@ stable pages when inexpensive to do so.
 ### Tool authority and delivery
 
 - Implement a small Devlegate-owned Python read-only backend plus a thin
-  OpenCode adapter exposing `revisions`, `changes` and `diff`; a mandatory MCP
+  OpenCode adapter exposing `revisions`, `changes`, `diff` and `check`; a mandatory MCP
   server, generic VCS framework and new runtime dependency are out of scope.
 - Keep privileged Git observation **outside** the worker's Landlock-restricted
   process. Bind tool calls to a currently authorized execution, its exact
@@ -180,19 +207,28 @@ stable pages when inexpensive to do so.
   custom tool does not itself constitute that isolation; test it independently
   without claiming more protection than implemented.
 - Tool descriptions should succinctly direct workers to list revisions,
-  inspect changed paths first, and request only specific file diffs/pages
-  useful to their current task. No automatic exhaustive page reading or
-  pre-generated multi-megabyte Change Context.
+  inspect changed paths first, request only specific file diffs/pages, and
+  invoke `check` when they need the equivalent of `git diff --check`.
+  Explain the role-to-tool mapping in concise, task-oriented terms rather than
+  asking the worker to call raw Git: `changes` for status/path inventory,
+  `diff` for a file patch, `check` for introduced whitespace/conflict
+  diagnostics. Do not treat check findings as an automatic failure, and do not
+  force an exhaustive check on every query. No automatic exhaustive page
+  reading or pre-generated multi-megabyte Change Context.
 
 ## Acceptance criteria
 
 1. A worker can inspect available `BASE`, `HEAD`, older real checkpoints
-   and its current `WORKTREE` through exactly three read-only tools, with no
+   and its current `WORKTREE` through exactly four read-only tools, with no
    raw Git/execution identities or additional index-facing revision.
 2. `changes` lists factual paths/metadata without code; `diff` requires one
    valid file path and returns bounded text, explicit non-text status or
    explicit cost/unavailability. Both work for first execution and cumulative
    REWORK changes.
+   `check` returns Git-compatible, configurable-whitespace/conflict-marker
+   diagnostics with exact relative location and explicit completeness, without
+   modifying source or Git state. A finding is not automatically disqualifying;
+   benign style/whitespace changes need not be treated as errors.
 3. Staged, unstaged and eligible untracked worker edits appear without extra
    hashing, double scanning, independent WORKTREE attestation or index-tamper
    detection. A mutable observation is labeled accordingly and does not claim
@@ -228,8 +264,15 @@ Use disposable repositories/workspaces and targeted adapter/owner tests:
 - Large text with small diff, huge line, binary same-size modification,
   unchanged historical binary and expensive comparison. Results must remain
   bounded and explicit about unknown/unavailable data.
+- `check` against clean, whitespace-only but acceptable, trailing-whitespace,
+  blank-at-EOF (where configured), space-before-tab, and conflict-marker
+  changes; compare results with Git's `--check` on the same tracked revisions
+  under `core.whitespace`. Cover Markdown-style intentional trailing spaces,
+  staged+unstaged and eligible untracked WORKTREE changes, binary/submodule
+  unavailable cases, output truncation, failures and no false `clean` on
+  partial observations. Verify `check` does not stage, mutate, fix or block.
 - Aggregate response cap across ordinary calls and reconnects, per-page
-  byte/line/path caps, and the three actual OpenCode tool descriptions.
+  byte/line/path/diagnostic caps, and the four actual OpenCode tool descriptions.
   Existing full project CI and lint remain the quality gate.
 
 ## Boundaries
