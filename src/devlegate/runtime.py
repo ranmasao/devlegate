@@ -193,6 +193,7 @@ from devlegate.tickets import (
     load_ticket_store,
     validate_workflow_transition,
 )
+from devlegate.worker_activity import WorkerActivity
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
@@ -5021,6 +5022,19 @@ class ServiceEngine:
         self._publish_service_snapshot(lifecycle="worker", worker_running=True)
         self._refresh_published_status()
         worker_returned = False
+        activity = WorkerActivity()
+        warning_generation: int | None = None
+
+        def poll_worker_activity() -> None:
+            nonlocal warning_generation
+            poll_worker(self)
+            snapshot = activity.snapshot()
+            if snapshot is not None:
+                idle, generation = snapshot
+                if idle >= 300 and generation != warning_generation:
+                    _log(f"worker output has been idle for {int(idle)} seconds")
+                    warning_generation = generation
+
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
         )
@@ -5033,7 +5047,8 @@ class ServiceEngine:
                     prompt,
                     execution_id=execution_id,
                     stop_request=ResetStop(self, selected_ticket.id),
-                    owner_poll=lambda: poll_worker(self),
+                    owner_poll=poll_worker_activity,
+                    activity_handler=activity.observe,
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -5056,6 +5071,7 @@ class ServiceEngine:
                 return 0
             worker_returned = True
         finally:
+            activity.close()
             if worker_returned and worker_run.worker_group_retired:
                 binding = self._execution_generation_binding()
                 if binding.operation_pending("worker"):
