@@ -288,6 +288,32 @@ def worker_environment(
     return worker_env
 
 
+def _observed_lines(stream, activity: Callable[[bytes], None]):
+    """Frame stdout while observing bytes before a complete event arrives.
+
+    Bound the pending frame exactly as the protocol reader does; callers can
+    discard an oversized event without retaining the remainder in memory.
+    """
+    pending = bytearray()
+    read = getattr(stream, "read1", stream.read)
+    limit = MAX_STDOUT_EVENT_BYTES + 1
+    while chunk := read(4096):
+        activity(chunk)
+        pending.extend(chunk)
+        while pending:
+            newline = pending.find(b"\n", 0, limit)
+            if newline >= 0:
+                end = newline + 1
+            elif len(pending) >= limit:
+                end = limit
+            else:
+                break
+            yield bytes(pending[:end])
+            del pending[:end]
+    if pending:
+        yield bytes(pending)
+
+
 def _run_opencode(
     command: list[str],
     prompt: str,
@@ -305,6 +331,7 @@ def _run_opencode(
     prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
     owner_poll: Callable[[], None] | None = None,
+    activity_handler: Callable[[str, bytes], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -367,14 +394,17 @@ def _run_opencode(
     def consume_stdout() -> None:
         nonlocal transport_error
         assert process.stdout is not None
-        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
+        lines = iter(_observed_lines(
+            process.stdout,
+            lambda chunk: activity_handler("stdout", chunk)
+            if activity_handler is not None else None,
+        ))
+        for raw_line in lines:
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
                 transport_error = "stdout event exceeds maximum size"
                 _log(f"OpenCode protocol error: {transport_error}")
                 if not raw_line.endswith(b"\n"):
-                    while discarded := process.stdout.readline(
-                        MAX_STDOUT_EVENT_BYTES + 1
-                    ):
+                    for discarded in lines:
                         if discarded.endswith(b"\n"):
                             break
                 continue
@@ -431,7 +461,10 @@ def _run_opencode(
 
     def consume_stderr() -> None:
         assert process.stderr is not None
-        while raw_chunk := process.stderr.read(4096):
+        read = getattr(process.stderr, "read1", process.stderr.read)
+        while raw_chunk := read(4096):
+            if activity_handler is not None:
+                activity_handler("stderr", raw_chunk)
             write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
 
     stdout_thread = threading.Thread(target=consume_stdout, daemon=True)

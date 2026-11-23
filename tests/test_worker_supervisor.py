@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import json
+import os
 import subprocess
 import threading
 
@@ -12,9 +13,39 @@ from devlegate.worker_egress import OpenCodeRunResult
 from devlegate.worker_supervisor import (
     WorkerAdmissionClosed,
     WorkerSupervisor,
+    _observed_lines,
     _wait_process,
     worker_environment,
 )
+
+
+def test_stdout_bytes_are_observed_before_event_newline():
+    read_fd, write_fd = os.pipe()
+    seen = threading.Event()
+    observed = []
+    lines = []
+
+    def consume():
+        with os.fdopen(read_fd, "rb") as stream:
+            def record(chunk):
+                observed.append(chunk)
+                seen.set()
+
+            lines.extend(_observed_lines(stream, record))
+
+    thread = threading.Thread(target=consume)
+    thread.start()
+    try:
+        os.write(write_fd, b'partial')
+        assert seen.wait(5)
+        assert observed == [b'partial']
+        assert lines == []
+        os.write(write_fd, b' event\n')
+    finally:
+        os.close(write_fd)
+        thread.join(5)
+    assert not thread.is_alive()
+    assert lines == [b'partial event\n']
 
 
 def _report_event():
