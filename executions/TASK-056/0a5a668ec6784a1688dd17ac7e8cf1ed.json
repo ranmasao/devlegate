@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "completed",
+  "control_head": "3ef59a5e2bca58db399c595bb120fb9a2b6b623f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "0a5a668ec6784a1688dd17ac7e8cf1ed",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "649cddb49f1174abbf5013af082b19549b80900a6c06705eaa912204a7386735",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Watchdog recovery prompts now preserve bounded, verbatim excerpts from decoded OpenCode text and tool output, including large events, while keeping private raw diagnostics out of the prompt. The live recovery tests exercise the shared automatic-resume path with valid JSONL and independently verify retirement of test-owned workers and monitors during teardown."
+  },
+  "workspace_head": "5b444858c94f73470cbbb3f367da2bab7ff845cb"
+}
