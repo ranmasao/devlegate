@@ -20,8 +20,8 @@ recovery paths inside the existing runtime.py monolith.
 
 ## Goal
 
-Detect workers that remain process-alive but stop making observable progress,
-classify them as stalled after a bounded inactivity interval, retire the exact
+Detect workers that remain process-alive but stop producing observable output,
+classify them as stalled using a bounded inactivity heuristic, retire the exact
 execution ownership boundary safely, preserve the current repository state and
 execution evidence, and continue through Devlegate's shared owner-controlled interrupted-worker
 recovery and admission path, with a small deterministic recovery-context prompt
@@ -50,7 +50,8 @@ This demonstrates:
 
     process alive != worker making progress
 
-The watchdog must therefore observe worker activity, not only process liveness.
+The watchdog therefore uses output activity as a cheap operational heuristic,
+not as proof of productive work or a diagnosis of the cause of silence.
 
 ## Scope boundary with TASK-055
 
@@ -84,10 +85,14 @@ At minimum:
 - service restart/recovery reconstructs or safely re-establishes watchdog state
   without spawning duplicate workers.
 
-Do not depend on parsing OpenCode's private log/database format.
+Every nonempty observed byte chunk counts, independently of syntax, content,
+meaning, repetition, decoding, log rendering or prompt-context availability.
+Malformed JSON, partial lines and repetitive output count. The watchdog does
+not assess semantic progress; an operator or a separate semantic assessment may
+do so outside this ticket. Do not parse OpenCode private logs/databases.
 
-If Devlegate later has a typed worker-event protocol, typed events may also count
-as activity, but stdout/stderr observation is the required baseline.
+The timer and its race-safe classification must not depend on context
+formatting, filtering, regex scans, log history or other semantic processing.
 
 ## Tool/descendant activity
 
@@ -130,7 +135,7 @@ second execution scheduler or a second worker-admission protocol.** The original
 post-reset implementation baseline contains the raw stdout/stderr byte-observation
 seam, not the previously discarded watchdog/recovery implementation.
 
-After a worker is proven stalled and its exact ownership boundary is retired,
+After a worker is classified as stalled by this policy and its exact ownership boundary is proven retired,
 the subsequent lifecycle must converge on Devlegate's existing stranded-worker
 recovery, interrupted-execution normalization and `automatic_resume` admission,
 or on a shared refactoring with equivalent ordinary process-loss semantics:
@@ -220,85 +225,49 @@ Devlegate may retain rich internal evidence, including fields such as:
 
 This evidence is orchestrator-private and is not automatically agent-visible.
 
-## Agent-visible recovery context
+## Agent-visible deterministic recovery context
 
-The replacement worker receives a small recovery prompt fragment that is a
-deterministic projection of recorded execution evidence.
+The replacement receives a small, useful continuation fragment, not a security
+filter or proof of previous progress. Include:
 
-The fragment must NOT reveal orchestrator-private implementation details that the
-worker would not normally know from its declared environment.
+1. A neutral reason: the previous attempt stopped after an extended period
+   without observable output. Do not infer provider/network/tool failure.
+2. A reminder that existing changes are current state, to inspect before edits
+   and not assume the prior attempt completed.
+3. A bounded, stably ordered list of changed relative paths mechanically derived
+   from repository state (e.g. Git porcelain status).
+4. A bounded verbatim excerpt of the previous worker's observed output, using
+   the existing adapter's decoded/rendered worker-output boundary. Both stdout
+   and stderr contribute; one chronological tail or small per-stream tails
+   are acceptable. Preserve useful text/tool/error payloads rather than raw
+   JSONL envelopes. An absent or empty excerpt has an honest neutral marker.
 
-Do not expose, unless already part of the worker interface:
+Keep orchestrator-owned metadata and worker output distinct by source. Do not
+deliberately add private control-plane IDs, PID/PGID, internal paths, cgroup
+state, checkpoint identities, raw event envelopes or service diagnostics to
+the fragment. Worker-originated content may itself mention paths, IDs,
+processes, Git hashes, systemd, or other terms that the previous worker could
+already observe. Retain such content as quoted/untrusted data; do not inspect
+or censor it based on its spelling. This is not a confidentiality boundary
+against arbitrary worker output, and it is not a new capability granted to
+the replacement. Preserve the existing prompt data fencing and output safety
+conventions. No semantic analysis, LLM summary, regular-expression privacy
+filter, recursive JSON parsing or heuristic line suppression is required.
 
-- execution IDs;
-- PIDs/PGIDs;
-- service instance IDs;
-- absolute Devlegate state/worktree paths;
-- internal checkpoint identities;
-- cgroup/systemd details;
-- statements that the worker is in a sandbox, special worktree, or restricted
-  environment;
-- internal watchdog implementation details.
+Use a small fixed byte/line budget with deterministic truncation and encoding.
+Identical recorded output and repository state produce the same fragment.
+Persist the bounded context with the existing stall evidence, or use an
+equivalent existing bounded source bound to that attempt. Do not read an
+unbounded log, use the ticket-follow CLI, introduce a separate transcript,
+or maintain a large intermediate buffer merely to inspect entire lines.
+Reusing the existing worker-text rendering path with a tiny bounded tail is
+preferred. Raw byte observation remains independent of output rendering.
 
-The worker-visible fragment should contain only information that is either:
-
-- directly observable from the current repository state; or
-- part of the declared worker interaction boundary.
-
-## Deterministic recovery prompt
-
-The recovery prompt must not use an LLM-generated summary.
-
-It must be reproducible from recorded evidence using deterministic formatting.
-
-At minimum include:
-
-1. a neutral continuation reason, for example:
-
-       Previous attempt stopped after an extended period without observable
-       output.
-
-2. a statement that existing repository changes are current state and must be
-   inspected before further edits;
-
-3. changed relative paths derived mechanically from repository state, using a
-   stable command/representation such as:
-
-       git status --porcelain=v1
-       git diff --name-status
-
-4. a bounded verbatim tail of observed worker stdout/stderr preceding the stall;
-
-5. continuation guidance such as:
-
-       Continue from the current repository state.
-       Do not assume the previous attempt completed.
-       Inspect existing changes before repeating operations.
-
-Do not include generated interpretations such as:
-
-- inferred intent;
-- inferred root cause;
-- inferred remaining work;
-- semantic summaries of failures;
-- claims about why a provider/network/tool stalled.
-
-## Recovery-context bounds
-
-Recovery context must remain small and predictable.
-
-Define deterministic limits for:
-
-- maximum stdout/stderr tail lines and/or bytes;
-- maximum changed-path entries;
-- truncation markers;
-- stable ordering;
-- stable text encoding.
-
-The exact same stored evidence and repository state must render the same recovery
-fragment.
-
-Do not inject an unbounded prior execution log into the next worker prompt.
+An empty/unavailable excerpt is not proof of unsafe retirement. If context
+capture is unavailable, report that honestly and continue via existing safe
+recovery once required ownership and generation proofs hold; do not make
+optional diagnostic text a new admission gate. Required durable interruption
+and resource-ownership evidence is not optional.
 
 ## Status/inspection UX
 
@@ -356,10 +325,11 @@ exactly-once execution of arbitrary agent actions.
 - The replacement worker receives a deterministic recovery-context prompt
   fragment.
 - Recovery prompt rendering requires no LLM call.
-- Agent-visible recovery context contains no orchestrator-private IDs, process
-  metadata, internal paths, sandbox/worktree implementation details, or cgroup
-  state.
-- Bounded stdout/stderr tail and relative changed-path evidence are reproducible.
+- The recovery fragment does not deliberately introduce orchestrator-owned
+  private metadata or raw event envelopes. Worker-authored paths/IDs/technical
+  terms are preserved as untrusted output rather than censored.
+- Bounded stdout/stderr excerpts and relative changed-path evidence are
+  reproducible; missing optional output does not block proven-safe recovery.
 - Service restart during watchdog recovery does not admit overlapping workers,
   revive a provably completed worker, or lose the stalled-attempt attribution;
   ambiguous ownership/replay is allowed to fail closed, not to guess success.
@@ -389,9 +359,13 @@ At minimum:
 10. stalled reason is durably attributable to the previous attempt;
 11. existing changed files survive into replacement attempt;
 12. changed-path list is relative, deterministic, and bounded;
-13. stdout/stderr tail is verbatim, bounded, deterministically truncated;
-14. recovery prompt contains no execution ID, PID/PGID, internal state/worktree
-    path, service/cgroup identity, or sandbox disclosure;
+13. valid worker text/tool events and stderr contribute verbatim bounded
+    excerpts, including a useful suffix of a large payload; truncation is deterministic;
+14. recovery context omits orchestrator-owned metadata and raw JSON envelopes
+    by source while preserving worker-authored technical text (including paths,
+    hashes and process-related terms) as untrusted data; repeated/malformed or
+    partial raw output still resets activity; missing optional tail does not
+    prevent proven-safe shared recovery;
 15. recovery prompt is identical for identical stored evidence and repository
     state;
 16. recovery prompt does not require OpenCode private logs/database;
@@ -416,7 +390,8 @@ This ticket does not:
 - parse OpenCode internal logs or SQLite state;
 - diagnose provider/network failures semantically;
 - add LLM-generated recovery summaries;
-- expose orchestrator internals to workers;
+- deliberately expose private control-plane metadata to workers, or build a
+  content-based privacy/security filter for worker-originated text;
 - replace TASK-055 process-ownership work;
 - introduce a general plugin system;
 - create a second stalled-worker-specific replacement scheduler, durable successor
