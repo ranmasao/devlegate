@@ -31,6 +31,8 @@ This ticket addresses the observed failure mode where OpenCode remained alive in
 `do_epoll_wait` with an established HTTPS socket but produced no further worker
 output for roughly 95 minutes after its last tool/edit activity.
 
+## Context
+
 ## Incident motivation
 
 Observed on LAB-169:
@@ -64,6 +66,8 @@ TASK-056 owns:
 
 Do not solve escaped-descendant ownership here. Use the execution-retirement
 primitive established or selected by TASK-055.
+
+## Required behavior
 
 ## Activity model
 
