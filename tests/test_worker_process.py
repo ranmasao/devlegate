@@ -16,6 +16,41 @@ import pytest
 from devlegate.worker_supervisor import _run_opencode
 
 
+def test_activity_observes_partial_stdout_and_stderr_before_worker_exits(tmp_path):
+    release = tmp_path / "release"
+    script = (
+        "import os, pathlib, sys, time; "
+        "os.write(1, b'{partial'); os.write(2, b'error'); "
+        "p=pathlib.Path(sys.argv[1]); "
+        "exec('while not p.exists():\\n time.sleep(0.01)'); "
+        "os.write(1, b'}\\n')"
+    )
+    observed = []
+    ready = threading.Event()
+
+    def activity(stream, chunk):
+        observed.append((stream, chunk))
+        if {name for name, _ in observed} == {"stdout", "stderr"}:
+            ready.set()
+
+    thread = threading.Thread(
+        target=lambda: _run_opencode(
+            [sys.executable, "-c", script, str(release)], "prompt",
+            show_worker_output=False, activity_handler=activity,
+        )
+    )
+    thread.start()
+    try:
+        assert ready.wait(5)
+        assert thread.is_alive()
+        assert ("stdout", b"{partial") in observed
+        assert ("stderr", b"error") in observed
+    finally:
+        release.touch()
+        thread.join(5)
+    assert not thread.is_alive()
+
+
 @pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):
