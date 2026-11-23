@@ -1,0 +1,36 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "773ae324efb1526fac5710ee6a0e44f1aac08dbd",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "28f9dae7a0c04dea8190d022dbabe8e4",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-monitored live-stall path with configurable thresholds, owned-descendant exclusion, fresh activity and completion checks, durable evidence, and exact containment retirement before shared recovery.",
+    "Complete safe restart/replay and dirty-workspace admission, deterministic bounded recovery context and operator status, and focused end-to-end and lifecycle regression coverage."
+  ],
+  "report_artifact": "executions/TASK-056/28f9dae7a0c04dea8190d022dbabe8e4.md",
+  "report_sha256": "17fe371ed0e097ce627af4d8491018c678f2e2171b6f9be647f9b4e91f47a87f",
+  "resource_generation": "ba98e893aa498f468ec28b8e0ba37f6305bdebb2701323d3432a4a660f93e577",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-monitored live-stall path with configurable thresholds, owned-descendant exclusion, fresh activity and completion checks, durable evidence, and exact containment retirement before shared recovery.",
+      "Complete safe restart/replay and dirty-workspace admission, deterministic bounded recovery context and operator status, and focused end-to-end and lifecycle regression coverage."
+    ],
+    "report": "The invocation's available execution budget was exhausted before the live watchdog and end-to-end recovery could be implemented. The focused recovery-boundary test and lint passed; these checks do not establish the ticket's required end-to-end behavior.",
+    "summary": "Extended shared interruption recovery and automatic-resume eligibility to recognize and preserve worker_stalled attribution, while retaining the worker-absence gate."
+  },
+  "workspace_head": "582855ceac157667b9c994ed26252fd01db110ad"
+}
