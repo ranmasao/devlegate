@@ -196,7 +196,7 @@ from devlegate.tickets import (
 from devlegate.worker_activity import (
     WatchdogPolicy,
     WorkerActivity,
-    project_stall_output,
+    WorkerOutputTail,
     render_stall_context,
 )
 from devlegate.worker_egress import WorkerRunResult
@@ -5059,6 +5059,7 @@ class ServiceEngine:
         self._refresh_published_status()
         worker_returned = False
         activity = WorkerActivity()
+        output_tail = WorkerOutputTail()
         with self._snapshot_lock:
             self._watchdog_view = (execution_id, activity)
         warning_generation: int | None = None
@@ -5094,11 +5095,10 @@ class ServiceEngine:
                 stamp = self._workers.containment_stamp(launch)
                 if stamp is None:
                     return False
-                private_values = self._stall_private_output_values(
-                    execution_id, identity.as_dict(), launch, workspace, binding,
-                )
             except (ContainmentError, ExecutionWorkspaceError, DevlegateError, OSError):
                 return False
+
+            prompt_output = output_tail.snapshot()
 
             def persist(evidence: dict) -> bool:
                 with self._operator_command_lock, self._lifecycle_lock:
@@ -5116,7 +5116,7 @@ class ServiceEngine:
                         return False
                     binding.record_worker_stall({
                         **evidence, "launch": launch, "containment_stamp": stamp,
-                        "reason": "worker_stalled",
+                        "reason": "worker_stalled", "prompt_output": prompt_output,
                     })
                     self._save_state(
                         "agent_running", execution_interruption_kind="worker_stalled",
@@ -5125,9 +5125,7 @@ class ServiceEngine:
                         self._watchdog_view = (execution_id, None)
                     return True
 
-            return activity.classify(
-                snapshot[1], policy.recovery, persist, private_values=private_values,
-            )
+            return activity.classify(snapshot[1], policy.recovery, persist)
 
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
@@ -5144,7 +5142,7 @@ class ServiceEngine:
                     owner_poll=poll_worker_activity,
                     stall_poll=poll_stall,
                     activity_handler=activity.observe,
-                    decoded_stdout_handler=activity.observe_decoded_stdout,
+                    rendered_output_handler=output_tail.append,
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -12947,28 +12945,14 @@ class ServiceEngine:
         if old.intent["generation"] != intent.get("predecessor_generation"):
             raise DevlegateError("worker stall predecessor generation differs")
         evidence = old.worker_stall_evidence()
-        output = evidence.get("prompt_output")
-        if output is None:
-            output = project_stall_output(evidence, self._stall_private_output_values(
-                predecessor, old.operation_receipt("worker")["identity"],
-                evidence["launch"], workspace, old,
-            ))
-        status = self._git_runtime(
-            workspace.path, "-c", "core.quotePath=true", "status", "--porcelain=v1",
-            "--no-renames", "--untracked-files=all", "--ignore-submodules=none",
-        ).stdout
-        return render_stall_context(status, output)
-
-    def _stall_private_output_values(
-        self, execution_id, identity, launch, workspace, binding,
-    ) -> tuple[str, ...]:
-        return (
-            execution_id, str(identity["pid"]), str(identity["pgid"]),
-            str(identity["sid"]), str(launch["root"]),
-            str(self.state_dir), str(workspace.path), str(binding.intent["generation"]),
-            str(identity.get("boot_id", "")), self._state_key,
-            str(identity.get("containment_id", "")),
-        )
+        try:
+            status = self._git_runtime(
+                workspace.path, "-c", "core.quotePath=true", "status", "--porcelain=v1",
+                "--no-renames", "--untracked-files=all", "--ignore-submodules=none",
+            ).stdout
+        except (OSError, subprocess.CalledProcessError, UnicodeError):
+            status = None
+        return render_stall_context(status, evidence.get("prompt_output") or {})
 
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""

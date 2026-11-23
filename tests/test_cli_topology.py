@@ -1184,8 +1184,8 @@ def test_real_service_absent_worker_restart_requires_trusted_interruption(
 
 @pytest.mark.parametrize(
     "restart_at",
-    [None, "warning", "post-worker", "stall_classified", "absent", "foreign-root",
-     "foreign-generation"],
+    [None, "empty-output", "warning", "post-worker", "stall_classified", "absent",
+     "foreign-root", "foreign-generation"],
 )
 def test_real_service_live_watchdog_retires_before_resuming(
     git_fixture, monkeypatch, restart_at,
@@ -1196,6 +1196,8 @@ def test_real_service_live_watchdog_retires_before_resuming(
     release = result.with_suffix(".release")
     attempts = result.with_suffix(".attempts")
     monkeypatch.setenv("WATCHDOG_TEST_RESULT", str(result))
+    if restart_at == "empty-output":
+        monkeypatch.setenv("WATCHDOG_TEST_EMPTY_OUTPUT", "1")
     worker.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, subprocess, sys, time\n"
@@ -1211,15 +1213,19 @@ def test_real_service_live_watchdog_retires_before_resuming(
         "    def event(kind, part):\n"
         "        print(json.dumps({'type': kind, 'sessionID': 'ses_private_marker',\n"
         "                          'part': part}), flush=True)\n"
-        "    event('text', {'type': 'text', 'text': 'discard ' * 1024\n"
-        "                   + '  end of large payload  '})\n"
-        "    event('tool_use', {'type': 'tool', 'tool': 'read', 'state': {\n"
-        "        'status': 'completed', 'output': '  observed tool output  \\n'}})\n"
-        "    event('text', {'type': 'text', 'text': '  observed stdout  ',\n"
-        "                   'metadata': {'ignored': 'x' * 4096}})\n"
-        "    print('stderr marker', file=sys.stderr, flush=True)\n"
-        "    print(f'pid={os.getpid()} dir={os.getcwd()}',\n"
-        "          file=sys.stderr, flush=True)\n"
+        "    if os.environ.get('WATCHDOG_TEST_EMPTY_OUTPUT'):\n"
+        "        event('step_start', {})\n"
+        "    else:\n"
+        "        event('text', {'type': 'text', 'text': 'discard ' * 1024\n"
+        "                       + '  end of large payload  '})\n"
+        "        event('tool_use', {'type': 'tool', 'tool': 'read', 'state': {\n"
+        "            'status': 'completed',\n"
+        "            'output': '  observed tool output  \\n'}})\n"
+        "        event('text', {'type': 'text', 'text': '  observed stdout  ',\n"
+        "                       'metadata': {'ignored': 'x' * 4096}})\n"
+        "        print('stderr marker', file=sys.stderr, flush=True)\n"
+        "        print(f'pid={os.getpid()} dir={os.getcwd()}',\n"
+        "              file=sys.stderr, flush=True)\n"
         "    subprocess.run([sys.executable, '-c', 'import time; time.sleep(2.4)'],\n"
         "                   check=True)\n"
         "    result.with_suffix('.child-done').touch()\n"
@@ -1247,7 +1253,7 @@ def test_real_service_live_watchdog_retires_before_resuming(
     )
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
-    if restart_at not in {None, "warning"}:
+    if restart_at not in {None, "empty-output", "warning"}:
         point = "stall_classified" if restart_at == "absent" else (
             "post-worker" if restart_at in {"foreign-root", "foreign-generation"}
             else restart_at
@@ -1259,7 +1265,7 @@ def test_real_service_live_watchdog_retires_before_resuming(
     try:
         service.start()
         service.wait_ready()
-        if restart_at in {None, "warning"}:
+        if restart_at in {None, "empty-output", "warning"}:
             def warning_visible():
                 status = json.loads(service.cli("status", "--json").stdout)
                 return status["execution"].get("worker_liveness", {}).get("state") == (
@@ -1324,15 +1330,21 @@ def test_real_service_live_watchdog_retires_before_resuming(
         prompt = result.read_text().split("## Recovery Context\n", 1)[1]
         assert "without observable output" in prompt
         assert "- README.md\n- in-progress.txt\n" in prompt
-        assert "  end of large payload  \n" in prompt
-        assert "OpenCode tool: read\n  observed tool output  \n" in prompt
-        assert "  observed stdout  \n" in prompt
-        assert "[earlier output omitted]" in prompt
-        assert "stderr marker\n" in prompt
-        assert "[private output omitted]" in prompt
+        if restart_at == "empty-output":
+            assert prompt.count("(no rendered output available)") == 2
+            assert str(state["execution_path"]) not in prompt
+        else:
+            assert "  end of large payload  \n" in prompt
+            assert "OpenCode tool: read\n  observed tool output  \n" in prompt
+            assert "  observed stdout  \n" in prompt
+            assert "[earlier output omitted]" in prompt
+            original_pid = attempts.read_text().splitlines()[0]
+            assert (
+                f"stderr marker\npid={original_pid} dir={state['execution_path']}\n"
+                in prompt
+            )
         assert "ses_private_marker" not in prompt
         assert "sessionID" not in prompt
-        assert str(state["execution_path"]) not in prompt
         assert failure["execution_id"] not in prompt
         release.touch()
         service.wait_for(lambda: _disk_state(config)["phase"] == "idle")

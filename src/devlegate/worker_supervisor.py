@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Live worker process supervision and OpenCode execution."""
 
+import codecs
 import dataclasses
 import json
 import os
@@ -32,7 +33,6 @@ from devlegate.execution_containment import (
 )
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
-from devlegate.worker_activity import MAX_STDOUT_EVENT_BYTES
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerEgressParser,
@@ -299,6 +299,9 @@ def worker_environment(
     return worker_env
 
 
+MAX_STDOUT_EVENT_BYTES = 1024 * 1024  # raw JSONL framing limit
+
+
 def _observed_stdout_lines(stream, activity_handler):
     """Observe bytes as they arrive, while retaining bounded JSONL framing."""
     read = getattr(stream, "read1", stream.read)
@@ -344,7 +347,7 @@ def _run_opencode(
     owner_poll: Callable[[], None] | None = None,
     stall_poll: StallPoll | None = None,
     activity_handler: Callable[[str, bytes], None] | None = None,
-    decoded_stdout_handler: Callable[[str], None] | None = None,
+    rendered_output_handler: Callable[[str, str], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -385,12 +388,18 @@ def _run_opencode(
     prompt_error: str | None = None
     log_error: str | None = None
 
-    def write(text: str, stream) -> None:
-        nonlocal log_error
+    def write(text: str, stream: str) -> None:
+        nonlocal log_error, rendered_output_handler
         with output_lock:
             rendered = _render_worker_text(text)
             if not rendered:
                 return
+            if rendered_output_handler is not None:
+                try:
+                    rendered_output_handler(stream, rendered)
+                except Exception:
+                    rendered_output_handler = None
+                    _log("worker recovery excerpt capture unavailable")
             if execution_log is not None:
                 try:
                     execution_log.write(rendered)
@@ -403,16 +412,12 @@ def _run_opencode(
                             pass
                     return
             if show_worker_output:
-                _write_rendered_worker_text(rendered, stream)
+                _write_rendered_worker_text(
+                    rendered, sys.stdout if stream == "stdout" else sys.stderr,
+                )
 
     def write_stdout(text: str) -> None:
-        nonlocal activity_error
-        if decoded_stdout_handler is not None:
-            try:
-                decoded_stdout_handler(text)
-            except Exception as error:
-                activity_error = f"worker output observation failed: {error}"
-        write(text, sys.stdout)
+        write(text, "stdout")
 
     def observe_activity(stream: str, data: bytes) -> None:
         nonlocal activity_error
@@ -490,9 +495,11 @@ def _run_opencode(
     def consume_stderr() -> None:
         assert process.stderr is not None
         read = getattr(process.stderr, "read1", process.stderr.read)
+        decode = codecs.getincrementaldecoder("utf-8")(errors="replace").decode
         while raw_chunk := read(4096):
             observe_activity("stderr", raw_chunk)
-            write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
+            write(decode(raw_chunk), "stderr")
+        write(decode(b"", final=True), "stderr")
 
     stdout_thread = threading.Thread(target=consume_stdout, daemon=True)
     stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
@@ -830,7 +837,7 @@ class WorkerSupervisor:
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
         activity_handler: Callable[[str, bytes], None] | None = None,
-        decoded_stdout_handler: Callable[[str], None] | None = None,
+        rendered_output_handler: Callable[[str, str], None] | None = None,
         stall_poll: StallPoll | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
@@ -957,7 +964,7 @@ export default tool({
                 containment=containment,
                 owner_poll=evidence.poll if evidence is not None else owner_poll,
                 activity_handler=activity_handler,
-                decoded_stdout_handler=decoded_stdout_handler,
+                rendered_output_handler=rendered_output_handler,
                 stall_poll=stall_poll,
             )
             claim, egress_error = parser.finish()
