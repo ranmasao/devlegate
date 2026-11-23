@@ -193,7 +193,12 @@ from devlegate.tickets import (
     load_ticket_store,
     validate_workflow_transition,
 )
-from devlegate.worker_activity import WorkerActivity
+from devlegate.worker_activity import (
+    WatchdogPolicy,
+    WorkerActivity,
+    project_stall_output,
+    render_stall_context,
+)
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
@@ -208,6 +213,7 @@ from devlegate.worker_supervisor import (
     WorkerProcessIdentity,
     WorkerSupervisionError,
     WorkerSupervisor,
+    observe_worker_identity,
 )
 
 
@@ -787,6 +793,13 @@ class ServiceEngine:
         self.done_path = setting("DONE_PATH", "kanban/done")
         self.abandoned_path = setting("ABANDONED_PATH", "kanban/abandoned")
         self.poll_interval = setting("POLL_INTERVAL", "300") or "300"
+        try:
+            self._watchdog_policy = WatchdogPolicy.parse(
+                setting("WORKER_IDLE_WARNING_SECONDS", "300"),
+                setting("WORKER_IDLE_RECOVERY_SECONDS", "600"),
+            )
+        except ValueError as error:
+            raise DevlegateError(str(error)) from error
         self.opencode_bin = setting("OPENCODE_BIN", "opencode")
         self.opencode_model = setting("OPENCODE_MODEL", "")
         self.opencode_agent = setting("OPENCODE_AGENT", "")
@@ -848,6 +861,7 @@ class ServiceEngine:
         self._snapshot_lock = threading.Lock()
         self._published_status_snapshot: StatusSnapshot | None = None
         self._published_live_execution: dict[str, object] | None = None
+        self._watchdog_view: tuple[str, WorkerActivity | None] | None = None
         self._published_retry_candidates: tuple[dict[str, str], ...] = ()
         self._published_drop_candidates: tuple[dict[str, str], ...] = ()
         self._automatic_drop_recovery_execution: str | None = None
@@ -1039,11 +1053,26 @@ class ServiceEngine:
         with self._snapshot_lock:
             snapshot = self._published_status_snapshot
             live_execution = self._published_live_execution
+            watchdog = self._watchdog_view
         if snapshot is None:
             raise DevlegateError("service status view is not ready")
         result = snapshot.as_dict()
         if live_execution is not None:
             result["live_execution"] = dict(live_execution)
+        if watchdog is not None and watchdog[0] == snapshot.execution_id:
+            if watchdog[1] is None:
+                result["worker_liveness"] = {"state": "stalled/recovering"}
+            elif snapshot.execution_stage == "worker-running":
+                activity = watchdog[1].snapshot()
+                if activity is not None:
+                    idle = activity[0]
+                    result["worker_liveness"] = {
+                        "state": (
+                            "idle/warning" if idle >= self._watchdog_policy.warning
+                            else "recently active"
+                        ),
+                        "idle_seconds": round(idle, 1),
+                    }
         return result
 
     def published_retry_candidates_view(self) -> tuple[dict[str, str], ...]:
@@ -4964,6 +4993,7 @@ class ServiceEngine:
                 review_source=review_source,
                 historical_review=isinstance(rework, dict)
                 and rework.get("amended_continuation") is True,
+                recovery_context=self._worker_recovery_context(workspace),
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)
@@ -5029,7 +5059,10 @@ class ServiceEngine:
         self._refresh_published_status()
         worker_returned = False
         activity = WorkerActivity()
+        with self._snapshot_lock:
+            self._watchdog_view = (execution_id, activity)
         warning_generation: int | None = None
+        policy = self._watchdog_policy
 
         def poll_worker_activity() -> None:
             nonlocal warning_generation
@@ -5037,9 +5070,59 @@ class ServiceEngine:
             snapshot = activity.snapshot()
             if snapshot is not None:
                 idle, generation = snapshot
-                if idle >= 300 and generation != warning_generation:
+                if idle >= policy.warning and generation != warning_generation:
                     _log(f"worker output has been idle for {int(idle)} seconds")
                     warning_generation = generation
+
+        def poll_stall(identity: WorkerProcessIdentity, eligible) -> bool:
+            snapshot = activity.snapshot()
+            if snapshot is None or snapshot[0] < policy.recovery:
+                return False
+            if self._stop_before_admission() or not eligible():
+                return False
+            try:
+                self._require_execution_generation(clean=False, remote=False)
+                binding = self._execution_generation_binding()
+                launch = self._workers.launch_evidence(execution_id)
+                if (
+                    not isinstance(launch, dict)
+                    or launch.get("containment") != identity.containment_id
+                    or binding.operation_receipt("worker").get("identity")
+                    != identity.as_dict()
+                ):
+                    return False
+                stamp = self._workers.containment_stamp(launch)
+                if stamp is None:
+                    return False
+            except (ContainmentError, ExecutionWorkspaceError, DevlegateError, OSError):
+                return False
+
+            def persist(evidence: dict) -> bool:
+                with self._operator_command_lock, self._lifecycle_lock:
+                    if (
+                        self._stop_before_admission()
+                        or self._operator_command is not None
+                        or self._state_write_uncertain
+                        or self._state.get("execution_stage") != "worker-running"
+                        or self._state.get("execution_id") != execution_id
+                        or self._state.get("worker_identity") != identity.as_dict()
+                        or self._state.get("execution_interruption_kind") is not None
+                        or self._workers.containment_stamp(launch) != stamp
+                        or not eligible()
+                    ):
+                        return False
+                    binding.record_worker_stall({
+                        **evidence, "launch": launch, "containment_stamp": stamp,
+                        "reason": "worker_stalled",
+                    })
+                    self._save_state(
+                        "agent_running", execution_interruption_kind="worker_stalled",
+                    )
+                    with self._snapshot_lock:
+                        self._watchdog_view = (execution_id, None)
+                    return True
+
+            return activity.classify(snapshot[1], policy.recovery, persist)
 
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
@@ -5054,6 +5137,7 @@ class ServiceEngine:
                     execution_id=execution_id,
                     stop_request=ResetStop(self, selected_ticket.id),
                     owner_poll=poll_worker_activity,
+                    stall_poll=poll_stall,
                     activity_handler=activity.observe,
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
@@ -5078,6 +5162,9 @@ class ServiceEngine:
             worker_returned = True
         finally:
             activity.close()
+            with self._snapshot_lock:
+                if self._state.get("execution_interruption_kind") != "worker_stalled":
+                    self._watchdog_view = None
             if worker_returned and worker_run.worker_group_retired:
                 binding = self._execution_generation_binding()
                 if binding.operation_pending("worker"):
@@ -5147,6 +5234,10 @@ class ServiceEngine:
         ):
             # The durable cancellation wins even if worker completion raced the
             # signal. Never checkpoint or publish the discarded attempt.
+            return 0
+        if worker_run.interruption_kind == "worker_stalled":
+            # Leave the retired attempt at the ordinary interrupted-worker
+            # recovery boundary. The scheduler's next pass owns admission.
             return 0
         try:
             self._require_execution_generation(clean=False, remote=True)
@@ -10262,6 +10353,15 @@ class ServiceEngine:
                             lifecycle="blocked" if workflow_blocked else "ready"
                         )
                     return status
+                if (
+                    not status and not workflow_blocked
+                    and self._state.get("phase") == "agent_running"
+                    and self._state.get("execution_stage") == "post-worker"
+                    and self._state.get("execution_interruption_kind")
+                    == "worker_stalled"
+                    and not self._stop_before_admission()
+                ):
+                    continue
                 if stop_event is not None:
                     if self._wait_for_service_event(
                         stop_event, int(self.poll_interval)
@@ -10813,7 +10913,7 @@ class ServiceEngine:
 
             with EvidenceSocket(bundle, workspace.path / "read.sock") as evidence:
                 persist(stage="running", launch_evidence=(
-                    self._workers.analysis_launch_evidence(value["execution_id"])
+                    self._workers.launch_evidence(value["execution_id"])
                 ))
                 self._publish_service_snapshot(lifecycle="worker", worker_running=True)
                 try:
@@ -12306,7 +12406,14 @@ class ServiceEngine:
             self._finish_integrated_workspace_cleanup()
 
     def recovery_worker_observation(self, identity) -> str:
-        return self._workers.observe(identity)
+        observation = self._workers.observe(identity)
+        if (
+            observation == "absent"
+            and self._state.get("execution_interruption_kind") == "worker_stalled"
+            and observe_worker_identity(identity, exact_leader=True) != "absent"
+        ):
+            return "indeterminate"
+        return observation
 
     @staticmethod
     def recovery_worker_identity(value: object, execution_id: object):
@@ -12811,14 +12918,93 @@ class ServiceEngine:
             _log(f"reconciliation resolved for {ticket_id}; resume required")
             return 0
 
+    def _worker_recovery_context(self, workspace: ExecutionWorkspace) -> str | None:
+        failures = self._state.get("failed_executions", {})
+        failure = (
+            failures.get(workspace.ticket_id) if isinstance(failures, dict) else None
+        )
+        intent = self._state.get("execution_resource_binding")
+        if not isinstance(failure, dict) or failure.get("interruption_kind") != (
+            "worker_stalled"
+        ) or not isinstance(intent, dict):
+            return None
+        predecessor = intent.get("predecessor_execution")
+        if not isinstance(predecessor, str) or predecessor != failure.get(
+            "execution_id"
+        ):
+            return None
+        manager = ExecutionWorkspaceManager(
+            self.repo, self.execution_worktree_root, workspace.ticket_id,
+            runner=self._git_runtime,
+        )
+        old = ResourceBinding.for_execution(manager, predecessor)
+        if old.intent["generation"] != intent.get("predecessor_generation"):
+            raise DevlegateError("worker stall predecessor generation differs")
+        evidence = old.worker_stall_evidence()
+        identity = old.operation_receipt("worker")["identity"]
+        output = project_stall_output(evidence, (
+            predecessor, str(identity["pid"]), str(identity["pgid"]),
+            str(identity["sid"]), str(evidence["launch"]["root"]),
+            str(self.state_dir), str(workspace.path), str(old.intent["generation"]),
+            str(identity.get("boot_id", "")), self._state_key,
+            str(identity.get("containment_id", "")),
+        ))
+        status = self._git_runtime(
+            workspace.path, "-c", "core.quotePath=true", "status", "--porcelain=v1",
+            "--no-renames", "--untracked-files=all", "--ignore-submodules=none",
+        ).stdout
+        return render_stall_context(status, output)
+
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         try:
+            stalled = self._state.get("execution_interruption_kind") == "worker_stalled"
+            if stalled and self._state.get("execution_resource_binding") is None:
+                raise ValueError("worker stall resource binding is missing")
             if self._state.get("execution_resource_binding") is not None:
                 self._require_execution_generation(clean=False, remote=False)
-                self._execution_generation_binding().operation_receipt("worker")
+                binding = self._execution_generation_binding()
+                receipt = binding.operation_receipt("worker")
+                if stalled:
+                    evidence = binding.worker_stall_evidence()
+                    identity = self.recovery_worker_identity(
+                        receipt.get("identity"), self._state.get("execution_id"),
+                    )
+                    launch = evidence.get("launch")
+                    if (
+                        identity is None
+                        or not isinstance(launch, dict)
+                        or launch.get("containment") != identity.containment_id
+                        or launch != self._workers.launch_evidence(
+                            identity.execution_id
+                        )
+                    ):
+                        raise ValueError("worker stall containment binding differs")
+                    stamp = evidence.get("containment_stamp")
+                    current_stamp = self._workers.containment_stamp(launch)
+                    if (
+                        not isinstance(stamp, list)
+                        or len(stamp) != 2
+                        or not all(type(item) is int for item in stamp)
+                        or (current_stamp is not None and current_stamp != stamp)
+                        or (current_stamp is None and self._workers.observe(identity)
+                            != "absent")
+                    ):
+                        raise ValueError("worker stall containment identity differs")
+                    if self._state.get("execution_stage") != "post-worker" and (
+                        self._state.get("worker_identity") != identity.as_dict()
+                    ):
+                        raise ValueError("worker stall process binding differs")
+                    if self._state.get("execution_stage") == "post-worker" and (
+                        self.recovery_worker_observation(identity) != "absent"
+                    ):
+                        raise ValueError("worker stall retirement is no longer proven")
+                    with self._snapshot_lock:
+                        self._watchdog_view = (identity.execution_id, None)
             return recover_stranded_execution(self, self._state)
-        except (ValueError, ExecutionWorkspaceError, OSError) as error:
+        except (
+            ValueError, ContainmentError, ExecutionWorkspaceError, OSError,
+        ) as error:
             raise DevlegateError(str(error)) from error
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
@@ -12997,6 +13183,8 @@ class ServiceEngine:
             interrupted_execution_id=state["execution_id"],
             failed_executions=failures,
         )
+        with self._snapshot_lock:
+            self._watchdog_view = None
         self._publish_service_snapshot(lifecycle="ready", worker_running=False)
         self._refresh_published_status()
 

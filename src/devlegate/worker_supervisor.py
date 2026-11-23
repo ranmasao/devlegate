@@ -107,17 +107,29 @@ def _worker_group_exists(pgid: int) -> bool:
     return True
 
 
-def observe_worker_identity(identity: WorkerProcessIdentity) -> str:
+def observe_worker_identity(
+    identity: WorkerProcessIdentity, *, exact_leader: bool = False,
+) -> str:
     """Classify recorded worker ownership without mutating runtime state."""
     if os.name != "posix" or not sys.platform.startswith("linux"):
         return "indeterminate"
     try:
-        if _linux_boot_id() != identity.boot_id:
-            return "absent"
+        boot = _linux_boot_id()
+    except OSError:
+        return "indeterminate"
+    if not boot:
+        return "indeterminate"
+    if boot != identity.boot_id:
+        return "absent"
+    try:
         current_start = _linux_process_start_time(identity.pid)
     except WorkerSupervisionError:
         return "indeterminate"
-    except OSError:
+    except OSError as error:
+        if exact_leader:
+            # This is additional leader evidence, never a replacement for
+            # observing the exact containment and any remaining descendants.
+            return "absent" if isinstance(error, FileNotFoundError) else "indeterminate"
         # Legacy identities have no kernel ownership boundary to inspect.
         # A surviving group keeps recovery conservative; an absent group is
         # enough to classify the recorded leader as gone.
@@ -311,6 +323,9 @@ def _observed_stdout_lines(stream, activity_handler):
         yield bytes(pending)
 
 
+StallPoll = Callable[[WorkerProcessIdentity, Callable[[], bool]], bool]
+
+
 def _run_opencode(
     command: list[str],
     prompt: str,
@@ -328,6 +343,7 @@ def _run_opencode(
     prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
     owner_poll: Callable[[], None] | None = None,
+    stall_poll: StallPoll | None = None,
     activity_handler: Callable[[str, bytes], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
@@ -552,16 +568,14 @@ def _run_opencode(
         return returncode
 
     identity_error: str | None = None
+    identity = None
     if worker_identity_handler is not None and execution_id is not None:
         if process.poll() is None:
             try:
-                worker_identity_handler(
-                    _capture_worker_identity(
-                        process,
-                        execution_id,
-                        getattr(containment, "identity", None),
-                    )
+                identity = _capture_worker_identity(
+                    process, execution_id, getattr(containment, "identity", None),
                 )
+                worker_identity_handler(identity)
                 acknowledge_identity = getattr(
                     containment, "acknowledge_identity", None
                 )
@@ -576,9 +590,23 @@ def _run_opencode(
                     except (OSError, ProcessLookupError):
                         pass
 
+    def eligible_for_stall() -> bool:
+        descendants = getattr(containment, "has_owned_descendants", None)
+        return (
+            identity is not None
+            and identity.containment_id is not None
+            and activity_error is None
+            and getattr(containment, "recursive_kill", True)
+            and getattr(stop_request, "kind", None) is None
+            and descendants is not None
+            and descendants(identity.pid) is False
+            and process.poll() is None
+            and observe_worker_identity(identity) == "matching-live"
+        )
+
     if identity_error is not None:
         returncode = finish_interrupted()
-    elif stop_request is None and owner_poll is None:
+    elif stop_request is None and owner_poll is None and stall_poll is None:
         try:
             returncode = _wait_process(process)
         except KeyboardInterrupt:
@@ -609,6 +637,20 @@ def _run_opencode(
                 transport_error = f"owner evidence channel failed: {error}"
                 interrupt("operator_abort")
                 returncode = finish_interrupted()
+                break
+            # Outside the ordinary interruption error handler: a failed
+            # write-ahead classification must never cause a fallback signal.
+            if stall_poll is not None and identity is not None and stall_poll(
+                identity, eligible_for_stall,
+            ):
+                interruption_kind = "worker_stalled"
+                # Use only the exact containment, never a numeric group signal.
+                containment.force_terminate()
+                try:
+                    returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    returncode = -1
+                    transport_error = "stalled worker did not exit after retirement"
                 break
     join_timeout = WORKER_TERMINATION_TIMEOUT if interruption_kind is not None else None
     stdout_thread.join(join_timeout)
@@ -645,6 +687,11 @@ def _run_opencode(
             group_retired = containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
         except (ContainmentError, OSError):
             group_retired = False
+    if interruption_kind == "worker_stalled":
+        group_retired = group_retired and process.poll() is not None and not any(
+            thread.is_alive()
+            for thread in (stdout_thread, stderr_thread, prompt_thread)
+        )
     if not group_retired:
         detail = getattr(containment, "diagnostics", lambda: "")()
         populated_error = "execution cgroup remains populated"
@@ -711,9 +758,15 @@ class WorkerSupervisor:
         with self._lock:
             return execution_id in self._active
 
-    def analysis_launch_evidence(self, execution_id: str):
+    def launch_evidence(self, execution_id: str):
         capture = getattr(self.containment_provider, "launch_evidence", None)
         return capture(execution_id) if capture is not None else None
+
+    def containment_stamp(self, launch: dict) -> list[int] | None:
+        capture = getattr(self.containment_provider, "boundary_stamp", None)
+        if capture is None:
+            raise ContainmentError("worker containment identity is unavailable")
+        return capture(launch)
 
     def recover_analysis(self, execution_id: str, evidence, identity, *, terminate):
         """Bounded recovery; no process launch and no guessed semantic result."""
@@ -768,6 +821,7 @@ class WorkerSupervisor:
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
         activity_handler: Callable[[str, bytes], None] | None = None,
+        stall_poll: StallPoll | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -893,6 +947,7 @@ export default tool({
                 containment=containment,
                 owner_poll=evidence.poll if evidence is not None else owner_poll,
                 activity_handler=activity_handler,
+                stall_poll=stall_poll,
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:

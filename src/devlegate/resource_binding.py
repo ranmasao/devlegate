@@ -516,6 +516,30 @@ class ResourceBinding:
             {"generation": self.intent["generation"], "worker": receipt},
         )
 
+    def record_worker_stall(self, evidence: dict) -> None:
+        receipt = self.operation_receipt("worker")
+        _write_once(
+            self.directory / f"worker-stall.{receipt['sequence']:08d}.json",
+            {"worker": receipt, "evidence": evidence},
+        )
+
+    def worker_stall_evidence(self) -> dict:
+        receipt = self.operation_receipt("worker")
+        try:
+            observed = _read(
+                self.directory / f"worker-stall.{receipt['sequence']:08d}.json"
+            )
+        except FileNotFoundError as error:
+            raise UnprovenResource("worker stall evidence is missing") from error
+        evidence = observed.get("evidence")
+        if (
+            observed.get("worker") != receipt
+            or not isinstance(evidence, dict)
+            or evidence.get("reason") != "worker_stalled"
+        ):
+            raise UnprovenResource("worker stall evidence differs from handoff")
+        return evidence
+
     def require_worker_retirement(self) -> None:
         receipt = self.operation_receipt("worker")
         try:
