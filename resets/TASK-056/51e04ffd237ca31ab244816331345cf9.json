@@ -1,0 +1,29 @@
+{
+  "cancelled_execution": "a527053002ec41a79030f3875a4fd3b7",
+  "disposition": "reset; prior attempt is not a continuation",
+  "operation_id": "51e04ffd237ca31ab244816331345cf9",
+  "prior_reports": [
+    "02b3652bd23c45a4993bd21699ba899b",
+    "0cef36a14dab497eacbd0b1ab67efb81",
+    "1079c1444543484a8a277bf72be87d37",
+    "1df70a52e01e488d9fb94ffda05f4e4c",
+    "253df4c2d9824cedbe131541fa54748f",
+    "2658b364d28c4681a8d3d6d90f990ebf",
+    "3c546ca6e0f244a29c6cdb9e77ba6429",
+    "59f1ae87b2e645479743e61db49a8ae3",
+    "5b0181480ced4d84bc93d2dad1736930",
+    "62a1ed806ac94af4b789b66b1a23b3c6",
+    "8c0149a6f2f847379161b6d94693c149",
+    "971340e8c455414496eb2fad233d2b0e",
+    "97ac4268d4ef4815896fdb5e99399871",
+    "a527053002ec41a79030f3875a4fd3b7",
+    "a7665649811340edbb17985cb1daadcb",
+    "b50f8066ad234cbdb94822c1eeadf618",
+    "d2de2839af7e4cee8519397190257176",
+    "f7fd2d4f300d435889dc6cc4c681db48"
+  ],
+  "resource_generation": "c281a3bc17b5c6436d82584f5f21a838f85597d127a3eb231b0b095e8d68dc5b",
+  "schema": "devlegate.ticket-reset.v1",
+  "ticket_blob": "b7b26e9f1c7f27d38e5d305b30dbe983f553b520",
+  "ticket_id": "TASK-056"
+}
