@@ -23,8 +23,9 @@ recovery paths inside the existing runtime.py monolith.
 Detect workers that remain process-alive but stop making observable progress,
 classify them as stalled after a bounded inactivity interval, retire the exact
 execution ownership boundary safely, preserve the current repository state and
-execution evidence, and continue with a fresh worker attempt carrying a small,
-deterministic recovery-context prompt fragment.
+execution evidence, and continue through Devlegate's shared owner-controlled interrupted-worker
+recovery and admission path, with a small deterministic recovery-context prompt
+fragment for the fresh attempt.
 
 This ticket addresses the observed failure mode where OpenCode remained alive in
 `do_epoll_wait` with an established HTTPS socket but produced no further worker
@@ -118,6 +119,60 @@ contract.
 The watchdog should expose warning/idle information before recovery, but warning
 state alone must not mutate execution state.
 
+## Shared recovery boundary (architectural correction — 2026-11-23)
+
+**This is a worker-liveness trigger for the existing recovery pipeline, not a
+second execution scheduler or a second worker-admission protocol.** The original
+post-reset implementation baseline contains the raw stdout/stderr byte-observation
+seam, not the previously discarded watchdog/recovery implementation.
+
+After a worker is proven stalled and its exact ownership boundary is retired,
+the subsequent lifecycle must converge on Devlegate's existing stranded-worker
+recovery, interrupted-execution normalization and `automatic_resume` admission,
+or on a shared refactoring with equivalent ordinary process-loss semantics:
+
+- **Watchdog-specific responsibility:** observe raw stdout/stderr activity,
+  apply warning/recovery thresholds and owned-child exclusions, persist a bounded
+  `worker_stalled` reason and evidence *before* destructive retirement, and prove
+  the old worker/containment absent. Do not infer provider/network failure from
+  silence.
+- **Shared responsibility:** normalize the ended attempt as interrupted,
+  preserve its attribution and repository edits, determine whether continuation
+  is safe, and admit a fresh worker using the same owner authority, worktree,
+  resource-generation and restart rules as ordinary interrupted execution.
+- The existing `recover_stranded_execution()` /
+  `_normalize_stranded_execution()` / `automatic_resume` flow is the starting
+  point. Where that shared flow currently rejects `stalled_recovery`, does not
+  recognize the `worker_stalled` interruption reason, or cannot safely preserve
+  dirty/uncommitted work and its provenance, adapt **the shared boundary** rather
+  than layering a new stall-only successor transaction around it. Reuse existing
+  generation and worker-operation receipts, not an ad hoc PID check.
+- **Do not substitute unrelated ordinary/zero-delta `automatic_retry`.**
+  That path has different admission conditions and is not a proof of safe
+  continuation of an interrupted worker with in-progress changes.
+- Do not add a watchdog-specific durable successor-ID allocation protocol,
+  parallel replacement state machine or separate exactly-once execution
+  guarantee. The required safety guarantee is **at most one active worker**
+  owning the task and no overlap with the proven old containment. Repeating
+  arbitrary externally visible worker operations can never be generally ruled
+  out by the orchestrator alone.
+- In the normal live-stall case with complete, trusted retirement evidence,
+  continuation is automatic through shared recovery. On service restart,
+  revalidate persisted exact ownership; resume proven-safe states by that same
+  shared path, and **fail closed** where existing generic admission/recovery
+  cannot prove an unambiguous outcome. Do not turn a fail-closed uncertainty
+  into guessed worker absence, silent successful completion or a second
+  concurrent execution.
+- An execution still awaiting retirement must never reach shared admission.
+  Existing operator stop/reset/process-loss priorities and safeguards remain
+  authoritative. The watchdog must not indiscriminately convert an
+  operator-requested stop into `worker_stalled`.
+
+If a reproducible general resource/admission replay defect also affects ordinary
+process-loss recovery, fix that **shared defect** at its owning boundary when
+needed to satisfy this ticket's proven-safe continuation case. Do not build a
+separate watchdog replacement engine to work around it.
+
 ## Stalled recovery
 
 When recovery threshold is reached and the worker is eligible for inactivity
@@ -129,7 +184,9 @@ classification:
    TASK-055;
 4. preserve the current repository/workspace state;
 5. preserve the previous attempt's execution evidence and lifecycle reason;
-6. create/start a fresh worker attempt against the preserved current state;
+6. once retirement is proven, enter the shared stranded-worker normalization
+   and `automatic_resume` admission path for a fresh worker against the preserved
+   current state; never skip the shared generation/workspace admission checks;
 7. attach a deterministic recovery-context prompt fragment to the normal worker
    startup prompt and ticket context;
 8. never allow the old and replacement workers to run concurrently.
@@ -141,7 +198,9 @@ reason equivalent to:
 
     worker_stalled
 
-The replacement attempt must be attributable to watchdog recovery.
+The replacement attempt must be attributable to watchdog recovery through
+existing execution provenance; attribution does not require a new independent
+scheduler, retry protocol or successor transaction.
 
 ## Internal diagnostics
 
@@ -269,8 +328,12 @@ Required invariants:
   must resume or fail closed from durable state;
 - already completed workers must never be restarted by stale watchdog state.
 
-Reuse existing lifecycle/recovery mechanisms instead of creating a parallel state
-machine where possible.
+Use the shared lifecycle/recovery mechanisms described above, **not** a parallel
+stall-specific successor state machine. Proven-safe live and restarted states
+must proceed through the ordinary automatic-resume admission. Unproven state may
+remain blocked for operator reconciliation; it must never launch a speculative
+second worker. The orchestrator guarantees no concurrent owned workers, not
+exactly-once execution of arbitrary agent actions.
 
 ## Acceptance criteria
 
@@ -293,7 +356,12 @@ machine where possible.
   metadata, internal paths, sandbox/worktree implementation details, or cgroup
   state.
 - Bounded stdout/stderr tail and relative changed-path evidence are reproducible.
-- Service restart during watchdog recovery does not duplicate work.
+- Service restart during watchdog recovery does not admit overlapping workers,
+  revive a provably completed worker, or lose the stalled-attempt attribution;
+  ambiguous ownership/replay is allowed to fail closed, not to guess success.
+- Proven-safe recovery reuses the shared interrupted-execution normalization and
+  `automatic_resume` path; no separate stall-specific successor-admission
+  state machine or unrelated zero-delta retry is introduced.
 - Existing worker interruption, retry, process-loss, forced-stop, and lifecycle
   semantics remain green.
 - Full authoritative CI and Ruff are green.
@@ -309,8 +377,11 @@ At minimum:
 5. output arriving just before timeout cancels stale firing;
 6. quiet worker with active owned child/tool is not agent-idle timed out;
 7. normal worker completion cancels watchdog;
-8. replacement begins only after old ownership boundary is retired;
-9. watchdog cannot create two concurrent replacements;
+8. with old ownership proven retired, normal live-stall recovery reaches the
+   existing shared normalization and automatic-resume path and admits a new
+   worker against the preserved task workspace;
+9. watchdog recovery cannot create overlapping old/replacement workers or two
+   concurrent replacements, including a service restart;
 10. stalled reason is durably attributable to the previous attempt;
 11. existing changed files survive into replacement attempt;
 12. changed-path list is relative, deterministic, and bounded;
@@ -324,7 +395,14 @@ At minimum:
 18. completed execution is not revived by stale watchdog state;
 19. operator status exposes idle/warning state without asserting an unproven root
     cause;
-20. previous worker lifecycle/recovery regressions remain green.
+20. previous worker lifecycle/recovery regressions remain green;
+21. a proven-safe restarted stall converges on shared recovery, while missing or
+    mismatched generation/containment evidence fails closed without new admission;
+22. changes already made in the task worktree, including modified tracked and
+    untracked files, remain available to the continued worker; generic recovery
+    must not silently clean or overwrite them;
+23. shared `automatic_resume` remains correct for ordinary process loss and
+    operator-approved interruptions, with distinct `worker_stalled` attribution.
 
 ## Non-goals
 
@@ -336,7 +414,9 @@ This ticket does not:
 - add LLM-generated recovery summaries;
 - expose orchestrator internals to workers;
 - replace TASK-055 process-ownership work;
-- introduce a general plugin system.
+- introduce a general plugin system;
+- create a second stalled-worker-specific replacement scheduler, durable successor
+  authorization protocol or exactly-once guarantee for arbitrary agent effects.
 
 The recovery prompt fragment is a built-in lifecycle/context component of the
 worker prompt system, not a separately installed plugin.
