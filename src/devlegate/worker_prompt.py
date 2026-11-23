@@ -26,6 +26,7 @@ class WorkerPromptInput:
     review_feedback: str | None = None
     review_source: str | None = None
     historical_review: bool = False
+    recovery_context: str | None = None
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -92,6 +93,8 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         sections.append((title, f"Source: {source}\n\n{context}{feedback}", True))
     elif prompt_input.directive is WorkDirective.REWORK:
         raise ValueError("rework requires verified review feedback")
+    if prompt_input.recovery_context is not None:
+        sections.append(("Recovery Context", prompt_input.recovery_context, True))
     return (
         "\n\n".join(
             f"## {title}\n{_fenced_content(value) if untrusted else value}"

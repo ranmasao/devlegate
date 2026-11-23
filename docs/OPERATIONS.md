@@ -223,6 +223,21 @@ operational output rather than machine-readable documents.
 
 ## Recovery And Lifecycle
 
+`devlegate status` shows the age of the worker's last observed stdout or stderr
+output. The machine-local `.env` settings `WORKER_IDLE_WARNING_SECONDS` (default
+300) and `WORKER_IDLE_RECOVERY_SECONDS` (default 600) must be positive, finite,
+and ordered. The warning does not interrupt work. When the recovery threshold
+is reached, the owner can retire a still-live worker only if its exact ownership
+is proven and it has no active owned child processes. Output silence alone does
+not identify the cause of the stall.
+
+After proven retirement, ordinary interrupted-worker recovery can resume the
+ticket with its current repository changes. The continuation prompt contains
+relative changed paths and bounded output excerpts; private diagnostics stay
+with the previous attempt. If recovery cannot prove ownership or retirement
+after a service restart, it blocks admission rather than starting a second
+worker.
+
 An admission timeout is a coordination wait, not a maximum response time. A
 request still queued at expiry is removed and reported not admitted. A published
 admission result is returned; a claimed request without a published result has
