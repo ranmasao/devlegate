@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "completed",
+  "control_head": "7681d1efc2f386accf44877992f401db29086ecf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "f3a14ca492854df2ac54b7c7799172af",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "a2abd4ef14592a1192aff2cdbb0e13ad95281b62813cb7d0e8d745126e02aada",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "The live worker watchdog reports idle warnings, records `worker_stalled` before retiring the exact owned containment, and resumes through the shared interrupted-worker recovery path with repository edits preserved. The replacement receives bounded, deterministic recovery context, and restart recovery fails closed when containment or workspace generation evidence cannot be verified."
+  },
+  "workspace_head": "564098b492d370ee94fc90bcfa2375ce3d373e2a"
+}
