@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "completed",
+  "control_head": "725bad32f2377b37b46383c74590e4330443de30",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "2fa4da42eb3246e283247fc4174946f1",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "6ee0863ecd0ad18b2c9d374c3d2bf735c662af17bff1a02373b5cbf3871a4b94",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "The watchdog now stores tiny, deterministic excerpts of rendered stdout and stderr separately from raw-byte activity tracking. Recovery prompts preserve worker-authored technical details as fenced data, omit protocol and service metadata by source, and still support shared automatic resume when no excerpt is available."
+  },
+  "workspace_head": "ca29dc301e09993a033b00fd6467b36eb375385f"
+}
