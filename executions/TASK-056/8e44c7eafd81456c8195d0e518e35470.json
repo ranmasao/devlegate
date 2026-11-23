@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "def264e5f0ab3c8eaac897692274ee0725d77b59",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "8e44c7eafd81456c8195d0e518e35470",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-authorized watchdog integration in runtime._run_iteration_body and worker_supervisor, including exact owned-descendant observation, activity and stop precedence rechecks, and durable stall evidence before signaling.",
+    "Route proven retirement through shared stranded-worker normalization and automatic_resume, preserving dirty workspace changes and attaching bounded deterministic recovery context.",
+    "Add live owner/worker, child-exclusion, race and restart regressions, operator status and configurable policy; run the required focused tests, lint and diff checks."
+  ],
+  "report_artifact": "executions/TASK-056/8e44c7eafd81456c8195d0e518e35470.md",
+  "report_sha256": "42396e941028e05277649feaae125f9e5700abdec0fda71f8154a07d1d3a0d5a",
+  "resource_generation": "8cd3f2e882c771978cc84b0370404c8072ff1568fa6540bfa5b26a47d8985340",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-authorized watchdog integration in runtime._run_iteration_body and worker_supervisor, including exact owned-descendant observation, activity and stop precedence rechecks, and durable stall evidence before signaling.",
+      "Route proven retirement through shared stranded-worker normalization and automatic_resume, preserving dirty workspace changes and attaching bounded deterministic recovery context.",
+      "Add live owner/worker, child-exclusion, race and restart regressions, operator status and configurable policy; run the required focused tests, lint and diff checks."
+    ],
+    "report": "The invocation reached its available execution resource limit before a safe end-to-end implementation could be completed. No code was changed: the existing supervisor signals before persisting interruptions, so directly connecting the timeout to it would violate the required safety ordering.",
+    "summary": "Inspected the retained worker activity, containment, interruption, and shared recovery boundaries."
+  },
+  "workspace_head": "d7335b0650c7dfc3914b776f61d174f6cc082ab2"
+}
