@@ -1,7 +1,7 @@
 ---
 "type": "devlegate.ticket"
 "title": "Add worker inactivity watchdog with deterministic recovery context"
-"depends_on": ["TASK-055", "TASK-061"]
+"depends_on": ["TASK-055", "TASK-061", "TASK-154", "TASK-184"]
 ---
 
 ## Milestone
@@ -9,6 +9,15 @@
 Devlegate 0.5.7 — worker liveness and autonomous recovery hardening.
 
 ## Scheduling
+
+**Curator deferral — current 0.5.8 iteration:** Keep this ticket in backlog until
+TASK-154 (Change Explorer) and TASK-184 (Ticket Blackboard) are both done and the
+curator explicitly schedules it. Preserve the existing implementation checkpoint.
+Before readmission, reassess the recovery-context requirements against those
+integrated facilities; favor the minimal raw-byte watchdog and existing shared
+automatic_resume, and remove redundant context machinery if no longer needed.
+The present behavior specification is retained for that future reassessment; this
+scheduling amendment does not authorize immediate implementation.
 
 Deferred from 0.5.6 to 0.5.7. Do not schedule TASK-056 on the 0.5.6
 release line. TASK-055 (execution ownership boundary) is already completed;
