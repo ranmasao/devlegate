@@ -1057,8 +1057,9 @@ def test_real_service_worker_launch_restart_stays_fail_closed(git_fixture, monke
     finally:
         service.stop()
 
+@pytest.mark.parametrize("interruption", [None, "worker_stalled"])
 def test_real_service_matching_live_worker_restart_does_not_duplicate(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, interruption
 ):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "live-worker.py"
@@ -1088,15 +1089,24 @@ def test_real_service_matching_live_worker_restart_does_not_duplicate(
         )
         identity = _disk_state(config)["worker_identity"]
         service.kill()
+        if interruption is not None:
+            store = ServiceEngine(config)._runtime_store
+            state = store.load()
+            state["execution_interruption_kind"] = interruption
+            store.replace(state)
         service.restart()
         service.wait_for(lambda: service.cli("status", "--json").returncode == 1)
         assert _disk_state(config)["worker_identity"] == identity
+        assert _disk_state(config).get("execution_interruption_kind") == interruption
         assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         _kill_worker_identity(identity)
         service.stop()
 
-def test_real_service_absent_worker_uses_process_loss_resume(git_fixture, monkeypatch):
+@pytest.mark.parametrize("interruption", ["process_loss", "worker_stalled"])
+def test_real_service_absent_worker_uses_process_loss_resume(
+    git_fixture, monkeypatch, interruption
+):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "absent-worker.py"
     pid_file = git_fixture["tmp"] / "absent-worker.pid"
@@ -1125,7 +1135,20 @@ def test_real_service_absent_worker_uses_process_loss_resume(git_fixture, monkey
             )
         )
         old_identity = _disk_state(config)["worker_identity"]
+        workspace = Path(_disk_state(config)["execution_path"])
+        tracked = workspace / "README.md"
+        original = tracked.read_bytes()
+        tracked.write_bytes(original + b"\ninterrupted work\n")
+        untracked = workspace / "interrupted-work.txt"
+        untracked.write_text("unfinished work\n")
         service.kill()
+        if interruption == "worker_stalled":
+            # Model a service loss after durable classification and before
+            # retirement. The real watchdog must eventually write this state.
+            store = ServiceEngine(config)._runtime_store
+            state = store.load()
+            state["execution_interruption_kind"] = interruption
+            store.replace(state)
         _kill_worker_identity(old_identity)
         pid_file.unlink(missing_ok=True)
         service.restart()
@@ -1143,6 +1166,12 @@ def test_real_service_absent_worker_uses_process_loss_resume(git_fixture, monkey
             lambda: _worker_body_started(pid_file, new_identity, attempts, 2),
             timeout=15,
         )
+        assert Path(_disk_state(config)["execution_path"]) == workspace
+        assert tracked.read_bytes() == original + b"\ninterrupted work\n"
+        assert untracked.read_text() == "unfinished work\n"
+        failure = _disk_state(config)["failed_executions"]["T-1"]
+        assert failure["execution_id"] == old_identity["execution_id"]
+        assert failure["interruption_kind"] == interruption
     finally:
         _kill_worker_identity(old_identity)
         _kill_worker_identity(new_identity)
