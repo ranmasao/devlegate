@@ -1208,7 +1208,15 @@ def test_real_service_live_watchdog_retires_before_resuming(
         "if not untracked.exists():\n"
         "    tracked.write_text(tracked.read_text() + '\\nwork in progress\\n')\n"
         "    untracked.write_text(str(os.getpid()))\n"
-        "    print('stdout marker', flush=True)\n"
+        "    def event(kind, part):\n"
+        "        print(json.dumps({'type': kind, 'sessionID': 'ses_private_marker',\n"
+        "                          'part': part}), flush=True)\n"
+        "    event('text', {'type': 'text', 'text': 'discard ' * 1024\n"
+        "                   + '  end of large payload  '})\n"
+        "    event('tool_use', {'type': 'tool', 'tool': 'read', 'state': {\n"
+        "        'status': 'completed', 'output': '  observed tool output  \\n'}})\n"
+        "    event('text', {'type': 'text', 'text': '  observed stdout  ',\n"
+        "                   'metadata': {'ignored': 'x' * 4096}})\n"
         "    print('stderr marker', file=sys.stderr, flush=True)\n"
         "    print(f'pid={os.getpid()} dir={os.getcwd()}',\n"
         "          file=sys.stderr, flush=True)\n"
@@ -1220,7 +1228,9 @@ def test_real_service_live_watchdog_retires_before_resuming(
         "    assert not pathlib.Path('/proc/' + untracked.read_text()).exists()\n"
         "    assert tracked.read_text().endswith('work in progress\\n')\n"
         "    assert result.with_suffix('.child-done').exists()\n"
-        "    with result.open('x') as handle: handle.write(prompt)\n"
+        "    with result.with_suffix('.pending').open('x') as handle:\n"
+        "        handle.write(prompt)\n"
+        "    os.link(result.with_suffix('.pending'), result)\n"
         "    while not result.with_suffix('.release').exists():\n"
         "        print('continued work', file=sys.stderr, flush=True)\n"
         "        time.sleep(0.05)\n"
@@ -1246,8 +1256,8 @@ def test_real_service_live_watchdog_retires_before_resuming(
     service = LiveService(
         git_fixture["working"], config, command=_recovery_driver(config),
     )
-    service.start()
     try:
+        service.start()
         service.wait_ready()
         if restart_at in {None, "warning"}:
             def warning_visible():
@@ -1314,9 +1324,14 @@ def test_real_service_live_watchdog_retires_before_resuming(
         prompt = result.read_text().split("## Recovery Context\n", 1)[1]
         assert "without observable output" in prompt
         assert "- README.md\n- in-progress.txt\n" in prompt
-        assert "stdout marker\n" in prompt
+        assert "  end of large payload  \n" in prompt
+        assert "OpenCode tool: read\n  observed tool output  \n" in prompt
+        assert "  observed stdout  \n" in prompt
+        assert "[earlier output omitted]" in prompt
         assert "stderr marker\n" in prompt
         assert "[private output omitted]" in prompt
+        assert "ses_private_marker" not in prompt
+        assert "sessionID" not in prompt
         assert str(state["execution_path"]) not in prompt
         assert failure["execution_id"] not in prompt
         release.touch()
@@ -1328,10 +1343,7 @@ def test_real_service_live_watchdog_retires_before_resuming(
             assert "worker_liveness" not in status["execution"]
             assert len(attempts.read_text().splitlines()) == 2
     finally:
-        release.touch()
-        if not result.exists():
-            _kill_worker_identity(_disk_state(config).get("worker_identity"))
-        service.stop()
+        service.retire_tagged_processes("WATCHDOG_TEST_RESULT", str(result))
 
 def test_publisher_index_is_independent_of_active_control_commit(git_fixture):
     control = git_fixture["control"]

@@ -32,6 +32,7 @@ from devlegate.execution_containment import (
 )
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
+from devlegate.worker_activity import MAX_STDOUT_EVENT_BYTES
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerEgressParser,
@@ -236,8 +237,6 @@ def _write_worker_line(text: str, stream) -> None:
     _write_worker_text(text + ("" if text.endswith("\n") else "\n"), stream)
 
 
-# Caps raw JSONL events before decode and parsing while leaving normal events intact.
-MAX_STDOUT_EVENT_BYTES = 1024 * 1024
 WORKER_TERMINATION_TIMEOUT = 1.0
 WORKER_WAIT_INTERVAL = 0.05
 
@@ -345,6 +344,7 @@ def _run_opencode(
     owner_poll: Callable[[], None] | None = None,
     stall_poll: StallPoll | None = None,
     activity_handler: Callable[[str, bytes], None] | None = None,
+    decoded_stdout_handler: Callable[[str], None] | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -405,6 +405,15 @@ def _run_opencode(
             if show_worker_output:
                 _write_rendered_worker_text(rendered, stream)
 
+    def write_stdout(text: str) -> None:
+        nonlocal activity_error
+        if decoded_stdout_handler is not None:
+            try:
+                decoded_stdout_handler(text)
+            except Exception as error:
+                activity_error = f"worker output observation failed: {error}"
+        write(text, sys.stdout)
+
     def observe_activity(stream: str, data: bytes) -> None:
         nonlocal activity_error
         if activity_handler is not None:
@@ -449,7 +458,7 @@ def _run_opencode(
                     transport_error = "text event has no text part"
                     _log(f"OpenCode protocol error: {transport_error}")
                     continue
-                write(part["text"] + "\n", sys.stdout)
+                write_stdout(part["text"] + "\n")
             elif event_type == "tool_use":
                 part = event.get("part")
                 if (
@@ -463,20 +472,20 @@ def _run_opencode(
                     _log(f"OpenCode protocol error: {transport_error}")
                     continue
                 tool = part["tool"]
-                write(f"OpenCode tool: {tool}\n", sys.stdout)
+                write_stdout(f"OpenCode tool: {tool}\n")
                 state = part["state"]
                 if state.get("status") == "completed":
                     output = state.get("output")
                     if isinstance(output, str):
-                        write(output, sys.stdout)
+                        write_stdout(output)
                 elif state.get("status") == "error":
                     error = _extract_error_message(state.get("error"))
                     if error:
-                        write(f"OpenCode tool failed: {error}", sys.stdout)
+                        write_stdout(f"OpenCode tool failed: {error}")
             elif event_type == "error":
                 error = _extract_error_message(event.get("error"))
                 if error:
-                    write(f"OpenCode error: {error}\n", sys.stdout)
+                    write_stdout(f"OpenCode error: {error}\n")
 
     def consume_stderr() -> None:
         assert process.stderr is not None
@@ -821,6 +830,7 @@ class WorkerSupervisor:
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
         activity_handler: Callable[[str, bytes], None] | None = None,
+        decoded_stdout_handler: Callable[[str], None] | None = None,
         stall_poll: StallPoll | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
@@ -947,6 +957,7 @@ export default tool({
                 containment=containment,
                 owner_poll=evidence.poll if evidence is not None else owner_poll,
                 activity_handler=activity_handler,
+                decoded_stdout_handler=decoded_stdout_handler,
                 stall_poll=stall_poll,
             )
             claim, egress_error = parser.finish()

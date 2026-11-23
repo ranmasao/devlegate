@@ -2,6 +2,9 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import json
+import sys
+
 import pytest
 
 from devlegate.worker_activity import (
@@ -12,6 +15,53 @@ from devlegate.worker_activity import (
     project_stall_output,
     render_stall_context,
 )
+from devlegate.worker_supervisor import _run_opencode
+
+
+def test_stall_context_keeps_decoded_opencode_output(tmp_path):
+    events = [
+        {"type": "text", "part": {"type": "text", "text": "  safe text  "}},
+        {"type": "text", "part": {"type": "text", "text": (
+            "/private/location " + "discard " * TAIL_BYTES + "private line suffix"
+        )}},
+        {"type": "tool_use", "part": {
+            "type": "tool", "tool": "read", "state": {
+                "status": "completed", "output": "safe tool output\n",
+            },
+        }},
+        {"type": "text", "part": {"type": "text", "text": (
+            "discard " * TAIL_BYTES + "  end of large payload  "
+        )}},
+    ]
+    raw = b"".join((json.dumps({"sessionID": "ses_private", **event}) + "\n").encode()
+                   for event in reversed(events))
+    transport = tmp_path / "events.jsonl"
+    transport.write_bytes(raw)
+    activity = WorkerActivity(lambda: 0)
+    result = _run_opencode(
+        [sys.executable, "-c", "import pathlib, sys; "
+         "sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())",
+         str(transport)],
+        "prompt", show_worker_output=False,
+        activity_handler=activity.observe,
+        decoded_stdout_handler=activity.observe_decoded_stdout,
+    )
+    assert result.transport_error is None
+    evidence = {}
+    activity.classify(activity.snapshot()[1], 0, evidence.update, private_values=())
+    assert bytes.fromhex(evidence["output"]["stdout"]["hex"]) == raw[-TAIL_BYTES:]
+    output = evidence["prompt_output"]
+    assert output["stdout"]["truncated"]
+    assert "  safe text  \n" in output["stdout"]["text"]
+    assert "safe tool output\n" in output["stdout"]["text"]
+    assert "  end of large payload  \n" in output["stdout"]["text"]
+    assert "ses_private" not in output["stdout"]["text"]
+    assert "private line suffix" not in output["stdout"]["text"]
+    assert "[private output omitted]\n" in output["stdout"]["text"]
+    assert len(output["stdout"]["text"].encode()) <= TAIL_BYTES
+    assert render_stall_context("?? a\n", output) == render_stall_context(
+        "?? a\n", json.loads(json.dumps(evidence))["prompt_output"],
+    )
 
 
 def test_output_on_either_stream_resets_monotonic_silence():

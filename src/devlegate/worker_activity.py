@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 TAIL_BYTES = 1024  # per stream, before UTF-8 decoding
 TAIL_LINES = 20
+MAX_STDOUT_EVENT_BYTES = 1024 * 1024  # raw JSONL framing limit
 MAX_PATHS = 20
 MAX_PATH_CHARS = 160
 _PRIVATE_LINE = re.compile(
@@ -26,7 +27,11 @@ _PRIVATE_LINE = re.compile(
 )
 
 
-def project_stall_output(evidence: dict, private_values: tuple[str, ...]) -> dict:
+def project_stall_output(
+    evidence: dict, private_values: tuple[str, ...], *,
+    decoded_stdout: str | None = None, stdout_truncated: bool = False,
+    stdout_starts_at_line: bool = True,
+) -> dict:
     """Keep the private raw tails separate from their worker-visible projection."""
     projected = {}
     private = tuple(
@@ -35,33 +40,47 @@ def project_stall_output(evidence: dict, private_values: tuple[str, ...]) -> dic
         for value in private_values if value
     )
     for stream in ("stdout", "stderr"):
-        entry = evidence["output"][stream]
-        text = bytes.fromhex(entry["hex"])[-TAIL_BYTES:].decode("utf-8", "replace")
+        if stream == "stdout" and decoded_stdout is not None:
+            text, truncated, starts_at_line = (
+                decoded_stdout, stdout_truncated, stdout_starts_at_line,
+            )
+        else:
+            entry = evidence["output"][stream]
+            text = bytes.fromhex(entry["hex"])[-TAIL_BYTES:].decode("utf-8", "replace")
+            truncated, starts_at_line = entry["truncated"], entry.get("starts_at_line")
         # Retain safe bytes verbatim, including whitespace. Omit whole lines
         # carrying private diagnostics, rather than expose partial identifiers.
         lines = []
-        raw_lines = text.splitlines(keepends=True)
-        if raw_lines and entry["truncated"] and not entry.get("starts_at_line"):
+        bodies = text.rsplit("\n", TAIL_LINES + 1)
+        raw_lines = [body + "\n" for body in bodies[:-1]]
+        if bodies[-1]:
+            raw_lines.append(bodies[-1])
+        if raw_lines and truncated and not starts_at_line:
             # A clipped line can contain an identifier suffix without the
             # context needed to recognize it as private.
             raw_lines.pop(0)
         for line in raw_lines[-TAIL_LINES:]:
             visible = line
             try:
-                # Inspect decoded JSON strings as well, while replaying only
-                # the original bytes. OpenCode can escape internal paths.
+                # Worker payloads and diagnostics can themselves contain JSON
+                # with escaped private values.
                 visible += json.dumps(json.loads(line), ensure_ascii=False)
             except (ValueError, RecursionError):
                 pass
             if _PRIVATE_LINE.search(visible) or any(
                 pattern.search(visible) for pattern in private
-            ) or any(ord(char) < 32 and char not in "\n\r\t" for char in line):
+            ) or any(not char.isprintable() and char not in "\n\r\t" for char in line):
                 lines.append("[private output omitted]\n")
             else:
                 lines.append(line)
+        safe = "".join(lines).encode("utf-8")
+        # Clip only after checking complete lines, so an excerpt of a large
+        # payload cannot expose the suffix of a private line or identifier.
         projected[stream] = {
-            "text": "".join(lines),
-            "truncated": entry["truncated"] or len(raw_lines) > TAIL_LINES,
+            "text": safe[-TAIL_BYTES:].decode("utf-8", "ignore"),
+            "truncated": (
+                truncated or len(raw_lines) > TAIL_LINES or len(safe) > TAIL_BYTES
+            ),
         }
     return projected
 
@@ -135,6 +154,9 @@ class WorkerActivity:
         self._truncated: set[str] = set()
         self._starts_at_line = {"stdout": True, "stderr": True}
         self._last_stream: str | None = None
+        self._decoded_stdout = ""
+        self._stdout_truncated = False
+        self._stdout_starts_at_line = True
 
     def observe(self, stream: str, data: bytes) -> None:
         if stream not in {"stdout", "stderr"} or not data:
@@ -150,6 +172,20 @@ class WorkerActivity:
                     self._starts_at_line[stream] = tail[-TAIL_BYTES - 1] == 10
                 self._tails[stream] = tail[-TAIL_BYTES:]
 
+    def observe_decoded_stdout(self, text: str) -> None:
+        """Keep payloads for privacy filtering without counting them as activity."""
+        with self._lock:
+            if self._closed:
+                return
+            # One full accepted JSONL event fits even when its payload greatly
+            # exceeds the raw/visible tails. This buffer is never persisted.
+            limit = MAX_STDOUT_EVENT_BYTES + 1
+            tail = self._decoded_stdout + text
+            if len(tail) > limit:
+                self._stdout_truncated = True
+                self._stdout_starts_at_line = tail[-limit - 1] == "\n"
+            self._decoded_stdout = tail[-limit:]
+
     def snapshot(self) -> tuple[float, int] | None:
         with self._lock:
             if self._closed:
@@ -163,13 +199,14 @@ class WorkerActivity:
     def classify(
         self, generation: int, threshold: float,
         persist: Callable[[dict], bool],
+        *, private_values: tuple[str, ...] | None = None,
     ) -> bool:
         """Linearize classification against observed bytes and completion."""
         with self._lock:
             idle = max(0.0, self._clock() - self._last)
             if self._closed or self._generation != generation or idle < threshold:
                 return False
-            return persist({
+            evidence = {
                 "idle_seconds": idle,
                 "last_stream": self._last_stream,
                 "output_generation": generation,
@@ -180,4 +217,11 @@ class WorkerActivity:
                     }
                     for name, tail in self._tails.items()
                 },
-            })
+            }
+            if private_values is not None:
+                evidence["prompt_output"] = project_stall_output(
+                    evidence, private_values, decoded_stdout=self._decoded_stdout,
+                    stdout_truncated=self._stdout_truncated,
+                    stdout_starts_at_line=self._stdout_starts_at_line,
+                )
+            return persist(evidence)
