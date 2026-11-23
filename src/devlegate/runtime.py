@@ -5094,6 +5094,9 @@ class ServiceEngine:
                 stamp = self._workers.containment_stamp(launch)
                 if stamp is None:
                     return False
+                private_values = self._stall_private_output_values(
+                    execution_id, identity.as_dict(), launch, workspace, binding,
+                )
             except (ContainmentError, ExecutionWorkspaceError, DevlegateError, OSError):
                 return False
 
@@ -5122,7 +5125,9 @@ class ServiceEngine:
                         self._watchdog_view = (execution_id, None)
                     return True
 
-            return activity.classify(snapshot[1], policy.recovery, persist)
+            return activity.classify(
+                snapshot[1], policy.recovery, persist, private_values=private_values,
+            )
 
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
@@ -5139,6 +5144,7 @@ class ServiceEngine:
                     owner_poll=poll_worker_activity,
                     stall_poll=poll_stall,
                     activity_handler=activity.observe,
+                    decoded_stdout_handler=activity.observe_decoded_stdout,
                     identity_handler=self._record_worker_identity,
                     interruption_handler=lambda kind: self._save_state(
                         "agent_running", execution_interruption_kind=kind
@@ -12941,19 +12947,28 @@ class ServiceEngine:
         if old.intent["generation"] != intent.get("predecessor_generation"):
             raise DevlegateError("worker stall predecessor generation differs")
         evidence = old.worker_stall_evidence()
-        identity = old.operation_receipt("worker")["identity"]
-        output = project_stall_output(evidence, (
-            predecessor, str(identity["pid"]), str(identity["pgid"]),
-            str(identity["sid"]), str(evidence["launch"]["root"]),
-            str(self.state_dir), str(workspace.path), str(old.intent["generation"]),
-            str(identity.get("boot_id", "")), self._state_key,
-            str(identity.get("containment_id", "")),
-        ))
+        output = evidence.get("prompt_output")
+        if output is None:
+            output = project_stall_output(evidence, self._stall_private_output_values(
+                predecessor, old.operation_receipt("worker")["identity"],
+                evidence["launch"], workspace, old,
+            ))
         status = self._git_runtime(
             workspace.path, "-c", "core.quotePath=true", "status", "--porcelain=v1",
             "--no-renames", "--untracked-files=all", "--ignore-submodules=none",
         ).stdout
         return render_stall_context(status, output)
+
+    def _stall_private_output_values(
+        self, execution_id, identity, launch, workspace, binding,
+    ) -> tuple[str, ...]:
+        return (
+            execution_id, str(identity["pid"]), str(identity["pgid"]),
+            str(identity["sid"]), str(launch["root"]),
+            str(self.state_dir), str(workspace.path), str(binding.intent["generation"]),
+            str(identity.get("boot_id", "")), self._state_key,
+            str(identity.get("containment_id", "")),
+        )
 
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
