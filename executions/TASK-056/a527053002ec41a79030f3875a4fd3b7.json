@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "d53a72d8ac2326598ea0467a758465f2e425f66f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "a527053002ec41a79030f3875a4fd3b7",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-side configurable activity watchdog, owned-descendant exclusion, race-safe stall classification, and durable evidence before exact containment retirement.",
+    "Integrate proven retirement with shared interrupted-execution normalization and automatic-resume admission, including safe restart and fail-closed ambiguous ownership handling.",
+    "Add bounded deterministic recovery prompt evidence and operator liveness status, then cover live and restarted stall recovery and the required interruption regressions."
+  ],
+  "report_artifact": "executions/TASK-056/a527053002ec41a79030f3875a4fd3b7.md",
+  "report_sha256": "287deaa700ef2c5eed20fcdf181297fbf1575458c1e7b61ffaec7fd1d245c005",
+  "resource_generation": "c281a3bc17b5c6436d82584f5f21a838f85597d127a3eb231b0b095e8d68dc5b",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-side configurable activity watchdog, owned-descendant exclusion, race-safe stall classification, and durable evidence before exact containment retirement.",
+      "Integrate proven retirement with shared interrupted-execution normalization and automatic-resume admission, including safe restart and fail-closed ambiguous ownership handling.",
+      "Add bounded deterministic recovery prompt evidence and operator liveness status, then cover live and restarted stall recovery and the required interruption regressions."
+    ],
+    "report": "The invocation exhausted its available execution context before the watchdog and shared-recovery integration could be implemented. The existing byte-observation seam remains unconnected.",
+    "summary": "Extended the real-service process-loss recovery regression to cover preservation of tracked and untracked workspace changes across worker replacement."
+  },
+  "workspace_head": "c372549fe1493c1df82aedad3d3460d74b11928a"
+}
