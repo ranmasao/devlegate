@@ -13,7 +13,9 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 
-INTERRUPTION_KINDS = frozenset({"operator_abort", "service_shutdown", "process_loss"})
+INTERRUPTION_KINDS = frozenset(
+    {"operator_abort", "service_shutdown", "process_loss", "worker_stalled"}
+)
 WORKER_STAGES = frozenset({"worker-launch", "worker-running", "post-worker"})
 CHECKPOINT_STAGES = frozenset(
     {"checkpointing", "post-checkpoint", "publishing", "post-publication"}
