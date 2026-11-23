@@ -4498,7 +4498,10 @@ class ServiceEngine:
             ):
                 if (
                     failed_for_ticket.get("interruption_kind")
-                    in {"operator_abort", "service_shutdown", "process_loss"}
+                    in {
+                        "operator_abort", "service_shutdown", "process_loss",
+                        "worker_stalled",
+                    }
                     and generation_is_same
                     and manual_retry is None
                 ):
@@ -4541,7 +4544,10 @@ class ServiceEngine:
                     if authorization.is_automatic_resume and (
                         failed_for_ticket.get("interrupted") is not True
                         or failed_for_ticket.get("interruption_kind")
-                        not in {"operator_abort", "service_shutdown", "process_loss"}
+                        not in {
+                            "operator_abort", "service_shutdown", "process_loss",
+                            "worker_stalled",
+                        }
                     ):
                         raise DevlegateError(
                             "automatic resume requires a safely interrupted execution"
@@ -10409,6 +10415,7 @@ class ServiceEngine:
                         "operator_abort",
                         "service_shutdown",
                         "process_loss",
+                        "worker_stalled",
                     }
                     else None,
                 )
@@ -13164,6 +13171,7 @@ class ServiceEngine:
             "operator_abort",
             "service_shutdown",
             "process_loss",
+            "worker_stalled",
         }:
             interruption_kind = "process_loss"
         failed_executions = {
