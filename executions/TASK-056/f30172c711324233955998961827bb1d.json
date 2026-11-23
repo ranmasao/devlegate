@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "f6ce38063ea2e4f7d32ae5ba54ed22d2b32d48d5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "f30172c711324233955998961827bb1d",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the monotonic inactivity policy, operator-visible warning state, and proven owned-descendant exclusion using execution containment.",
+    "Persist stalled evidence before exact containment retirement and integrate proven retirement with shared stranded-execution normalization and automatic-resume admission, including safe restart replay and dirty workspace preservation.",
+    "Implement bounded deterministic recovery-context rendering and attribution, and add focused live-stall, restart, ownership, workspace, and shared recovery regressions."
+  ],
+  "report_artifact": "executions/TASK-056/f30172c711324233955998961827bb1d.md",
+  "report_sha256": "01a1506abb4d3d5f0c3c2adf755222b5eb47235bf87a54d425b1ea17ad455777",
+  "resource_generation": "b739751f8e616c44ab8668f6acc99ba6582a2a175a3217c924377c22c1c74010",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the monotonic inactivity policy, operator-visible warning state, and proven owned-descendant exclusion using execution containment.",
+      "Persist stalled evidence before exact containment retirement and integrate proven retirement with shared stranded-execution normalization and automatic-resume admission, including safe restart replay and dirty workspace preservation.",
+      "Implement bounded deterministic recovery-context rendering and attribution, and add focused live-stall, restart, ownership, workspace, and shared recovery regressions."
+    ],
+    "report": "The available execution budget was insufficient to implement and validate the complete watchdog and shared recovery lifecycle safely; the retained byte-observation seam is only a prerequisite.",
+    "summary": "Added a raw worker-output observation callback that reports partial stdout and stderr bytes promptly while preserving bounded stdout event framing. Added a process-level regression for activity observed before worker exit."
+  },
+  "workspace_head": "644898ca14168e283170f08cd304c282cde942d8"
+}
