@@ -411,6 +411,37 @@ class ExecutionContainment:
             raise ContainmentError("malformed cgroup.events")
         return state.endswith("1")
 
+    def has_owned_descendants(self, worker_pid: int) -> bool | None:
+        """Observe other cgroup members, or return None when proof is missing.
+
+        The worker itself keeps the cgroup populated, so cgroup.events alone
+        cannot distinguish a quiet worker from one with an active tool. Include
+        nested cgroups and require the worker to be present in the observation.
+        """
+        if worker_pid <= 0:
+            return None
+        try:
+            members: set[int] = set()
+            pending = [self.path]
+            while pending:
+                group = pending.pop()
+                entries = (group / "cgroup.procs").read_text(encoding="ascii").split()
+                for entry in entries:
+                    pid = int(entry)
+                    if pid <= 0:
+                        return None
+                    members.add(pid)
+                for child in group.iterdir():
+                    if child.is_symlink():
+                        return None
+                    if child.is_dir():
+                        pending.append(child)
+            if worker_pid not in members:
+                return None
+            return bool(members - {worker_pid})
+        except (OSError, ValueError, UnicodeError):
+            return None
+
     def request_graceful(self, pid: int | None) -> None:
         if pid is not None:
             try:
