@@ -1104,7 +1104,7 @@ def test_real_service_matching_live_worker_restart_does_not_duplicate(
         service.stop()
 
 @pytest.mark.parametrize("interruption", ["process_loss", "worker_stalled"])
-def test_real_service_absent_worker_uses_process_loss_resume(
+def test_real_service_absent_worker_restart_requires_trusted_interruption(
     git_fixture, monkeypatch, interruption
 ):
     monkeypatch.chdir(git_fixture["working"])
@@ -1152,6 +1152,11 @@ def test_real_service_absent_worker_uses_process_loss_resume(
         _kill_worker_identity(old_identity)
         pid_file.unlink(missing_ok=True)
         service.restart()
+        if interruption == "worker_stalled":
+            service.wait_for(lambda: service.cli("status", "--json").returncode == 1)
+            assert _disk_state(config)["worker_identity"] == old_identity
+            assert attempts.read_text().splitlines() == ["attempt"]
+            return
         service.wait_for(
             lambda: (
                 _disk_state(config).get("execution_stage") == "worker-running"
@@ -1175,6 +1180,157 @@ def test_real_service_absent_worker_uses_process_loss_resume(
     finally:
         _kill_worker_identity(old_identity)
         _kill_worker_identity(new_identity)
+        service.stop()
+
+@pytest.mark.parametrize(
+    "restart_at",
+    [None, "warning", "post-worker", "stall_classified", "absent", "foreign-root",
+     "foreign-generation"],
+)
+def test_real_service_live_watchdog_retires_before_resuming(
+    git_fixture, monkeypatch, restart_at,
+):
+    monkeypatch.chdir(git_fixture["working"])
+    worker = git_fixture["tmp"] / "watchdog-worker.py"
+    result = git_fixture["tmp"] / "continued.txt"
+    release = result.with_suffix(".release")
+    attempts = result.with_suffix(".attempts")
+    monkeypatch.setenv("WATCHDOG_TEST_RESULT", str(result))
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, subprocess, sys, time\n"
+        "prompt = sys.stdin.read()\n"
+        "result = pathlib.Path(os.environ['WATCHDOG_TEST_RESULT'])\n"
+        "with result.with_suffix('.attempts').open('a') as attempts:\n"
+        "    attempts.write(str(os.getpid()) + '\\n')\n"
+        "tracked = pathlib.Path('README.md')\n"
+        "untracked = pathlib.Path('in-progress.txt')\n"
+        "if not untracked.exists():\n"
+        "    tracked.write_text(tracked.read_text() + '\\nwork in progress\\n')\n"
+        "    untracked.write_text(str(os.getpid()))\n"
+        "    print('stdout marker', flush=True)\n"
+        "    print('stderr marker', file=sys.stderr, flush=True)\n"
+        "    print(f'pid={os.getpid()} dir={os.getcwd()}',\n"
+        "          file=sys.stderr, flush=True)\n"
+        "    subprocess.run([sys.executable, '-c', 'import time; time.sleep(2.4)'],\n"
+        "                   check=True)\n"
+        "    result.with_suffix('.child-done').touch()\n"
+        "    while True: time.sleep(0.05)\n"
+        "else:\n"
+        "    assert not pathlib.Path('/proc/' + untracked.read_text()).exists()\n"
+        "    assert tracked.read_text().endswith('work in progress\\n')\n"
+        "    assert result.with_suffix('.child-done').exists()\n"
+        "    with result.open('x') as handle: handle.write(prompt)\n"
+        "    while not result.with_suffix('.release').exists():\n"
+        "        print('continued work', file=sys.stderr, flush=True)\n"
+        "        time.sleep(0.05)\n"
+        "    print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'continued work', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    worker.chmod(0o755)
+    config = _recovery_config(git_fixture)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+        + "\nWORKER_IDLE_WARNING_SECONDS=0.2\nWORKER_IDLE_RECOVERY_SECONDS=1.5\n"
+    )
+    engine = _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(engine)
+    if restart_at not in {None, "warning"}:
+        point = "stall_classified" if restart_at == "absent" else (
+            "post-worker" if restart_at in {"foreign-root", "foreign-generation"}
+            else restart_at
+        )
+        monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", point)
+    service = LiveService(
+        git_fixture["working"], config, command=_recovery_driver(config),
+    )
+    service.start()
+    try:
+        service.wait_ready()
+        if restart_at in {None, "warning"}:
+            def warning_visible():
+                status = json.loads(service.cli("status", "--json").stdout)
+                return status["execution"].get("worker_liveness", {}).get("state") == (
+                    "idle/warning"
+                )
+
+            service.wait_for(warning_visible)
+            if restart_at == "warning":
+                observed = _disk_state(config)
+                assert observed.get("execution_interruption_kind") is None
+                service.kill()
+                service.restart()
+                service.wait_for(
+                    lambda: service.cli("status", "--json").returncode == 1,
+                )
+                assert _disk_state(config)["worker_identity"] == (
+                    observed["worker_identity"]
+                )
+                assert len(attempts.read_text().splitlines()) == 1
+                return
+        else:
+            _wait_process_death(service)
+            classified = _disk_state(config)
+            assert classified["execution_interruption_kind"] == "worker_stalled"
+            assert len(attempts.read_text().splitlines()) == 1
+            if point == "stall_classified":
+                assert Path(f"/proc/{classified['worker_identity']['pid']}").is_dir()
+            monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+            if restart_at == "absent":
+                _kill_worker_identity(classified["worker_identity"])
+            elif restart_at == "foreign-root":
+                root = service.registry_home / "containment"
+                root.rename(root.with_name("original-containment"))
+            elif restart_at == "foreign-generation":
+                workspace = Path(classified["execution_path"])
+                admin = Path(subprocess.check_output(
+                    ["git", "rev-parse", "--absolute-git-dir"],
+                    cwd=workspace, text=True,
+                ).strip())
+                marker = admin / "devlegate-generation.json"
+                generation = json.loads(marker.read_text())
+                generation["generation"] = "f" * 64
+                marker.write_text(json.dumps(generation))
+            service.restart()
+            if restart_at in {"stall_classified", "foreign-root", "foreign-generation"}:
+                service.wait_for(
+                    lambda: service.cli("status", "--json").returncode == 1,
+                )
+                assert not result.exists()
+                assert len(attempts.read_text().splitlines()) == 1
+                assert _disk_state(config)["worker_identity"] == (
+                    classified["worker_identity"]
+                )
+                return
+        service.wait_for(lambda: result.is_file() and result.stat().st_size > 0)
+        state = _disk_state(config)
+        failure = state["failed_executions"]["T-1"]
+        assert failure["execution_id"] != state["execution_id"]
+        assert failure["interruption_kind"] == "worker_stalled"
+        assert state["worker_prompt_directive"] == "resume"
+        assert len(attempts.read_text().splitlines()) == 2
+        prompt = result.read_text().split("## Recovery Context\n", 1)[1]
+        assert "without observable output" in prompt
+        assert "- README.md\n- in-progress.txt\n" in prompt
+        assert "stdout marker\n" in prompt
+        assert "stderr marker\n" in prompt
+        assert "[private output omitted]" in prompt
+        assert str(state["execution_path"]) not in prompt
+        assert failure["execution_id"] not in prompt
+        release.touch()
+        service.wait_for(lambda: _disk_state(config)["phase"] == "idle")
+        if restart_at is None:
+            service.restart()
+            status = json.loads(service.cli("status", "--json").stdout)
+            assert status["execution"]["phase"] == "idle"
+            assert "worker_liveness" not in status["execution"]
+            assert len(attempts.read_text().splitlines()) == 2
+    finally:
+        release.touch()
+        if not result.exists():
+            _kill_worker_identity(_disk_state(config).get("worker_identity"))
         service.stop()
 
 def test_publisher_index_is_independent_of_active_control_commit(git_fixture):

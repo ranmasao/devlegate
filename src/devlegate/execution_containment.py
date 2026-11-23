@@ -371,6 +371,7 @@ class ExecutionContainment:
 
     def __init__(self, path: Path, *, recursive_kill: bool) -> None:
         self.path = path
+        self._stamp = _boundary_stamp(path)
         self.recursive_kill = recursive_kill
         self.identity = f"cgroup:{path}"
 
@@ -405,6 +406,8 @@ class ExecutionContainment:
         return subprocess.Popen(launcher, **kwargs)
 
     def populated(self) -> bool:
+        if self._stamp is None or _boundary_stamp(self.path) != self._stamp:
+            raise ContainmentError("execution cgroup identity changed")
         values = (self.path / "cgroup.events").read_text().splitlines()
         state = next((line for line in values if line.startswith("populated ")), None)
         if state is None or state not in {"populated 0", "populated 1"}:
@@ -421,6 +424,8 @@ class ExecutionContainment:
         if worker_pid <= 0:
             return None
         try:
+            if self._stamp is None or _boundary_stamp(self.path) != self._stamp:
+                return None
             members: set[int] = set()
             pending = [self.path]
             while pending:
@@ -436,10 +441,10 @@ class ExecutionContainment:
                         return None
                     if child.is_dir():
                         pending.append(child)
-            if worker_pid not in members:
+            if worker_pid not in members or _boundary_stamp(self.path) != self._stamp:
                 return None
             return bool(members - {worker_pid})
-        except (OSError, ValueError, UnicodeError):
+        except (ContainmentError, OSError, ValueError):
             return None
 
     def request_graceful(self, pid: int | None) -> None:
@@ -453,7 +458,20 @@ class ExecutionContainment:
         if not self.recursive_kill:
             raise ContainmentError("recursive cgroup termination is unavailable")
         try:
-            (self.path / "cgroup.kill").write_text("1\n")
+            # Bind the write to the checked directory, so replacing the path
+            # between the identity check and the write cannot redirect it.
+            directory = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                info = os.fstat(directory)
+                if [info.st_dev, info.st_ino] != self._stamp:
+                    raise ContainmentError("execution cgroup identity changed")
+                kill = os.open(
+                    "cgroup.kill", os.O_WRONLY | os.O_NOFOLLOW, dir_fd=directory,
+                )
+                with os.fdopen(kill, "w", encoding="ascii") as handle:
+                    handle.write("1\n")
+            finally:
+                os.close(directory)
         except OSError as error:
             raise ContainmentError(
                 f"cannot recursively terminate execution cgroup: {error}"
@@ -481,6 +499,16 @@ class ExecutionContainment:
             ) from error
 
 
+def _boundary_stamp(path: Path) -> list[int] | None:
+    try:
+        if path.is_symlink():
+            raise ContainmentError("execution boundary is a symlink")
+        info = path.stat()
+    except FileNotFoundError:
+        return None
+    return [info.st_dev, info.st_ino]
+
+
 class LinuxCgroupContainmentProvider:
     """Production cgroup-v2 provider.
 
@@ -490,6 +518,9 @@ class LinuxCgroupContainmentProvider:
 
     def create(self, execution_id: str) -> ExecutionContainment:
         return ExecutionContainment.create(execution_id)
+
+    def boundary_stamp(self, launch: dict) -> list[int] | None:
+        return _boundary_stamp(Path(launch["containment"].removeprefix("cgroup:")))
 
     def launch_evidence(self, execution_id: str) -> dict:
         """Capture the configured launch root before the uncertain spawn window."""
@@ -540,7 +571,10 @@ class LinuxCgroupContainmentProvider:
         try:
             values = (path / "cgroup.events").read_text().splitlines()
         except FileNotFoundError:
-            return "absent"
+            try:
+                return "absent" if _boundary_stamp(path) is None else "indeterminate"
+            except (ContainmentError, OSError):
+                return "indeterminate"
         except OSError:
             return "indeterminate"
         populated = next(
@@ -660,6 +694,15 @@ class DurableDeterministicContainmentProvider:
         except OSError:
             return "indeterminate"
 
+    def launch_evidence(self, execution_id: str) -> dict:
+        metadata = self.root.stat()
+        return {"containment": f"deterministic:{execution_id}",
+                "root": str(self.root), "identity": [metadata.st_dev, metadata.st_ino]}
+
+    def boundary_stamp(self, launch: dict) -> list[int] | None:
+        execution_id = launch["containment"].removeprefix("deterministic:")
+        return _boundary_stamp(self.root / f"execution-{execution_id}.pid")
+
     class _Boundary:
         def __init__(self, state: Path, identity: str) -> None:
             self.state = state
@@ -732,6 +775,24 @@ class DurableDeterministicContainmentProvider:
                 return path.read_text(encoding="ascii").strip()
             except (FileNotFoundError, OSError):
                 return ""
+
+        def has_owned_descendants(self, worker_pid: int) -> bool | None:
+            # This test provider uses a real subreaper and single-threaded
+            # fixtures. Include children adopted by the subreaper as well.
+            if self._process is None or self._process.pid != worker_pid:
+                return None
+            monitor = self._process._monitor.pid
+
+            def children(pid):
+                return set(Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
+
+            try:
+                adopted = children(monitor)
+                if str(worker_pid) not in adopted:
+                    return None
+                return bool(adopted - {str(worker_pid)} or children(worker_pid))
+            except OSError:
+                return None
 
         def request_graceful(self, pid: int | None) -> None:
             if pid is not None:
