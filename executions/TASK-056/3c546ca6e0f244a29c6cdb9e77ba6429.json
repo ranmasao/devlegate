@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "a8f2930cc8c2d86809e33ccfe43aad2f56d65a9f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "3c546ca6e0f244a29c6cdb9e77ba6429",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the monotonic watchdog and configurable thresholds, including race-safe activity updates and authoritative owned-descendant observation.",
+    "Implement durable stalled-attempt classification and restart-safe retirement and replacement through the shared workflow recovery boundary, preserving workspace and attempt provenance.",
+    "Build and attach bounded deterministic recovery context, expose operator liveness status, and add the required end-to-end recovery and restart regressions."
+  ],
+  "report_artifact": "executions/TASK-056/3c546ca6e0f244a29c6cdb9e77ba6429.md",
+  "report_sha256": "83d28c28f19ec298c5acb144a513561a9215e0756a6024628e0a02e40d8eec59",
+  "resource_generation": "9d33e6845eb845ba25f427dd1e00f5300f29f6b929dc5662ccf0d6a6ee985c92",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the monotonic watchdog and configurable thresholds, including race-safe activity updates and authoritative owned-descendant observation.",
+      "Implement durable stalled-attempt classification and restart-safe retirement and replacement through the shared workflow recovery boundary, preserving workspace and attempt provenance.",
+      "Build and attach bounded deterministic recovery context, expose operator liveness status, and add the required end-to-end recovery and restart regressions."
+    ],
+    "report": "The cross-lifecycle recovery transaction and its safety proofs remain unfinished in this invocation; the added byte-observation seam does not enable autonomous recovery.",
+    "summary": "Added an observation seam for raw worker stdout and stderr bytes before protocol framing or buffered consumption, with a real-pipe regression for partial stdout."
+  },
+  "workspace_head": "ffee70971b89f30c4e92086032b048e2af93bef0"
+}
