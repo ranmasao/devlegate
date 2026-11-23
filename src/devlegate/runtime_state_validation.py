@@ -465,6 +465,7 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             "operator_abort",
             "service_shutdown",
             "process_loss",
+            "worker_stalled",
             "ticket_reset",
         }
     ):

@@ -149,6 +149,29 @@ def test_stranded_transaction_blocks_live_worker_without_normalization():
     assert owner.blocked
 
 
+def test_stalled_interruption_requires_absence_and_preserves_reason():
+    state = {
+        "phase": "agent_running",
+        "execution_stage": "worker-running",
+        "execution_ticket_id": "TASK-1",
+        "execution_id": "exec-1",
+        "worker_identity": {"pid": 1},
+        "execution_interruption_kind": "worker_stalled",
+    }
+    owner = _WorkerRecoveryOwner("matching-live")
+    try:
+        recover_stranded_execution(owner, state)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("stalled worker still alive must block recovery")
+    assert not owner.normalized
+
+    owner = _WorkerRecoveryOwner("absent")
+    assert recover_stranded_execution(owner, state) == "TASK-1"
+    assert owner.normalized == ["worker_stalled"]
+
+
 class _WorkspaceManager:
     branch = "devlegate/TASK-1"
     path = Path("/tmp/execution")
