@@ -1,0 +1,38 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "incomplete",
+  "control_head": "bb6901878f13b8e8482da9becedf4bc781438463",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "f7fd2d4f300d435889dc6cc4c681db48",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Implement the owner-mediated durable stalled continuation: preserve prior attempt provenance, persist idempotent successor admission, and launch exactly one replacement after verified retirement across live and restart paths.",
+    "Render and inject bounded deterministic recovery context from changed relative paths and captured worker output, and expose stalled/recovering operator status.",
+    "Add end-to-end crash-boundary, containment, prompt, and lifecycle regressions, then run the complete ticket-focused checks and lint."
+  ],
+  "report_artifact": "executions/TASK-056/f7fd2d4f300d435889dc6cc4c681db48.md",
+  "report_sha256": "f8eae5b55511c5cd78ffd3e19e5a6c4ed93c3df2a3d6b0c1c29d1be26ba3a1ec",
+  "resource_generation": "c63fe1095535e253709988178b3d751a6f1536b5d26d675258bb5478ff83fde3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Implement the owner-mediated durable stalled continuation: preserve prior attempt provenance, persist idempotent successor admission, and launch exactly one replacement after verified retirement across live and restart paths.",
+      "Render and inject bounded deterministic recovery context from changed relative paths and captured worker output, and expose stalled/recovering operator status.",
+      "Add end-to-end crash-boundary, containment, prompt, and lifecycle regressions, then run the complete ticket-focused checks and lint."
+    ],
+    "report": "The continuation requires coordinated changes to generation ownership, durable admission, lifecycle provenance and restart handling; the available execution budget did not permit implementing and verifying those boundaries safely. The current implementation continues to fail closed rather than launching a replacement.",
+    "summary": "Hardened stalled-worker reconciliation so both intent and retired stages require a matching worker generation receipt and a certain state write before containment operations. Added restart regressions for absent or mismatched receipts and uncertain writes."
+  },
+  "workspace_head": "9d84eb272855effeb82c2b6bbffe481c83b64c06"
+}
