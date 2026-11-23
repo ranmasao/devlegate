@@ -10,6 +10,7 @@ import time
 
 from devlegate.execution_containment import (
     DurableDeterministicContainmentProvider,
+    ExecutionContainment,
     LinuxCgroupContainmentProvider,
     _launcher_command,
     default_containment_provider,
@@ -18,6 +19,24 @@ from devlegate.execution_containment import (
 
 def test_default_provider_is_production_cgroup_provider():
     assert isinstance(default_containment_provider(), LinuxCgroupContainmentProvider)
+
+
+def test_owned_descendant_observation_requires_worker_and_nested_groups(tmp_path):
+    boundary = ExecutionContainment(tmp_path, recursive_kill=True)
+    procs = tmp_path / "cgroup.procs"
+    procs.write_text("123\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is False
+
+    child = tmp_path / "tool"
+    child.mkdir()
+    (child / "cgroup.procs").write_text("456\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is True
+    assert boundary.has_owned_descendants(999) is None
+
+    (child / "cgroup.procs").write_text("invalid\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is None
+    (child / "cgroup.procs").unlink()
+    assert boundary.has_owned_descendants(123) is None
 
 
 def test_isolated_joiner_blocks_startup_hook_before_membership(tmp_path, monkeypatch):
