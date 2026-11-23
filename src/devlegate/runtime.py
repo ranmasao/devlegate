@@ -12858,15 +12858,16 @@ class ServiceEngine:
                     "worker"
                 )
             stalled = self._state.get("stalled_recovery")
-            if isinstance(stalled, dict) and stalled.get("stage") == "intent":
-                from devlegate.recovery_transactions import retire_stalled_intent
-
+            if isinstance(stalled, dict):
                 if self._state_write_uncertain:
                     raise ValueError("stalled recovery state write is uncertain")
                 if receipt is None or receipt.get("identity") != self._state.get(
                     "worker_identity"
                 ):
                     raise ValueError("stalled recovery generation binding is unproven")
+            if isinstance(stalled, dict) and stalled.get("stage") == "intent":
+                from devlegate.recovery_transactions import retire_stalled_intent
+
                 retire_stalled_intent(self)
                 stalled = self._state.get("stalled_recovery")
             if isinstance(stalled, dict) and stalled.get("stage") == "retired":

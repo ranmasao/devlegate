@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 
 import pytest
 from runtime_helpers import run_test_iteration
@@ -174,6 +175,12 @@ def test_restarted_stall_rechecks_containment_before_failing_closed(
     retire_stalled_intent(engine)
     restored = ServiceEngine(engine.env_file)
     calls = []
+    restored._state["execution_resource_binding"] = {"test": "binding"}
+    monkeypatch.setattr(restored, "_require_execution_generation", lambda **_: None)
+    monkeypatch.setattr(
+        restored, "_execution_generation_binding",
+        lambda: SimpleNamespace(operation_receipt=lambda _: {"identity": identity}),
+    )
 
     def observe(execution_id, recorded, worker, *, terminate):
         calls.append((execution_id, recorded, worker.as_dict(), terminate))
@@ -187,8 +194,9 @@ def test_restarted_stall_rechecks_containment_before_failing_closed(
     assert restored._runtime_store.load()["stalled_recovery"]["stage"] == "retired"
 
 
+@pytest.mark.parametrize("stage", ["intent", "retired"])
 def test_restart_refuses_stall_retirement_without_generation_proof(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, stage
 ):
     engine, _state = make_engine(tmp_path, monkeypatch)
     process = subprocess.Popen(
@@ -203,6 +211,9 @@ def test_restart_refuses_stall_retirement_without_generation_proof(
         )
         evidence = {"containment": "test:group"}
         persist_stalled_intent(engine, launch_evidence=evidence)
+        if stage == "retired":
+            monkeypatch.setattr(engine, "recovery_retire_worker", lambda *_: None)
+            retire_stalled_intent(engine)
         restored = ServiceEngine(engine.env_file)
         calls = []
 
@@ -213,11 +224,51 @@ def test_restart_refuses_stall_retirement_without_generation_proof(
             restored._reconcile_stranded_execution()
         assert calls == []
         assert process.poll() is None
-        assert restored._runtime_store.load()["stalled_recovery"]["stage"] == "intent"
+        assert restored._runtime_store.load()["stalled_recovery"]["stage"] == stage
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("stage", ["intent", "retired"])
+@pytest.mark.parametrize("failure", ["mismatch", "uncertain"])
+def test_restart_refuses_stall_with_unsafe_receipt_or_write(
+    tmp_path, monkeypatch, stage, failure
+):
+    engine, _state = make_engine(tmp_path, monkeypatch)
+    identity = {
+        "execution_id": "execution-1", "pid": 1, "pgid": 1, "sid": 1,
+        "boot_id": "boot", "start_time": 1, "containment_id": "test:group",
+    }
+    _persist_active_execution(
+        engine, "agent_running", "worker-running", worker_identity=identity
+    )
+    persist_stalled_intent(engine, launch_evidence={"containment": "test:group"})
+    if stage == "retired":
+        monkeypatch.setattr(engine, "recovery_retire_worker", lambda *_: None)
+        retire_stalled_intent(engine)
+    restored = ServiceEngine(engine.env_file)
+    restored._state["execution_resource_binding"] = {"test": "binding"}
+    restored._state_write_uncertain = failure == "uncertain"
+    monkeypatch.setattr(restored, "_require_execution_generation", lambda **_: None)
+    monkeypatch.setattr(
+        restored, "_execution_generation_binding",
+        lambda: SimpleNamespace(operation_receipt=lambda _: {
+            "identity": identity if failure == "uncertain" else {**identity, "pid": 2}
+        }),
+    )
+    calls = []
+    monkeypatch.setattr(restored, "recovery_retire_worker", lambda *_: calls.append(1))
+    monkeypatch.setattr(
+        restored, "recovery_prove_worker_retired", lambda *_: calls.append(2)
+    )
+    with pytest.raises(DevlegateError, match=(
+        "uncertain" if failure == "uncertain" else "generation binding is unproven"
+    )):
+        restored._reconcile_stranded_execution()
+    assert calls == []
+    assert restored._runtime_store.load()["stalled_recovery"]["stage"] == stage
 
 
 @pytest.mark.parametrize("committed", [False, True])
