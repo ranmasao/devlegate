@@ -95,15 +95,52 @@ budget; reconnecting within the same attempt does not. If an existing
 execution's quota cannot be safely recovered, disable that optional channel
 rather than invent a new budget or block ordinary worker continuation.
 
-Prefer the existing Change Explorer owner-polled socket/framing and process
-authorization pattern. Do not build a separate daemon, privilege mechanism or
-general IPC framework. The current EvidenceSocket default request cap is 4096
-bytes; a 16 KiB note plus JSON escaping cannot fit. Provide a narrowly scoped
-configurable request-frame cap for the blackboard channel (e.g. 128 KiB
-serialized), with decoded content still limited to 16 KiB UTF-8. Leave other
-channels' defaults unchanged. A bad optional blackboard request, missing store,
-quota exhaustion or a storage failure must not turn into worker failure,
-false completed claim, or new workflow admission gate.
+### Shared worker request transport (small extraction)
+
+Extract the already shared owner-polled Unix socket mechanism from
+EvidenceSocket into a domain-neutral module, preferably
+`src/devlegate/worker_request_channel.py` with a
+`WorkerRequestChannel` class. This is a required small refactoring because
+Blackboard is the third consumer; do not make it inherit abandonment-analysis
+semantics. Keep the transport independent of EvidenceBundle, EvidenceError,
+Git, ticket state, revision namespaces and blackboard storage. It takes a
+request handler and bounded channel policy; it owns socket lifetime,
+nonblocking polling, length framing, request/response limits, timeouts and
+transport-level accounting. Use a small transport-specific error type where
+necessary, not a new exception hierarchy. Preserve owner-thread execution and
+one request per connection. No new daemon, worker thread, generic RPC
+dispatcher, dynamic plugin registry, or second IPC protocol.
+
+Separate domain responsibilities into files, preferably:
+
+- `worker_request_channel.py`: common socket transport only.
+- `evidence_channel.py`: abandonment evidence request handling and existing
+  evidence-specific socket/pipe interfaces.
+- `change_channel.py`: virtual revision tool requests and their existing
+  authorization; reuse the extracted transport.
+- `blackboard_channel.py`: blackboard request validation, execution/ticket
+  authorization, response budget policy and thin OpenCode tool adapter.
+- `blackboard_store.py`: bounded immutable note records, durable publication,
+  quota/deduplication checks, and list/read semantics; no socket or adapter.
+
+Composition or a thin subclass is sufficient. File/class names may follow
+existing conventions; responsibility separation and dependency direction are
+normative. Evidence and Change Explorer must use the same extracted socket
+implementation; do not keep two copies or create a compatibility forwarding
+layer merely to retain old private import paths. Keep the existing EvidencePipe
+behavior; no requirement to generalize it or the TypeScript tool generator.
+Reuse existing authorization/lifecycle checks where appropriate; do not move
+domain access decisions into the generic transport.
+
+The current EvidenceSocket default request cap is 4096 bytes; a 16 KiB note
+plus JSON escaping cannot fit. Parameterize the extracted request-frame cap,
+using e.g. 128 KiB serialized for blackboard with decoded content limited to
+16 KiB UTF-8. Preserve other channels' existing limits, framing, timeout,
+accounting, error and close behavior. The refactoring must not change their
+tool schemas, privilege boundaries or lifecycle semantics. A bad optional
+blackboard request, missing store, quota exhaustion or a storage failure must
+not turn into worker failure, false completed claim, or new workflow admission
+gate.
 
 ### Effective worker guidance
 
@@ -150,8 +187,9 @@ creation, forced handoff summaries, or a new completion criterion.
 4. Enforce the exact 16 KiB entry, 128 KiB/32-entry ticket, 8 KiB response-page and 32 KiB per-execution delivered-response budgets; over-limit writes -> `LIMIT_EXCEEDED`, exhausted reads -> `BUDGET_EXHAUSTED`. `list` and `read` paginate correctly and remain bounded across retries and adapter reconnects. Missing/corrupt entries never produce manufactured success; stable repeated saves are idempotent.
 5. Inspect actual FRESH, RESUME and REWORK worker prompts and the materialized `devlegate_blackboard` tool descriptions. They state **when to list/read**, when to save an important 1–2 KiB factual summary, the prohibition on transcripts/large diffs/duplicates/secrets, and separation from `devlegate_report`. List remains metadata-only; no note index or contents are automatically dumped into the startup context, and saved prompt-injection-like content is marked as untrusted data and cannot alter admission or report parser. No-note executions still proceed correctly.
 6. Save a note larger than the existing 4096-byte request limit, including multibyte and escaped characters; verify the actual owner channel accepts it up to the 16 KiB content cap and returns exact content across bounded pages. Verify identical replay after a lost response and after a new execution consumes no extra ticket quota, and that reset/deferral preserves historical notes without implying current validity. Verify a full/unavailable board does not prevent a normal report or safe continuation.
-7. Run focused owner/worker adapter, restart/rework, security/error and packaging-materialization tests plus exact-checkpoint hosted full suite and lint. Test against disposable state/worktrees only; never mutate the self-hosted project's live runtime resources.
+7. Exercise the extracted transport through the existing abandonment evidence and Change Explorer channels as well as Blackboard. Retain their existing request limits, framing, reconnect/accounting, timeout, closure and error behavior. Verify the generic transport does not depend on domain modules, and that changing the Blackboard frame limit does not increase the existing channels' caps. Prefer existing focused regression suites over duplicate transport tests.
+8. Run focused owner/worker adapter, restart/rework, security/error and packaging-materialization tests plus exact-checkpoint hosted full suite and lint. Test against disposable state/worktrees only; never mutate the self-hosted project's live runtime resources.
 
 ## Boundaries
 
-This is a deliberately bounded **ticket-scoped blackboard** and small textual handoff tool, not a general binary artifact registry, CI log warehouse, Git diff reader, generic worker shell, arbitrary host-file reader, or remote backup. It does not change TASK-154, existing ExecutionReport schema, review artifact attribution, reset/disposal rules or source package Python compatibility. Keep old execution evidence immutable. No historical runtime data migrations or backward-compatibility branches; the project has no customer installations that require them.
+This is a deliberately bounded **ticket-scoped blackboard** and small textual handoff tool, not a general binary artifact registry, CI log warehouse, Git diff reader, generic worker shell, arbitrary host-file reader, or remote backup. Apart from the behavior-preserving shared socket extraction, it does not change TASK-154's behavior, existing ExecutionReport schema, review artifact attribution, reset/disposal rules or source package Python compatibility. Keep old execution evidence immutable. No historical runtime data migrations or backward-compatibility branches; the project has no customer installations that require them.
