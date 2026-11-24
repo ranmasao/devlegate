@@ -27,7 +27,7 @@ class WorkerPromptInput:
     review_source: str | None = None
     historical_review: bool = False
     blackboard_available: bool = False
-    recovery_context: str | None = None
+    resumed_after_stall: bool = False
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -73,11 +73,20 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
     if not assignment:
         raise ValueError("assigned work must not be empty")
 
+    directive_text = _DIRECTIVES[prompt_input.directive]
+    if (
+        prompt_input.directive is WorkDirective.RESUME
+        and prompt_input.resumed_after_stall
+    ):
+        directive_text += (
+            "\n\nThe previous attempt was interrupted after extended output silence. "
+            "Inspect current changes and do not assume the previous attempt completed."
+        )
     sections = [
         ("Core Worker Contract", _CORE_CONTRACT + (
             "\n\n" + _BLACKBOARD_GUIDANCE if prompt_input.blackboard_available else ""
         ), False),
-        ("Work Directive", _DIRECTIVES[prompt_input.directive], False),
+        ("Work Directive", directive_text, False),
     ]
     sections.append(("Assigned Work", assignment, True))
     if prompt_input.review_feedback is not None:
@@ -98,8 +107,6 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         sections.append((title, f"Source: {source}\n\n{context}{feedback}", True))
     elif prompt_input.directive is WorkDirective.REWORK:
         raise ValueError("rework requires verified review feedback")
-    if prompt_input.recovery_context is not None:
-        sections.append(("Recovery Context", prompt_input.recovery_context, True))
     return (
         "\n\n".join(
             f"## {title}\n{_fenced_content(value) if untrusted else value}"

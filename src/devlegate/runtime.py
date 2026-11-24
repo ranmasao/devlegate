@@ -206,8 +206,6 @@ from devlegate.tickets import (
 from devlegate.worker_activity import (
     WatchdogPolicy,
     WorkerActivity,
-    WorkerOutputTail,
-    render_stall_context,
 )
 from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
@@ -981,9 +979,9 @@ class ServiceEngine:
             )
         ):
             return
-        fields: dict[str, object] = {
-            "execution_interruption_kind": "operator_abort",
-        }
+        fields: dict[str, object] = {}
+        if self._state.get("execution_interruption_kind") != "worker_stalled":
+            fields["execution_interruption_kind"] = "operator_abort"
         request_id = request_id or self._lifecycle_request_id
         if self._lifecycle_intent == "stop" and request_id is not None:
             # The low-level abort alone is not sufficient to infer operator
@@ -994,7 +992,8 @@ class ServiceEngine:
                 "generation": self._state.get("execution_base_head"),
                 "request_id": request_id,
             }
-        self._save_state(str(self._state["phase"]), **fields)
+        if fields:
+            self._save_state(str(self._state["phase"]), **fields)
 
     def lifecycle_status_payload(self) -> dict[str, object]:
         with self._lifecycle_lock:
@@ -3998,6 +3997,13 @@ class ServiceEngine:
             automatic_ticket = self._reconcile_stranded_execution()
             if automatic_ticket is None or self._stop_requested():
                 return 0
+            manual_retry = self._state.get("manual_retry_required")
+            if isinstance(manual_retry, dict) and (
+                manual_retry.get("ticket_id") == automatic_ticket
+                and manual_retry.get("execution_id")
+                == self._state.get("interrupted_execution_id")
+            ):
+                return 0
             if authorization is not None:
                 raise DevlegateError(
                     "explicit retry cannot also authorize automatic resume"
@@ -5051,7 +5057,7 @@ class ServiceEngine:
                 historical_review=isinstance(rework, dict)
                 and rework.get("amended_continuation") is True,
                 blackboard_available=blackboard is not None,
-                recovery_context=self._worker_recovery_context(workspace),
+                resumed_after_stall=self._resumed_after_worker_stall(selected_ticket.id),
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)
@@ -5117,11 +5123,11 @@ class ServiceEngine:
         self._refresh_published_status()
         worker_returned = False
         activity = WorkerActivity()
-        output_tail = WorkerOutputTail()
         with self._snapshot_lock:
             self._watchdog_view = (execution_id, activity)
         warning_generation: int | None = None
         policy = self._watchdog_policy
+        revisions = None
 
         def poll_worker_activity() -> None:
             nonlocal warning_generation
@@ -5133,7 +5139,9 @@ class ServiceEngine:
                     _log(f"worker output has been idle for {int(idle)} seconds")
                     warning_generation = generation
 
-        def poll_stall(identity: WorkerProcessIdentity, eligible) -> bool:
+        def poll_stall(
+            identity: WorkerProcessIdentity, stamp: list[int], eligible,
+        ) -> bool:
             snapshot = activity.snapshot()
             if snapshot is None or snapshot[0] < policy.recovery:
                 return False
@@ -5150,40 +5158,38 @@ class ServiceEngine:
                     != identity.as_dict()
                 ):
                     return False
-                stamp = self._workers.containment_stamp(launch)
-                if stamp is None:
-                    return False
             except (ContainmentError, ExecutionWorkspaceError, DevlegateError, OSError):
                 return False
 
-            prompt_output = output_tail.snapshot()
+            def persist(idle: float) -> bool:
+                if (
+                    self._stop_before_admission()
+                    or self._operator_command is not None
+                    or self._state_write_uncertain
+                    or self._owned_execution_id != execution_id
+                    or not self._workers.owns(execution_id)
+                    or self._state.get("phase") != "agent_running"
+                    or self._state.get("execution_stage") != "worker-running"
+                    or self._state.get("execution_id") != execution_id
+                    or self._state.get("execution_resource_binding") != binding.intent
+                    or self._state.get("worker_identity") != identity.as_dict()
+                    or self._state.get("execution_interruption_kind") is not None
+                    or not eligible()
+                ):
+                    return False
+                binding.record_worker_stall({
+                    "reason": "worker_stalled", "idle_seconds": idle,
+                    "launch": launch, "containment_stamp": stamp,
+                })
+                self._save_state(
+                    "agent_running", execution_interruption_kind="worker_stalled",
+                )
+                with self._snapshot_lock:
+                    self._watchdog_view = (execution_id, None)
+                return True
 
-            def persist(evidence: dict) -> bool:
-                with self._operator_command_lock, self._lifecycle_lock:
-                    if (
-                        self._stop_before_admission()
-                        or self._operator_command is not None
-                        or self._state_write_uncertain
-                        or self._state.get("execution_stage") != "worker-running"
-                        or self._state.get("execution_id") != execution_id
-                        or self._state.get("worker_identity") != identity.as_dict()
-                        or self._state.get("execution_interruption_kind") is not None
-                        or self._workers.containment_stamp(launch) != stamp
-                        or not eligible()
-                    ):
-                        return False
-                    binding.record_worker_stall({
-                        **evidence, "launch": launch, "containment_stamp": stamp,
-                        "reason": "worker_stalled", "prompt_output": prompt_output,
-                    })
-                    self._save_state(
-                        "agent_running", execution_interruption_kind="worker_stalled",
-                    )
-                    with self._snapshot_lock:
-                        self._watchdog_view = (execution_id, None)
-                    return True
-
-            return activity.classify(snapshot[1], policy.recovery, persist)
+            with self._operator_command_lock, self._lifecycle_lock:
+                return activity.classify(snapshot[1], policy.recovery, persist)
 
         self._execution_generation_binding().begin_operation(
             "worker", {"start": workspace.head},
@@ -5252,32 +5258,36 @@ class ServiceEngine:
                 except (ExecutionReportError, ExecutionWorkspaceError,
                         RevisionUnavailable, OSError):
                     pass  # Unprovable history stays unavailable.
-                with tempfile.TemporaryDirectory(prefix="devlegate-explorer-") as root:
-                    with RevisionChannel(
+                try:
+                    root = resources.enter_context(tempfile.TemporaryDirectory(
+                        prefix="devlegate-explorer-", ignore_cleanup_errors=True,
+                    ))
+                    revisions = resources.enter_context(RevisionChannel(
                         Path(root) / "read.sock", namespace, worker_authorized,
                         workspace.path, git_dir=git_dir, common_dir=common_dir,
-                    ) as revisions:
-                        worker_run = self._workers.run(
-                            workspace,
-                            prompt,
-                            execution_id=execution_id,
-                            stop_request=ResetStop(self, selected_ticket.id),
-                            owner_poll=poll_worker_activity,
-                            revisions=revisions,
-                            blackboard=blackboard,
-                            stall_poll=poll_stall,
-                            activity_handler=activity.observe,
-                            rendered_output_handler=output_tail.append,
-                            identity_handler=self._record_worker_identity,
-                            interruption_handler=lambda kind: self._save_state(
-                                "agent_running", execution_interruption_kind=kind
-                            ),
-                            prompt_delivered_handler=(
-                                lambda: self._record_prompt_delivery(
-                                    prompt_artifact, execution_id, prompt_digest
-                                )
-                            ),
+                    ))
+                except OSError:
+                    pass  # Optional read access is not a workflow admission gate.
+                worker_run = self._workers.run(
+                    workspace,
+                    prompt,
+                    execution_id=execution_id,
+                    stop_request=ResetStop(self, selected_ticket.id),
+                    owner_poll=poll_worker_activity,
+                    revisions=revisions,
+                    blackboard=blackboard,
+                    stall_poll=poll_stall,
+                    activity=activity,
+                    identity_handler=self._record_worker_identity,
+                    interruption_handler=lambda kind: self._save_state(
+                        "agent_running", execution_interruption_kind=kind
+                    ),
+                    prompt_delivered_handler=(
+                        lambda: self._record_prompt_delivery(
+                            prompt_artifact, execution_id, prompt_digest
                         )
+                    ),
+                )
             except WorkerAdmissionClosed:
                 self._execution_generation_binding().finish_operation(
                     "worker", {"admission_closed": True},
@@ -5296,6 +5306,8 @@ class ServiceEngine:
             with self._snapshot_lock:
                 if self._state.get("execution_interruption_kind") != "worker_stalled":
                     self._watchdog_view = None
+            if revisions is not None:
+                revisions.close()
             if blackboard is not None:
                 blackboard.channel.close()
             if worker_returned and worker_run.worker_group_retired:
@@ -5325,7 +5337,8 @@ class ServiceEngine:
                     self, reset, "worker retirement is unproven", reset["blocker"],
                 )
             raise DevlegateError(
-                "execution cgroup remains populated; worker retirement is unproven"
+                "worker retirement is unproven; inspect the execution log and "
+                "containment before retrying"
             )
         reset = self._state.get("ticket_reset")
         if isinstance(reset, dict) and reset.get("status") == "queued" and (
@@ -12539,14 +12552,11 @@ class ServiceEngine:
             self._finish_integrated_workspace_cleanup()
 
     def recovery_worker_observation(self, identity) -> str:
-        observation = self._workers.observe(identity)
-        if (
-            observation == "absent"
-            and self._state.get("execution_interruption_kind") == "worker_stalled"
-            and observe_worker_identity(identity, exact_leader=True) != "absent"
-        ):
-            return "indeterminate"
-        return observation
+        if self._state.get("execution_interruption_kind") == "worker_stalled":
+            return self._observe_stalled_worker(
+                self._execution_generation_binding(), identity,
+            )
+        return self._workers.observe(identity)
 
     @staticmethod
     def recovery_worker_identity(value: object, execution_id: object):
@@ -13051,89 +13061,61 @@ class ServiceEngine:
             _log(f"reconciliation resolved for {ticket_id}; resume required")
             return 0
 
-    def _worker_recovery_context(self, workspace: ExecutionWorkspace) -> str | None:
+    def _resumed_after_worker_stall(self, ticket_id: str) -> bool:
         failures = self._state.get("failed_executions", {})
         failure = (
-            failures.get(workspace.ticket_id) if isinstance(failures, dict) else None
+            failures.get(ticket_id) if isinstance(failures, dict) else None
         )
         intent = self._state.get("execution_resource_binding")
         if not isinstance(failure, dict) or failure.get("interruption_kind") != (
             "worker_stalled"
         ) or not isinstance(intent, dict):
-            return None
+            return False
         predecessor = intent.get("predecessor_execution")
-        if not isinstance(predecessor, str) or predecessor != failure.get(
+        return isinstance(predecessor, str) and predecessor == failure.get(
             "execution_id"
-        ):
-            return None
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, workspace.ticket_id,
-            runner=self._git_runtime,
         )
-        old = ResourceBinding.for_execution(manager, predecessor)
-        if old.intent["generation"] != intent.get("predecessor_generation"):
-            raise DevlegateError("worker stall predecessor generation differs")
-        evidence = old.worker_stall_evidence()
-        try:
-            status = self._git_runtime(
-                workspace.path, "-c", "core.quotePath=true", "status", "--porcelain=v1",
-                "--no-renames", "--untracked-files=all", "--ignore-submodules=none",
-            ).stdout
-        except (OSError, subprocess.CalledProcessError, UnicodeError):
-            status = None
-        return render_stall_context(status, evidence.get("prompt_output") or {})
 
     def _reconcile_stranded_execution(self) -> str | None:
         """Classify a lost owner and normalize only proven post-worker state."""
         try:
-            stalled = self._state.get("execution_interruption_kind") == "worker_stalled"
-            if stalled and self._state.get("execution_resource_binding") is None:
-                raise ValueError("worker stall resource binding is missing")
             if self._state.get("execution_resource_binding") is not None:
                 self._require_execution_generation(clean=False, remote=False)
-                binding = self._execution_generation_binding()
-                receipt = binding.operation_receipt("worker")
-                if stalled:
-                    evidence = binding.worker_stall_evidence()
-                    identity = self.recovery_worker_identity(
-                        receipt.get("identity"), self._state.get("execution_id"),
-                    )
-                    launch = evidence.get("launch")
-                    if (
-                        identity is None
-                        or not isinstance(launch, dict)
-                        or launch.get("containment") != identity.containment_id
-                        or launch != self._workers.launch_evidence(
-                            identity.execution_id
-                        )
-                    ):
-                        raise ValueError("worker stall containment binding differs")
-                    stamp = evidence.get("containment_stamp")
-                    current_stamp = self._workers.containment_stamp(launch)
-                    if (
-                        not isinstance(stamp, list)
-                        or len(stamp) != 2
-                        or not all(type(item) is int for item in stamp)
-                        or (current_stamp is not None and current_stamp != stamp)
-                        or (current_stamp is None and self._workers.observe(identity)
-                            != "absent")
-                    ):
-                        raise ValueError("worker stall containment identity differs")
-                    if self._state.get("execution_stage") != "post-worker" and (
-                        self._state.get("worker_identity") != identity.as_dict()
-                    ):
-                        raise ValueError("worker stall process binding differs")
-                    if self._state.get("execution_stage") == "post-worker" and (
-                        self.recovery_worker_observation(identity) != "absent"
-                    ):
-                        raise ValueError("worker stall retirement is no longer proven")
-                    with self._snapshot_lock:
-                        self._watchdog_view = (identity.execution_id, None)
+                self._execution_generation_binding().operation_receipt("worker")
+            elif self._state.get("execution_interruption_kind") == "worker_stalled":
+                raise ValueError("worker stall resource binding is missing")
             return recover_stranded_execution(self, self._state)
         except (
             ValueError, ContainmentError, ExecutionWorkspaceError, OSError,
         ) as error:
             raise DevlegateError(str(error)) from error
+
+    def _observe_stalled_worker(self, binding: ResourceBinding, identity) -> str:
+        receipt = binding.operation_receipt("worker")
+        evidence = binding.worker_stall_evidence(receipt)
+        launch = evidence.get("launch")
+        stamp = evidence.get("containment_stamp")
+        if (
+            identity is None
+            or identity.as_dict() != receipt.get("identity")
+            or identity.containment_id is None
+            or not isinstance(launch, dict)
+            or launch.get("containment") != identity.containment_id
+            or launch != self._workers.launch_evidence(identity.execution_id)
+            or not isinstance(stamp, list)
+            or len(stamp) != 2
+            or not all(type(item) is int for item in stamp)
+        ):
+            raise ValueError("worker stall containment or process binding differs")
+        observation = self._workers.observe_bound_containment(launch, stamp)
+        if observation == "absent" and (
+            observe_worker_identity(identity, exact_leader=True) != "absent"
+            or launch != self._workers.launch_evidence(identity.execution_id)
+        ):
+            return "indeterminate"
+        with self._snapshot_lock:
+            self._watchdog_view = (identity.execution_id, None)
+        return observation
 
     def _normalize_stranded_execution(self, interruption_kind: str) -> None:
         state = self._state
@@ -13144,6 +13126,14 @@ class ServiceEngine:
                 receipt = binding.operation_receipt("worker")
                 if state.get("execution_stage") == "post-worker":
                     binding.require_worker_retirement()
+                    if interruption_kind == "worker_stalled":
+                        identity = self.recovery_worker_identity(
+                            receipt.get("identity"), state.get("execution_id"),
+                        )
+                        if self._observe_stalled_worker(binding, identity) != "absent":
+                            raise ValueError(
+                                "worker stall retirement is no longer proven"
+                            )
                 observed_identity = receipt.get("identity")
                 if observed_identity is not None and (
                     state.get("worker_identity") != observed_identity

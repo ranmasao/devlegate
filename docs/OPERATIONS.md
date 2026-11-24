@@ -232,11 +232,11 @@ is proven and it has no active owned child processes. Output silence alone does
 not identify the cause of the stall.
 
 After proven retirement, ordinary interrupted-worker recovery can resume the
-ticket with its current repository changes. The continuation prompt contains
-relative changed paths and bounded output excerpts; private diagnostics stay
-with the previous attempt. If recovery cannot prove ownership or retirement
-after a service restart, it blocks admission rather than starting a second
-worker.
+ticket with its current repository changes and record the previous attempt as
+`worker_stalled`. The usual RESUME prompt adds a short reason for the
+interruption. If recovery cannot prove ownership or retirement after a service
+restart, it blocks admission rather than starting a second worker. Check status
+and the previous execution's log before taking recovery action.
 
 An admission timeout is a coordination wait, not a maximum response time. A
 request still queued at expiry is removed and reported not admitted. A published

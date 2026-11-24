@@ -1185,7 +1185,8 @@ def test_real_service_absent_worker_restart_requires_trusted_interruption(
 @pytest.mark.parametrize(
     "restart_at",
     [None, "empty-output", "warning", "post-worker", "stall_classified", "absent",
-     "foreign-root", "foreign-generation"],
+     "foreign-root", "foreign-generation", "foreign-containment", "optional-tools",
+     "persistence", "termination", "membership", "changed-owner", "review"],
 )
 def test_real_service_live_watchdog_retires_before_resuming(
     git_fixture, monkeypatch, restart_at,
@@ -1195,6 +1196,9 @@ def test_real_service_live_watchdog_retires_before_resuming(
     result = git_fixture["tmp"] / "continued.txt"
     release = result.with_suffix(".release")
     attempts = result.with_suffix(".attempts")
+    faults = {
+        "optional-tools", "persistence", "termination", "membership", "changed-owner",
+    }
     monkeypatch.setenv("WATCHDOG_TEST_RESULT", str(result))
     if restart_at == "empty-output":
         monkeypatch.setenv("WATCHDOG_TEST_EMPTY_OUTPUT", "1")
@@ -1203,6 +1207,16 @@ def test_real_service_live_watchdog_retires_before_resuming(
         "import json, os, pathlib, subprocess, sys, time\n"
         "prompt = sys.stdin.read()\n"
         "result = pathlib.Path(os.environ['WATCHDOG_TEST_RESULT'])\n"
+        "def complete():\n"
+        "    print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'continued work', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+        "if os.environ.get('WATCHDOG_TEST_REVIEW') and not "
+        "pathlib.Path('reviewed-checkpoint.txt').exists():\n"
+        "    pathlib.Path('reviewed-checkpoint.txt').write_text('prior checkpoint')\n"
+        "    complete()\n"
+        "    sys.exit(0)\n"
         "with result.with_suffix('.attempts').open('a') as attempts:\n"
         "    attempts.write(str(os.getpid()) + '\\n')\n"
         "tracked = pathlib.Path('README.md')\n"
@@ -1240,10 +1254,7 @@ def test_real_service_live_watchdog_retires_before_resuming(
         "    while not result.with_suffix('.release').exists():\n"
         "        print('continued work', file=sys.stderr, flush=True)\n"
         "        time.sleep(0.05)\n"
-        "    print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
-        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
-        "'input': {'outcome': 'completed', 'summary': 'continued work', "
-        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+        "    complete()\n"
     )
     worker.chmod(0o755)
     config = _recovery_config(git_fixture)
@@ -1253,19 +1264,43 @@ def test_real_service_live_watchdog_retires_before_resuming(
     )
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
-    if restart_at not in {None, "empty-output", "warning"}:
+    live = {None, "empty-output", "warning", "review"} | faults
+    if restart_at in faults:
+        monkeypatch.setenv("DEVLEGATE_TEST_WATCHDOG_FAULT", restart_at)
+    if restart_at == "review":
+        monkeypatch.setenv("WATCHDOG_TEST_REVIEW", "1")
+    if restart_at not in live:
         point = "stall_classified" if restart_at == "absent" else (
             "post-worker" if restart_at in {"foreign-root", "foreign-generation"}
+            else "stall_classified" if restart_at == "foreign-containment"
             else restart_at
         )
         monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", point)
     service = LiveService(
         git_fixture["working"], config, command=_recovery_driver(config),
     )
+    sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     try:
         service.start()
         service.wait_ready()
-        if restart_at in {None, "empty-output", "warning"}:
+        if restart_at == "review":
+            review = engine.control_worktree / "kanban/review/T-1.md"
+            service.wait_for(
+                lambda: review.exists() and _disk_state(config)["phase"] == "idle",
+            )
+            publisher = _ensure_publisher_control(git_fixture)
+            git(publisher, "fetch", "origin", "devlegate/control")
+            git(publisher, "reset", "--hard", "origin/devlegate/control")
+            review = publisher / "kanban/review/T-1.md"
+            reviewed = ExecutionReportStore(publisher).list("T-1")[0]
+            artifact = publisher / "reviews/T-1" / f"{reviewed.execution_id}.md"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("# REWORK\nVerify the retained checkpoint.\n")
+            review.rename(publisher / "kanban/todo/T-1.md")
+            git(publisher, "add", "-A")
+            git(publisher, "commit", "-m", "return watchdog test to todo")
+            git(publisher, "push", "origin", "HEAD:refs/heads/devlegate/control")
+        if restart_at in live:
             def warning_visible():
                 status = json.loads(service.cli("status", "--json").stdout)
                 return status["execution"].get("worker_liveness", {}).get("state") == (
@@ -1273,6 +1308,24 @@ def test_real_service_live_watchdog_retires_before_resuming(
                 )
 
             service.wait_for(warning_visible)
+            if restart_at in faults - {"optional-tools"}:
+                service.wait_for(lambda: result.with_suffix(".child-done").exists())
+                if restart_at in {"persistence", "termination"}:
+                    service.wait_for(
+                        lambda: service.cli("status", "--json").returncode == 1,
+                    )
+                else:
+                    # Membership and ownership are still unproven well after
+                    # the recovery threshold and the actual child's exit.
+                    time.sleep(0.8)
+                state = _disk_state(config)
+                assert state.get("execution_interruption_kind") == (
+                    "worker_stalled" if restart_at == "termination" else None
+                )
+                assert not result.exists()
+                assert len(attempts.read_text().splitlines()) == 1
+                assert Path(f"/proc/{state['worker_identity']['pid']}").is_dir()
+                return
             if restart_at == "warning":
                 observed = _disk_state(config)
                 assert observed.get("execution_interruption_kind") is None
@@ -1296,6 +1349,12 @@ def test_real_service_live_watchdog_retires_before_resuming(
             monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
             if restart_at == "absent":
                 _kill_worker_identity(classified["worker_identity"])
+            elif restart_at == "foreign-containment":
+                _kill_worker_identity(classified["worker_identity"])
+                root = service.registry_home / "containment"
+                pid_file = root / f"execution-{classified['execution_id']}.pid"
+                pid_file.rename(pid_file.with_suffix(".original"))
+                pid_file.write_text(str(sentinel.pid))
             elif restart_at == "foreign-root":
                 root = service.registry_home / "containment"
                 root.rename(root.with_name("original-containment"))
@@ -1310,7 +1369,10 @@ def test_real_service_live_watchdog_retires_before_resuming(
                 generation["generation"] = "f" * 64
                 marker.write_text(json.dumps(generation))
             service.restart()
-            if restart_at in {"stall_classified", "foreign-root", "foreign-generation"}:
+            if restart_at in {
+                "stall_classified", "foreign-root", "foreign-generation",
+                "foreign-containment",
+            }:
                 service.wait_for(
                     lambda: service.cli("status", "--json").returncode == 1,
                 )
@@ -1327,25 +1389,22 @@ def test_real_service_live_watchdog_retires_before_resuming(
         assert failure["interruption_kind"] == "worker_stalled"
         assert state["worker_prompt_directive"] == "resume"
         assert len(attempts.read_text().splitlines()) == 2
-        prompt = result.read_text().split("## Recovery Context\n", 1)[1]
-        assert "without observable output" in prompt
-        assert "- README.md\n- in-progress.txt\n" in prompt
-        if restart_at == "empty-output":
-            assert prompt.count("(no rendered output available)") == 2
-            assert str(state["execution_path"]) not in prompt
-        else:
-            assert "  end of large payload  \n" in prompt
-            assert "OpenCode tool: read\n  observed tool output  \n" in prompt
-            assert "  observed stdout  \n" in prompt
-            assert "[earlier output omitted]" in prompt
-            original_pid = attempts.read_text().splitlines()[0]
-            assert (
-                f"stderr marker\npid={original_pid} dir={state['execution_path']}\n"
-                in prompt
-            )
-        assert "ses_private_marker" not in prompt
-        assert "sessionID" not in prompt
-        assert failure["execution_id"] not in prompt
+        prompt = result.read_text()
+        assert "interrupted after extended output silence" in prompt
+        assert "do not assume the previous attempt completed" in prompt
+        assert "## Assigned Work\n~~~text\nwork\n~~~" in prompt
+        if restart_at == "optional-tools":
+            assert "devlegate_blackboard" not in prompt
+        if restart_at == "review":
+            assert "Verify the retained checkpoint." in prompt
+            assert (Path(state["execution_path"]) / "reviewed-checkpoint.txt").is_file()
+        for excluded in (
+            "## Recovery Context", "README.md", "in-progress.txt",
+            "end of large payload", "observed tool output", "observed stdout",
+            "stderr marker", "ses_private_marker",
+            str(state["execution_path"]), failure["execution_id"],
+        ):
+            assert excluded not in prompt
         release.touch()
         service.wait_for(lambda: _disk_state(config)["phase"] == "idle")
         if restart_at is None:
@@ -1355,7 +1414,12 @@ def test_real_service_live_watchdog_retires_before_resuming(
             assert "worker_liveness" not in status["execution"]
             assert len(attempts.read_text().splitlines()) == 2
     finally:
-        service.retire_tagged_processes("WATCHDOG_TEST_RESULT", str(result))
+        try:
+            assert sentinel.poll() is None
+        finally:
+            sentinel.terminate()
+            sentinel.wait(timeout=5)
+            service.retire_tagged_processes("WATCHDOG_TEST_RESULT", str(result))
 
 def test_publisher_index_is_independent_of_active_control_commit(git_fixture):
     control = git_fixture["control"]

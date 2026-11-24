@@ -65,7 +65,6 @@ def test_leader_exit_retires_exact_boundary_before_publication(
     engine = ServiceEngine(config)
     provider = DurableDeterministicContainmentProvider(tmp_path / "containment")
     engine._workers.containment_provider = provider
-    monkeypatch.setattr("devlegate.worker_supervisor.WORKER_TERMINATION_TIMEOUT", 0.25)
     boundaries = []
     forces = []
     supervised_times = []
