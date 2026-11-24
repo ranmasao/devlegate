@@ -802,7 +802,7 @@ export default tool({
             (tool_dir / "revisions.ts").write_text(
                 revisions_tool(revisions.path, revisions.token)
             )
-            for operation in ("changes", "diff"):
+            for operation in ("changes", "diff", "check"):
                 (tool_dir / f"{operation}.ts").write_text(
                     comparison_tool(revisions.path, revisions.token, operation)
                 )

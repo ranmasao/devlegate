@@ -255,6 +255,20 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
         )
         assert member is not None and b"MIT License" in member.read()
 
+    subprocess.run(
+        [sys.executable, "-I", "-c", """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from devlegate.change_channel import comparison_tool, revisions_tool
+path = Path('/unused.sock')
+assert 'List available virtual task checkpoints' in revisions_tool(path, 'token')
+for operation in ('changes', 'diff', 'check'):
+    assert f'operation: "{operation}"' in comparison_tool(path, 'token', operation)
+""", str(wheel)],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+
 
 def _distribution_source() -> DISTRIBUTION.Source:
     # These boundary tests validate archive contents, not repository history.

@@ -1329,6 +1329,34 @@ def test_failed_execution_is_suppressed_until_explicit_retry(tmp_path, monkeypat
     assert (control / "kanban/review/T-1.md").exists()
     assert not (control / "kanban/todo/T-1.md").exists()
 
+def test_explorer_retry_observes_durable_disconnected_checkpoint(tmp_path, monkeypatch):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(working)
+    owner = Devlegate(config)
+
+    def disconnect(workspace, _prompt, *, revisions, **_kwargs):
+        assert revisions.namespace.inventory()["checkpoint_count"] == 0
+        assert revisions.explorer.changes("BASE", "HEAD")["records"] == []
+        (workspace.path / "retained.txt").write_text("retained after disconnect\n")
+        return WorkerRunResult(1, "disconnected", None, None)
+
+    monkeypatch.setattr(owner._workers, "run", disconnect)
+    assert run_test_iteration(owner) == 1
+    restarted = Devlegate(config)
+
+    def retry(workspace, _prompt, *, revisions, **_kwargs):
+        assert revisions.namespace.inventory()["checkpoint_count"] == 1
+        assert revisions.explorer.changes("HEAD", "WORKTREE")["records"] == []
+        parent = revisions.explorer.diff("BASE", "HEAD", "retained.txt")
+        assert "+retained after disconnect\n" in parent["lines"]
+        assert (workspace.path / "retained.txt").is_file()
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(restarted._workers, "run", retry)
+    assert restarted.retry("T-1") == 0
+
+
 def test_post_worker_integrity_failure_is_persisted_without_checkpoint(
     tmp_path, monkeypatch
 ):
@@ -1560,9 +1588,16 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     resumed_ids = []
     prompts = []
 
-    def resumed_worker(workspace, prompt, **_kwargs):
+    def resumed_worker(workspace, prompt, *, revisions, **_kwargs):
         resumed_ids.append(resumed._state["execution_id"])
         prompts.append(prompt)
+        assert revisions.namespace.resolve("HEAD").identity == (
+            reconciliation["worker_checkpoint"]
+        )
+        assert revisions.explorer.changes("HEAD", "WORKTREE")["records"] == []
+        assert [entry["path"] for entry in revisions.explorer.changes(
+            "BASE", "WORKTREE",
+        )["records"]] == ["implementation.txt"]
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "validated", (), ()), None
         )
