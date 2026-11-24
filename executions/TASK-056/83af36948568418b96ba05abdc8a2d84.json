@@ -1,0 +1,30 @@
+{
+  "code_base_head": "e4c42cf95b2444aba6b416b99c3376f1402f2a1c",
+  "conclusion": "completed",
+  "control_head": "699fd45aa9824bf95393e5ca627f8423ebbf5958",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "83af36948568418b96ba05abdc8a2d84",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "2aa673d294739d0c472fde40a2c2c3f5f479c893583464f6fa89e119962d94f2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Updated the natural-leader-exit regression to require the actionable unproven-retirement diagnostic and preserved its blocked-restart and safe-continuation assertions. Registered bounded, pidfd-based fixture cleanup before launch so it runs independently of assertions and marker creation."
+  },
+  "workspace_head": "f836ad74fe92f6848ca56e2ddd8bdfe69e595468"
+}
