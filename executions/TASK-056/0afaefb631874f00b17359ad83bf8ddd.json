@@ -1,0 +1,30 @@
+{
+  "code_base_head": "e4c42cf95b2444aba6b416b99c3376f1402f2a1c",
+  "conclusion": "completed",
+  "control_head": "140170bb3c26ea2cdac9446e4f4c3f2913573482",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-056",
+  "execution_id": "0afaefb631874f00b17359ad83bf8ddd",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-056",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "9b18e31b9a1048aae9f7d9ce4133a19b788ee66b54ff4c16a8a9811182bf38ab",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-056",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "The worker watchdog now measures raw output silence and records a stall against the exact worker before bounded containment retirement. Proven retirement leads through shared interrupted-worker recovery, preserving repository changes and verified review context in the ordinary RESUME prompt with a short stall reason. Removed the deferred output-tail and changed-path projection."
+  },
+  "workspace_head": "1df3c83c3bf120bbb2c6db59d6b3c4b0da35b351"
+}
