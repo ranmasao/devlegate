@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -445,6 +446,48 @@ class ExecutionContainment:
             raise ContainmentError("malformed cgroup.events")
         return states == ["populated 1"]
 
+    def has_owned_descendants(self, worker_pid: int) -> bool | None:
+        """Observe other cgroup members, or return None when proof is missing.
+
+        The worker itself keeps the cgroup populated, so cgroup.events alone
+        cannot distinguish a quiet worker from one with an active tool. Include
+        nested cgroups and require the worker to be present in the observation.
+        """
+        if worker_pid <= 0:
+            return None
+        members: set[int] = set()
+
+        def collect(directory: int) -> None:
+            fd = os.open("cgroup.procs", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+            with os.fdopen(fd, encoding="ascii") as processes:
+                for entry in processes.read().split():
+                    pid = int(entry)
+                    if pid <= 0:
+                        raise ContainmentError("malformed cgroup.procs")
+                    members.add(pid)
+            with os.scandir(directory) as entries:
+                for child in entries:
+                    if child.is_symlink():
+                        raise ContainmentError("execution cgroup contains a symlink")
+                    if child.is_dir(follow_symlinks=False):
+                        fd = os.open(
+                            child.name, os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory,
+                        )
+                        try:
+                            collect(fd)
+                        finally:
+                            os.close(fd)
+
+        try:
+            with self._open_directory() as directory:
+                collect(directory)
+            if (worker_pid not in members
+                    or _boundary_stamp(self.path) != list(self._directory_identity)):
+                return None
+            return bool(members - {worker_pid})
+        except (ContainmentError, OSError, RecursionError, ValueError):
+            return None
+
     def request_graceful(self, pid: int | None) -> None:
         if pid is not None:
             try:
@@ -493,6 +536,16 @@ class ExecutionContainment:
             ) from error
 
 
+def _boundary_stamp(path: Path) -> list[int] | None:
+    try:
+        info = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        raise ContainmentError("execution boundary is a symlink")
+    return [info.st_dev, info.st_ino]
+
+
 class LinuxCgroupContainmentProvider:
     """Production cgroup-v2 provider.
 
@@ -502,6 +555,9 @@ class LinuxCgroupContainmentProvider:
 
     def create(self, execution_id: str) -> ExecutionContainment:
         return ExecutionContainment.create(execution_id)
+
+    def boundary_stamp(self, launch: dict) -> list[int] | None:
+        return _boundary_stamp(Path(launch["containment"].removeprefix("cgroup:")))
 
     def launch_evidence(self, execution_id: str) -> dict:
         """Capture the configured launch root before the uncertain spawn window."""
@@ -552,7 +608,10 @@ class LinuxCgroupContainmentProvider:
         try:
             values = (path / "cgroup.events").read_text().splitlines()
         except FileNotFoundError:
-            return "absent"
+            try:
+                return "absent" if _boundary_stamp(path) is None else "indeterminate"
+            except (ContainmentError, OSError):
+                return "indeterminate"
         except OSError:
             return "indeterminate"
         populated = next(
@@ -672,6 +731,15 @@ class DurableDeterministicContainmentProvider:
         except OSError:
             return "indeterminate"
 
+    def launch_evidence(self, execution_id: str) -> dict:
+        metadata = self.root.stat()
+        return {"containment": f"deterministic:{execution_id}",
+                "root": str(self.root), "identity": [metadata.st_dev, metadata.st_ino]}
+
+    def boundary_stamp(self, launch: dict) -> list[int] | None:
+        execution_id = launch["containment"].removeprefix("deterministic:")
+        return _boundary_stamp(self.root / f"execution-{execution_id}.pid")
+
     class _Boundary:
         def __init__(self, state: Path, identity: str) -> None:
             self.state = state
@@ -744,6 +812,24 @@ class DurableDeterministicContainmentProvider:
                 return path.read_text(encoding="ascii").strip()
             except (FileNotFoundError, OSError):
                 return ""
+
+        def has_owned_descendants(self, worker_pid: int) -> bool | None:
+            # This test provider uses a real subreaper and single-threaded
+            # fixtures. Include children adopted by the subreaper as well.
+            if self._process is None or self._process.pid != worker_pid:
+                return None
+            monitor = self._process._monitor.pid
+
+            def children(pid):
+                return set(Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
+
+            try:
+                adopted = children(monitor)
+                if str(worker_pid) not in adopted:
+                    return None
+                return bool(adopted - {str(worker_pid)} or children(worker_pid))
+            except OSError:
+                return None
 
         def request_graceful(self, pid: int | None) -> None:
             if pid is not None:
