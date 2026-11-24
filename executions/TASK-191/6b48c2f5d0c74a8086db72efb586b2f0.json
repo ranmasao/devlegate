@@ -1,0 +1,30 @@
+{
+  "code_base_head": "584bd903a4647cbcfe2f1ca22e7c5ea4ff6aa7f9",
+  "conclusion": "completed",
+  "control_head": "6d1202ff02b1df4d2861e7ccaab6c2330d4307ac",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-191",
+  "execution_id": "6b48c2f5d0c74a8086db72efb586b2f0",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-191",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "868dc6cd44e9343cbaa47ec3db64bb02dfe7ad02e9c1cc9a10723c0a96e73104",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-191",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Ticket log follow now drains departing attempts and follows replacement executions through retry, reset, and rework until the ticket reaches done or abandoned. Transient workflow scans and report publication races preserve log cursors, and execution-scoped follow diagnoses an ended reportless attempt without waiting indefinitely or switching executions."
+  },
+  "workspace_head": "e4c42cf95b2444aba6b416b99c3376f1402f2a1c"
+}
