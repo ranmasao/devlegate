@@ -294,10 +294,11 @@ class LiveService:
         try:
             self.kill()  # Close admission before draining detached launches.
         finally:
-            self._drain_tagged_processes(os.fsencode(f"{name}={value}"))
+            self.drain_tagged_processes(os.fsencode(f"{name}={value}"))
 
     @staticmethod
-    def _drain_tagged_processes(tag: bytes) -> None:
+    def drain_tagged_processes(tag: bytes) -> None:
+        """Bounded cleanup for fixture processes with an exact environment tag."""
         handles: dict[int, int] = {}
         sent: dict[int, int] = {}
         try:

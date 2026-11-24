@@ -9,7 +9,7 @@ from _daemon_support import *  # noqa: F403,F405
 from devlegate.execution_containment import DeterministicContainmentProvider
 from devlegate.ipc_protocol import IPCRequest
 from devlegate.ipc_server import dispatch_read_only
-from service_harness import compose_test_service_command
+from service_harness import LiveService, compose_test_service_command
 
 @pytest.mark.parametrize(
     "stage",
@@ -588,9 +588,9 @@ def test_sigkill_parent_and_retry_refuses_duplicate_worker(
                 except ProcessLookupError:
                     pass
 
-@pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
+@pytest.mark.skipif(not hasattr(os, "pidfd_open"), reason="requires Linux pidfds")
 def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, request
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -612,6 +612,14 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
     worker.chmod(0o755)
     monkeypatch.chdir(working)
     monkeypatch.setenv("DEVLEGATE_TEST_MARKER", str(marker))
+
+    def drain_fixture_processes():
+        LiveService.drain_tagged_processes(
+            os.fsencode(f"DEVLEGATE_TEST_MARKER={marker}")
+        )
+
+    # Register before launch, independently of the marker being written or read.
+    request.addfinalizer(drain_fixture_processes)
     engine = ServiceEngine(config)
     engine._workers.containment_provider = DeterministicContainmentProvider(
         populated_after_leader_exit=True
@@ -624,52 +632,42 @@ def test_natural_leader_exit_with_live_descendant_blocks_post_worker(
         return result
 
     monkeypatch.setattr(engine._workers, "run", run_worker)
-    try:
-        with pytest.raises(
-            DevlegateError, match="execution cgroup remains populated"
-        ):
-            run_test_iteration(engine)
-        assert marker.exists()
-        processes = json.loads(marker.read_text())
-        assert os.kill(processes["child"], 0) is None
-        assert engine._state["phase"] == "agent_running"
-        assert engine._state["execution_stage"] == "worker-running"
-        assert engine._state["worker_identity"]["pid"] == processes["worker"]
-        control = next((state / "worktrees").glob("*/control"))
-        assert not list((control / "executions").glob("**/*.json"))
-        restarted = ServiceEngine(config)
-        monkeypatch.setattr(
-            restarted._workers,
-            "run",
-            lambda *_args, **_kwargs: pytest.fail(
-                "restart reconciliation launched worker"
-            ),
-        )
-        with pytest.raises(DevlegateError, match="ownership is indeterminate"):
-            run_test_iteration(restarted)
-        assert os.kill(processes["child"], 0) is None
-        os.killpg(processes["worker"], signal.SIGKILL)
-        for _ in range(100):
-            try:
-                os.kill(processes["child"], 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.01)
-        launches = []
-        monkeypatch.setattr(
-            restarted._workers,
-            "run",
-            lambda workspace, prompt, **_kwargs: (
-                launches.append((workspace.path, prompt)),
-                WorkerRunResult(1, None, None, None),
-            )[1],
-        )
-        assert run_test_iteration(restarted) == 1
-        assert len(launches) == 1
-        assert "Continue the existing implementation" in launches[0][1]
-        assert restarted._state["phase"] == "idle"
-    finally:
-        try:
-            os.killpg(processes["worker"], signal.SIGKILL)
-        except (NameError, ProcessLookupError):
-            pass
+    with pytest.raises(
+        DevlegateError,
+        match="worker retirement is unproven; inspect the execution log and "
+        "containment before retrying",
+    ):
+        run_test_iteration(engine)
+    assert marker.exists()
+    processes = json.loads(marker.read_text())
+    assert os.kill(processes["child"], 0) is None
+    assert engine._state["phase"] == "agent_running"
+    assert engine._state["execution_stage"] == "worker-running"
+    assert engine._state["worker_identity"]["pid"] == processes["worker"]
+    control = next((state / "worktrees").glob("*/control"))
+    assert not list((control / "executions").glob("**/*.json"))
+    restarted = ServiceEngine(config)
+    monkeypatch.setattr(
+        restarted._workers,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "restart reconciliation launched worker"
+        ),
+    )
+    with pytest.raises(DevlegateError, match="ownership is indeterminate"):
+        run_test_iteration(restarted)
+    assert os.kill(processes["child"], 0) is None
+    drain_fixture_processes()
+    launches = []
+    monkeypatch.setattr(
+        restarted._workers,
+        "run",
+        lambda workspace, prompt, **_kwargs: (
+            launches.append((workspace.path, prompt)),
+            WorkerRunResult(1, None, None, None),
+        )[1],
+    )
+    assert run_test_iteration(restarted) == 1
+    assert len(launches) == 1
+    assert "Continue the existing implementation" in launches[0][1]
+    assert restarted._state["phase"] == "idle"
