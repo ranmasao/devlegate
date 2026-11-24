@@ -1,0 +1,30 @@
+{
+  "code_base_head": "853d4d14f576e53ebec5b97392f4bfa4b5d1ee55",
+  "conclusion": "completed",
+  "control_head": "046070fa5415c6fecc4d85d32bd78713054f2547",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-192",
+  "execution_id": "da094a3ac2754288a1d8c9940d565f6b",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-192",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "10008545e289e133f0e8b7ea14ec982e7f40cdd673b5fb698e3ef08f3e3ee64f",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-192",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Worker supervision now bounds prompt and output draining after leader exit and retires remaining descendants through the exact execution containment. It preserves the original return code and intact claim, and logs why retirement or output collection could not be proved."
+  },
+  "workspace_head": "584bd903a4647cbcfe2f1ca22e7c5ea4ff6aa7f9"
+}
