@@ -26,6 +26,18 @@ class LogReaderError(RuntimeError):
 
 
 _TICKET_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
+_POLL_INTERVAL = 0.1
+# Allow a checkout or report publication to settle, without masking persistent
+# invalid evidence. Only inconsistent observations get this grace period.
+_INCONCLUSIVE_POLLS = 20
+
+
+class _TicketLocationError(LogReaderError):
+    """A non-atomic workflow scan found zero or multiple locations."""
+
+
+class _ReportPublicationRace(LogReaderError):
+    """A report appeared during observation or before its chronology commit."""
 
 
 def _lines(value: int | None) -> int | None:
@@ -158,13 +170,25 @@ def _report_candidates(
     return tuple(sorted(candidates))
 
 
+def _log_exists(path: Path) -> bool:
+    try:
+        mode = path.stat().st_mode
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise LogReaderError(f"cannot inspect execution log {path}: {error}") from error
+    if not stat.S_ISREG(mode):
+        raise LogReaderError(f"execution log is not a regular file: {path}")
+    return True
+
+
 class _LogCursor:
     """Read a log tail and continue from the exact byte position it used."""
 
     def __init__(self, path: Path, lines: int | None) -> None:
         self.path = path
         self.lines = _lines(lines)
-        if not path.is_file():
+        if not _log_exists(path):
             raise LogReaderError(f"execution log not found: {path}")
         try:
             self.handle = path.open("rb")
@@ -266,14 +290,19 @@ def _ticket_observation(
     locations = []
     for state, relative in workflow_paths.items():
         path = control_worktree / relative / f"{ticket_id}.md"
-        if path.exists():
-            if path.is_symlink() or not path.is_file():
-                raise LogReaderError(f"ticket state is unsafe: {path}")
-            locations.append(state)
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise LogReaderError(f"cannot inspect ticket state: {path}") from error
+        if not stat.S_ISREG(mode):
+            raise LogReaderError(f"ticket state is unsafe: {path}")
+        locations.append(state)
     if len(locations) != 1:
         if not locations:
-            raise LogReaderError(f"ticket not found: {ticket_id}")
-        raise LogReaderError(
+            raise _TicketLocationError(f"ticket not found: {ticket_id}")
+        raise _TicketLocationError(
             f"ticket state is ambiguous: {ticket_id} ({', '.join(locations)})"
         )
     return locations[0]
@@ -322,6 +351,8 @@ def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
     missing = [report for path, report in by_path.items() if path not in seen]
     if len(missing) == 1 and missing[0].execution_id == active:
         ordered.extend(missing)
+    elif len(missing) == 1:
+        raise _ReportPublicationRace("cannot establish execution chronology")
     elif missing:
         raise LogReaderError("cannot establish execution chronology")
     return ordered
@@ -347,6 +378,7 @@ class _TicketReportObservation:
         self.head = None
         self.fd = None
         self.watched = None
+        self.dirty = False
 
     def close(self):
         if self.fd is not None:
@@ -463,13 +495,16 @@ class _TicketReportObservation:
         changed = self._events()
         head = self._head(self.reports) if self.reports is not None else None
         if self.reports is not None:
-            if changed and self._evidence(self.reports) != self.evidence:
+            if (changed or self.dirty) and (
+                self._evidence(self.reports) != self.evidence
+            ):
                 raise LogReaderError(
                     "execution report evidence changed or is inaccessible"
                 )
-            if (not changed and directory == self.directory and active == self.active
-                    and head == self.head):
+            if (not changed and not self.dirty and directory == self.directory
+                    and active == self.active and head == self.head):
                 return self.reports
+        self.dirty = True
         before = self._candidate_evidence()
         # Bind chronology to a stable HEAD across the history walk.
         head_before = self._head([path for path in before if path.suffix == ".json"])
@@ -483,10 +518,13 @@ class _TicketReportObservation:
             or self._events()
             or (head_before is not None and head_before != head_after)
         ):
-            raise LogReaderError("execution report evidence changed during observation")
+            raise _ReportPublicationRace(
+                "execution report evidence changed during observation"
+            )
         self.reports, self.directory, self.evidence = reports, directory, evidence
         self.active = active
         self.head = head_after
+        self.dirty = False
         return reports
 
 
@@ -526,11 +564,11 @@ def _ticket_selection(
     try:
         for execution, conclusion in reversed(entries):
             path = execution_log_path(state_dir, state_key, execution)
-            if allow_pending_log and execution == active and not path.is_file():
+            if allow_pending_log and execution == active and not _log_exists(path):
                 selected.append((execution, conclusion, ()))
                 continue
             if remaining == 0 and execution != active:
-                if not path.is_file():
+                if not _log_exists(path):
                     raise LogReaderError(f"execution log not found: {path}")
                 selected.append((execution, conclusion, ()))
                 continue
@@ -604,6 +642,8 @@ def follow_ticket(
             state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
             markers=markers, final_marker=final_marker, observation=observation,
         )
+    except KeyboardInterrupt:
+        return 130
     finally:
         observation.close()
 
@@ -612,93 +652,105 @@ def _follow_ticket(
     state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
     *, markers, final_marker, observation,
 ):
-    lines = _lines(lines)
-    state, active, selected, cursor = _ticket_selection(
+    _, active, selected, cursor = _ticket_selection(
         state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
         allow_pending_log=True, observation=observation,
     )
+    terminal_states = {"done": "done (integrated)", "abandoned": "abandoned"}
     printed: set[str] = set()
-    for execution, conclusion, records in selected:
+    current = active
+    location_misses = report_misses = 0
+
+    def emit(execution, conclusion, records):
         if markers:
             print(_execution_header(execution, conclusion), end="")
         print("".join(records), end="", flush=True)
-        if execution != active or state == "done":
-            printed.add(execution)
-    if state == "done" and active is not None and any(
-        execution == active and conclusion is None
-        for execution, conclusion, _ in selected
-    ):
+
+    def drain_current(conclusions, *, ended=False):
+        nonlocal cursor
+        if current is None:
+            return
+        if cursor is None:
+            path = execution_log_path(state_dir, state_key, current)
+            conclusion = conclusions.get(current)
+            if not _log_exists(path):
+                if ended and conclusion is not None:
+                    raise LogReaderError(f"execution log not found: {path}")
+                return
+            # A file created after the snapshot is all continuation, even -t 0.
+            cursor = _LogCursor(path, None)
+            emit(current, conclusion, cursor.initial)
+        print("".join(cursor.read_available()), end="", flush=True)
+
+    try:
+        for execution, conclusion, records in selected:
+            # Delay a pending log's header so it still precedes its own bytes.
+            if execution != current or cursor is not None:
+                emit(execution, conclusion, records)
+            if execution != current:
+                printed.add(execution)
+
+        while True:
+            try:
+                state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
+                if state in terminal_states and state != _ticket_observation(
+                    control_worktree, ticket_id, workflow_paths
+                ):
+                    state = None
+                location_misses = 0
+            except _TicketLocationError:
+                location_misses += 1
+                if location_misses >= _INCONCLUSIVE_POLLS:
+                    raise
+                state = None
+
+            active = _active_ticket_execution(state_dir, state_key, ticket_id)
+            try:
+                reports = observation.observe(active)
+                report_misses = 0
+            except _ReportPublicationRace:
+                report_misses += 1
+                if report_misses >= _INCONCLUSIVE_POLLS:
+                    raise
+                drain_current({})
+                time.sleep(_POLL_INTERVAL)
+                continue
+
+            terminal = state in terminal_states
+            conclusions = {r.execution_id: r.result.conclusion for r in reports}
+            later_reports = [
+                execution for execution in conclusions
+                if execution not in printed and execution not in (current, active)
+            ]
+            if current is not None and current != active:
+                # Observe departure first, then drain the retiring log before
+                # emitting any newer header. Retain the cursor through idle so
+                # a restart or a late report cannot reopen it at the beginning.
+                drain_current(conclusions, ended=True)
+                if active is not None or later_reports:
+                    if cursor is not None:
+                        cursor.close()
+                        cursor = None
+                        printed.add(current)
+                    current = None
+
+            for execution in later_reports:
+                path = execution_log_path(state_dir, state_key, execution)
+                emit(execution, conclusions[execution], _read_file(path, None))
+                printed.add(execution)
+
+            if active is not None and active not in printed:
+                current = active
+                drain_current(conclusions, ended=terminal)
+
+            if terminal:
+                if markers and final_marker:
+                    print(f"\n===== ticket {ticket_id}: {terminal_states[state]} =====")
+                return 0
+            time.sleep(_POLL_INTERVAL)
+    finally:
         if cursor is not None:
             cursor.close()
-        raise LogReaderError(f"execution {active} has no durable report")
-    if cursor is not None or (active is not None and state != "done"):
-        if state == "done":
-            cursor.close()
-        else:
-            result = _follow_execution(
-                state_dir, state_key, control_worktree, active, lines,
-                ticket_id=ticket_id, cursor=cursor,
-            )
-            if result != 0:
-                return result
-            printed.add(active)
-    while True:
-        state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
-        active = _active_ticket_execution(state_dir, state_key, ticket_id)
-        reports = observation.observe(active)
-        for report in reports:
-            if report.execution_id in printed:
-                continue
-            # The active execution is read through the streaming cursor below.
-            # This keeps its tail and cursor position from being separated.
-            if active == report.execution_id and state != "done":
-                continue
-            path = execution_log_path(state_dir, state_key, report.execution_id)
-            if markers:
-                print(
-                    _execution_header(report.execution_id, report.result.conclusion),
-                    end="",
-                )
-            print("".join(_read_file(path, None)), end="", flush=True)
-            printed.add(report.execution_id)
-        # Accepted is an intermediate integration boundary. Keep observing until
-        # the ticket reaches the canonical workflow terminal state.
-        if state == "done":
-            if active is not None and active not in printed:
-                raise LogReaderError(f"execution {active} has no durable report")
-            if markers and final_marker:
-                print(f"\n===== ticket {ticket_id}: done (integrated) =====")
-            return 0
-        if active is not None:
-            if active in printed:
-                try:
-                    time.sleep(0.1)
-                except KeyboardInterrupt:
-                    return 130
-                continue
-            if active not in printed:
-                report = next(
-                    (item for item in reports if item.execution_id == active), None
-                )
-                conclusion = report.result.conclusion if report is not None else None
-                if markers:
-                    print(_execution_header(active, conclusion), end="", flush=True)
-            result = _follow_execution(
-                state_dir,
-                state_key,
-                control_worktree,
-                active,
-                None,
-                ticket_id=ticket_id,
-            )
-            if result != 0:
-                return result
-            printed.add(active)
-            continue
-        try:
-            time.sleep(0.1)
-        except KeyboardInterrupt:
-            return 130
 
 
 def journal_command(unit: str, lines: int | None, follow: bool) -> list[str]:
@@ -807,25 +859,19 @@ def _execution_report(
         raise LogReaderError(str(error)) from error
 
 
-def _execution_terminal(
-    control_worktree: Path, execution: str, ticket_id: str | None = None
-) -> bool:
-    return _execution_report(control_worktree, execution, ticket_id) is not None
-
-
-def _follow_execution(
+def follow_execution(
     state_dir: Path,
     state_key: str,
     control_worktree: Path,
     execution: str,
-    lines: int,
+    lines: int | None,
     *,
     ticket_id: str | None = None,
-    cursor: _LogCursor | None = None,
     markers: bool = False,
 ) -> int:
-    """Follow one immutable execution until its durable report and log EOF."""
+    """Follow one execution through its report or departure from runtime state."""
     lines = _lines(lines)
+    cursor = None
     try:
         path = execution_log_path(state_dir, state_key, execution)
     except OperationalLogError as error:
@@ -843,58 +889,48 @@ def _follow_execution(
                     ticket_id = report.ticket_id
         # If the file does not yet exist, everything it later contains arrived
         # after follow began and is continuation, not an initial tail.
-        pending_log = cursor is None and not path.is_file()
-        while cursor is None:
-            if path.is_file():
-                cursor = _LogCursor(path, None if pending_log else lines)
-                print("".join(cursor.initial), end="", flush=True)
-                break
-            terminal = _execution_terminal(control_worktree, execution, ticket_id)
-            active = _execution_active(state_dir, state_key, execution)
-            if terminal or not active:
-                if terminal:
-                    raise LogReaderError(f"execution log not found: {path}")
-                raise LogReaderError(
-                    f"execution {execution} is no longer active and has no report"
-                )
-            time.sleep(0.1)
+        if _log_exists(path):
+            cursor = _LogCursor(path, lines)
+            print("".join(cursor.initial), end="", flush=True)
 
-        while True:
-            records = cursor.read_available()
-            if records:
-                print("".join(records), end="", flush=True)
-                continue
-            report = _execution_report(control_worktree, execution, ticket_id)
-            if report is not None:
-                # The report is the lifecycle boundary; consume everything that
-                # was published before or during terminalization, then stop.
-                time.sleep(0.1)
+        def drain():
+            nonlocal cursor
+            if cursor is None and _log_exists(path):
+                cursor = _LogCursor(path, None)
+                print("".join(cursor.initial), end="", flush=True)
+            if cursor is not None:
                 print("".join(cursor.read_available()), end="", flush=True)
-                if markers:
-                    conclusion = report.result.conclusion
-                    print(f"\n===== execution {execution}: {conclusion} =====")
-                return 0
-            if not _execution_active(state_dir, state_key, execution):
-                time.sleep(0.1)
-                continue
-            time.sleep(0.1)
+
+        departed = False
+        while True:
+            drain()
+            report = _execution_report(control_worktree, execution, ticket_id)
+            if report is None:
+                active = _execution_active(state_dir, state_key, execution)
+                if active or not departed:
+                    # Allow one re-observation for a report racing departure.
+                    departed = not active
+                    time.sleep(_POLL_INTERVAL)
+                    continue
+                report = _execution_report(control_worktree, execution, ticket_id)
+                if report is None:
+                    drain()
+                    raise LogReaderError(
+                        f"execution {execution} is no longer active and has no report"
+                    )
+            if cursor is None:
+                drain()
+                if cursor is None:
+                    raise LogReaderError(f"execution log not found: {path}")
+            # Give bytes racing terminal publication a final drain.
+            time.sleep(_POLL_INTERVAL)
+            drain()
+            if markers:
+                conclusion = report.result.conclusion
+                print(f"\n===== execution {execution}: {conclusion} =====")
+            return 0
     except KeyboardInterrupt:
         return 130
     finally:
         if cursor is not None:
             cursor.close()
-
-
-def follow_execution(
-    state_dir: Path,
-    state_key: str,
-    control_worktree: Path,
-    execution: str,
-    lines: int,
-    *, markers: bool = False, ticket_id: str | None = None,
-) -> int:
-    """Follow one immutable execution until its durable report and log EOF."""
-    return _follow_execution(
-        state_dir, state_key, control_worktree, execution, lines,
-        markers=markers, ticket_id=ticket_id,
-    )

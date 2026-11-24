@@ -1185,3 +1185,305 @@ def test_follow_interrupt_does_not_print_terminal_marker(tmp_path, monkeypatch, 
     monkeypatch.setattr("devlegate.log_reader.time.sleep", interrupt)
     assert follow_execution(state, "key", control, execution, None, markers=True) == 130
     assert capsys.readouterr().out == "unfinished"
+
+
+_WORKFLOW = {
+    name: f"kanban/{name}"
+    for name in ("backlog", "todo", "review", "accepted", "done", "abandoned")
+}
+
+
+def _move(control, before, after):
+    destination = control / _WORKFLOW[after]
+    destination.mkdir(parents=True, exist_ok=True)
+    (control / _WORKFLOW[before] / "T-1.md").rename(destination / "T-1.md")
+
+
+def _admit_log(state, execution):
+    SQLiteRuntimeStore(state, "key").replace(
+        {"phase": "agent_running", "execution_id": execution,
+         "execution_ticket_id": "T-1"}
+    )
+    path = execution_log_path(state, "key", execution)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _poll_steps(monkeypatch, *steps):
+    remaining = iter(steps)
+
+    def advance(_seconds):
+        step = next(remaining, None)
+        if step is None:
+            pytest.fail("follower kept waiting after the last lifecycle transition")
+        step()
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+
+
+def test_ticket_follow_retry_reset_and_rework_after_reportless_execution(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    first, retry, rework, last = (digit * 32 for digit in "abcd")
+    log = _admit_log(state, first)
+    log.write_text("before tail\ninitial\n")
+    output = []
+
+    def end_without_report():
+        output.append(capsys.readouterr().out)
+        with log.open("a") as stream:
+            stream.write("old final\n")
+        SQLiteRuntimeStore(state, "key").replace({"phase": "idle", "ticket_reset": {
+            "status": "queued", "prior_execution": {"execution_id": first},
+        }})
+
+    def admit_retry():
+        output.append(capsys.readouterr().out)
+        assert output[-1] == "old final\n"
+        # A fresh runtime-store instance represents the replacement owner.
+        _admit_log(state, retry)
+
+    def create_retry_log():
+        execution_log_path(state, "key", retry).write_text("retry one\nretry two\n")
+
+    def publish_review(execution):
+        _report(control, execution, ticket="T-1")
+        _commit_reports(control)
+        _move(control, "todo", "review")
+        SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+
+    def admit_rework(execution, label):
+        _move(control, "review", "todo")
+        _admit_log(state, execution).write_text(f"{label} one\n{label} two\n")
+
+    _poll_steps(
+        monkeypatch, end_without_report, lambda: None, admit_retry, create_retry_log,
+        lambda: publish_review(retry), lambda: admit_rework(rework, "rework"),
+        lambda: publish_review(rework), lambda: admit_rework(last, "last"),
+        lambda: publish_review(last), lambda: _move(control, "review", "accepted"),
+        lambda: _move(control, "accepted", "done"),
+    )
+    assert follow_ticket(
+        state, "key", control, "T-1", 1, _WORKFLOW, final_marker=True,
+    ) == 0
+    output.append(capsys.readouterr().out)
+    assert "".join(output) == (
+        f"\n===== execution {first} state=active =====\ninitial\nold final\n"
+        f"\n===== execution {retry} state=active =====\nretry one\nretry two\n"
+        f"\n===== execution {rework} state=active =====\nrework one\nrework two\n"
+        f"\n===== execution {last} state=active =====\nlast one\nlast two\n"
+        "\n===== ticket T-1: done (integrated) =====\n"
+    )
+    assert not (control / "executions" / "T-1" / f"{first}.json").exists()
+
+
+def test_ticket_follow_late_report_between_replacement_and_log_creation(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    first, replacement, historical = (digit * 32 for digit in "abf")
+    _report(control, historical, ticket="T-1")
+    _commit_reports(control)
+    old = _admit_log(state, first)
+    execution_log_path(state, "key", historical).write_text("historical\n")
+    old.write_text("omitted by tail\n")
+
+    def replace():
+        with old.open("a") as stream:
+            stream.write("final first\n")
+        _admit_log(state, replacement)
+
+    def publish_json():
+        assert capsys.readouterr().out == (
+            f"\n===== execution {historical} conclusion=failed =====\n"
+            f"\n===== execution {first} state=active =====\nfinal first\n"
+        )
+        _report(control, first, ticket="T-1")
+
+    def create_log():
+        execution_log_path(state, "key", replacement).write_text("new one\nnew two\n")
+
+    def commit_late_report():
+        assert capsys.readouterr().out == (
+            f"\n===== execution {replacement} state=active =====\nnew one\nnew two\n"
+        )
+        _commit_reports(control)
+
+    _poll_steps(
+        monkeypatch, replace, publish_json, create_log,
+        commit_late_report,
+        lambda: _move(control, "todo", "abandoned"),
+    )
+    assert follow_ticket(
+        state, "key", control, "T-1", 0, _WORKFLOW, final_marker=True,
+    ) == 0
+    assert capsys.readouterr().out == "\n===== ticket T-1: abandoned =====\n"
+
+
+@pytest.mark.parametrize("terminal", ["done", "abandoned"])
+@pytest.mark.parametrize("prior_report", [True, False])
+def test_ticket_follow_drains_on_terminal_transition(
+    tmp_path, monkeypatch, capsys, terminal, prior_report,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    first, last = "a" * 32, "b" * 32
+    old = _admit_log(state, first)
+    old.write_text("old\n")
+
+    def replace():
+        if prior_report:
+            _report(control, first, ticket="T-1")
+            _commit_reports(control)
+        _admit_log(state, last).write_text("last\n")
+
+    def finish():
+        with execution_log_path(state, "key", last).open("a") as stream:
+            stream.write("drained\n")
+        # The terminal ticket may be observed before a stale runtime slot clears.
+        _move(control, "todo", terminal)
+
+    _poll_steps(monkeypatch, replace, finish)
+    assert follow_ticket(
+        state, "key", control, "T-1", 10, _WORKFLOW, markers=False,
+    ) == 0
+    assert capsys.readouterr().out == "old\nlast\ndrained\n"
+
+
+def test_execution_follow_ends_reportless_without_switching(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    first, replacement = "a" * 32, "b" * 32
+    old = _admit_log(state, first)
+    old.write_text("old\n")
+
+    def depart():
+        with old.open("a") as stream:
+            stream.write("drained\n")
+        _admit_log(state, replacement).write_text("not selected\n")
+
+    _poll_steps(monkeypatch, depart, lambda: None)
+    with pytest.raises(LogReaderError, match="no longer active and has no report"):
+        follow_execution(
+            state, "key", control, first, 10, markers=True, ticket_id="T-1",
+        )
+    assert capsys.readouterr().out == "old\ndrained\n"
+
+
+def test_ticket_follow_survives_zero_and_double_location_scans(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "review")
+    armed = None
+    interleaved = []
+    lstat = Path.lstat
+
+    def observe(path, *args, **kwargs):
+        nonlocal armed
+        if armed is None or path != control / _WORKFLOW[armed[0]] / "T-1.md":
+            return lstat(path, *args, **kwargs)
+        _, before, after = armed
+        armed = None
+        try:
+            return lstat(path, *args, **kwargs)
+        finally:
+            _move(control, before, after)
+            interleaved.append((before, after))
+
+    def miss():
+        nonlocal armed
+        # The reader observes backlog missing, then review missing after the move.
+        armed = ("backlog", "review", "backlog")
+
+    def start():
+        _move(control, "backlog", "todo")
+        _admit_log(state, "a" * 32).write_text("before move\n")
+
+    def double():
+        nonlocal armed
+        # The reader observes todo present, then review present after the move.
+        armed = ("todo", "todo", "review")
+        with execution_log_path(state, "key", "a" * 32).open("a") as stream:
+            stream.write("during move\n")
+        SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
+
+    def retry():
+        _move(control, "review", "todo")
+        _admit_log(state, "b" * 32).write_text("after move\n")
+
+    monkeypatch.setattr(Path, "lstat", observe)
+    _poll_steps(
+        monkeypatch, miss, start, double, retry, lambda: _move(control, "todo", "done"),
+    )
+    assert follow_ticket(state, "key", control, "T-1", 0, _WORKFLOW, markers=False) == 0
+    assert interleaved == [("review", "backlog"), ("todo", "review")]
+    assert capsys.readouterr().out == "before move\nduring move\nafter move\n"
+
+
+def test_ticket_follow_reports_initial_unknown_ticket(tmp_path, monkeypatch):
+    _poll_steps(monkeypatch)
+    with pytest.raises(LogReaderError, match="ticket not found: T-1"):
+        follow_ticket(
+            tmp_path / "state", "key", tmp_path / "control", "T-1", 0, _WORKFLOW,
+        )
+
+
+@pytest.mark.parametrize("invalid", ["missing", "ambiguous", "unsafe"])
+def test_ticket_follow_diagnoses_persistent_invalid_state(
+    tmp_path, monkeypatch, invalid,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    ticket = control / _WORKFLOW["todo"] / "T-1.md"
+    calls = 0
+
+    def invalidate(_seconds):
+        nonlocal calls
+        calls += 1
+        if calls > 30 or (invalid == "unsafe" and calls > 1):
+            pytest.fail("persistent invalid state was not diagnosed")
+        if calls == 1:
+            if invalid == "ambiguous":
+                _ticket(control, "T-1", "review")
+            else:
+                ticket.unlink()
+                if invalid == "unsafe":
+                    ticket.symlink_to(tmp_path / "missing")
+
+    monkeypatch.setattr("devlegate.log_reader.time.sleep", invalidate)
+    expected = "not found" if invalid == "missing" else invalid
+    with pytest.raises(LogReaderError, match=expected):
+        follow_ticket(state, "key", control, "T-1", 0, _WORKFLOW)
+    if invalid != "unsafe":
+        assert calls > 1
+
+
+def test_ticket_follow_interrupt_keeps_output_and_runtime_revision(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    execution = "a" * 32
+    path = _admit_log(state, execution)
+    path.write_text("live\n")
+    store = SQLiteRuntimeStore(state, "key")
+    before = store.observe()
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    _poll_steps(monkeypatch, interrupt)
+    assert follow_ticket(
+        state, "key", control, "T-1", 1, _WORKFLOW, final_marker=True,
+    ) == 130
+    assert capsys.readouterr().out == (
+        f"\n===== execution {execution} state=active =====\nlive\n"
+    )
+    assert store.observe() == before
+    assert path.read_text() == "live\n"
+    assert not (control / "executions").exists()
