@@ -217,6 +217,61 @@ def test_budget_is_shared_across_socket_reconnects(tmp_path):
         assert not result["complete"] and result["next_cursor"] is None
 
 
+@pytest.mark.parametrize("driver_type", ["clean", "process"])
+def test_owner_worktree_queries_do_not_run_conversion_filters(tmp_path, driver_type):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", repo, *args], text=True).strip()
+
+    git("init", "-q")
+    tracked = repo / "file"
+    tracked.write_text("aa\n")
+    git("add", "file")
+    git("-c", "user.name=Owner", "-c", "user.email=owner@test", "commit", "-qm", "Base")
+    namespace = RevisionNamespace(git("rev-parse", "HEAD"), ())
+    marker = tmp_path / "helper-invoked"
+    git_dir = repo / ".git"
+    # This is owner configuration; the worker only selects the driver via attributes.
+    included = git_dir / "filters"
+    included.write_text(f'[filter "Fixture.Driver"]\n'
+                        f'\t{driver_type} = touch "{marker}" && cat\n'
+                        '\trequired = true\n')
+    git("config", "include.path", "filters")
+    git("config", "core.trustctime", "false")
+    attributes = repo / ".gitattributes"
+    attributes.write_text("file filter=Fixture.Driver\n")
+    previous = tracked.stat()
+    tracked.write_text("b \n")
+    os.utime(tracked, ns=(previous.st_atime_ns, previous.st_mtime_ns))
+    # Git verifies content when the tracked entry is racily clean.
+    os.utime(git_dir / "index", (1, 1))
+    files = [tracked, attributes, included, git_dir / "config", git_dir / "index"]
+    original = [path.read_bytes() for path in files]
+
+    with RevisionChannel(tmp_path / "socket", namespace, lambda pid: pid == os.getpid(),
+                         repo, git_dir=git_dir, common_dir=git_dir) as channel:
+        request = {"token": channel.token, "from": "HEAD", "to": "WORKTREE"}
+        changes = exchange(channel, {**request, "operation": "changes"})
+        assert not marker.exists(), "changes invoked a Git conversion helper"
+        assert changes["complete"]
+        assert {record["path"] for record in changes["records"]} == {
+            "file", ".gitattributes",
+        }
+        patch = exchange(channel, {**request, "operation": "diff", "path": "file"})
+        assert not marker.exists(), "diff invoked a Git conversion helper"
+        assert patch["complete"] and "+b \n" in patch["lines"]
+        hygiene = exchange(channel, {**request, "operation": "check"})
+        assert not marker.exists(), "check invoked a Git conversion helper"
+        assert hygiene["status"] == "findings" and hygiene["complete"]
+        assert [
+            (item["path"], item["line"], item["kinds"])
+            for item in hygiene["diagnostics"]
+        ] == [("file", 1, ["trailing whitespace"])]
+    assert [path.read_bytes() for path in files] == original
+
+
 def test_generated_opencode_tools_execute_with_real_peer_credentials(tmp_path):
     node = shutil.which("node")
     assert node is not None, "Node is required to exercise the OpenCode adapter"

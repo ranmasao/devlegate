@@ -201,6 +201,23 @@ class ImmutableExplorer:
             pass
         return "unknown"
 
+    def _conversion_overrides(self) -> list[str]:
+        # diff-index may verify a stat-clean entry by running Git's conversion
+        # machinery. --no-ext-diff and --no-textconv don't protect that path.
+        # Read names (including owner config includes) in the same Git context
+        # as diff-index, and disable drivers before consulting live attributes.
+        raw = self._run(
+            "config", "--includes", "--null", "--name-only", "--get-regexp",
+            r"^filter\..*\.(clean|process|required)$", limit=16 * 1024, accepted=(0, 1),
+        )
+        overrides = []
+        for key in sorted(set(raw.split(b"\0")) - {b""}):
+            if b"=" in key:  # Cannot represent this key in -c key=value form.
+                raise ObservationError("WORKTREE_UNAVAILABLE")
+            value = "false" if key.endswith(b".required") else ""
+            overrides.extend(("-c", os.fsdecode(key) + "=" + value))
+        return overrides
+
     def _live_file(self, path: str, read: int = 0) -> tuple[str, int, bytes] | None:
         """Open only a selected path, without following symlinks or special files."""
         try:
@@ -265,8 +282,11 @@ class ImmutableExplorer:
                    for record in raw.split(b"\0")):
                 raise ObservationError("INVALID_PATH")
         old_links = {p for p, entry in historical.items() if entry[0] == "160000"}
-        raw = self._run("diff-index", "--raw", "-z", "--no-renames", "--no-ext-diff",
-                        "--no-textconv", "--ignore-submodules=all", identity, *scope)
+        raw = self._run(
+            *self._conversion_overrides(), "diff-index", "--raw", "-z", "--no-renames",
+            "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+            identity, *scope,
+        )
         paths = {_entry_path(p.decode()) for p in raw.split(b"\0")[1:-1:2]}
         # After a staged gitlink removal, the former checkout is not an
         # ordinary untracked directory. Never enumerate its contents.
