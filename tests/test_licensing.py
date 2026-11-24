@@ -189,6 +189,7 @@ def _build_distribution_artifacts(root: Path) -> tuple[Path, Path]:
 
 def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> None:
     wheel, sdist = _build_distribution_artifacts(tmp_path)
+    installed = tmp_path / "installed"
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         dist_info = next(name for name in names if name.endswith(".dist-info/METADATA"))
@@ -226,6 +227,7 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
             if name.startswith("devlegate/default_templates/")
             if not name.endswith("/")
         )
+        archive.extractall(installed)
 
     with tarfile.open(sdist) as archive:
         names = set(archive.getnames())
@@ -260,12 +262,20 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
+from devlegate.blackboard_channel import blackboard_tool
 from devlegate.change_channel import comparison_tool, revisions_tool
+from devlegate.worker_prompt import (
+    WorkDirective, WorkerPromptInput, build_worker_prompt,
+)
 path = Path('/unused.sock')
 assert 'List available virtual task checkpoints' in revisions_tool(path, 'token')
 for operation in ('changes', 'diff', 'check'):
     assert f'operation: "{operation}"' in comparison_tool(path, 'token', operation)
-""", str(wheel)],
+assert 'read only relevant IDs' in blackboard_tool(path, 'token')
+prompt = build_worker_prompt(WorkerPromptInput('Work', WorkDirective.RESUME,
+                                             blackboard_available=True))
+assert 'list once and read only relevant' in prompt
+""", str(installed)],
         cwd=tmp_path, check=True, capture_output=True,
     )
 

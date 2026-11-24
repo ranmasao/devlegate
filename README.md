@@ -167,6 +167,8 @@ Current limits:
   and service views.
 - [Change Explorer](docs/change-explorer.md): inspect task checkpoints, changed
   paths, file diffs, and whitespace diagnostics from the worker.
+- [Task blackboard](docs/blackboard.md): save concise research findings for later
+  worker attempts of the same ticket.
 - [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
 - [Abandonment foundations](docs/abandonment.md): request schema, bounded evidence,
   and the current execution/finalization limitation.

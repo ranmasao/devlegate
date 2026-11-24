@@ -9,19 +9,16 @@ import hmac
 import json
 import os
 import secrets
-import socket
-import struct
 from collections.abc import Callable
 from pathlib import Path
 
-from devlegate.abandonment_evidence import EvidenceError
 from devlegate.change_explorer import ImmutableExplorer, ObservationError, serialize
 from devlegate.change_revisions import RevisionNamespace
-from devlegate.evidence_channel import EvidenceSocket
 from devlegate.ipc_protocol import encode_frame
+from devlegate.worker_request_channel import WorkerRequestChannel, WorkerRequestError
 
 
-class RevisionChannel(EvidenceSocket):
+class RevisionChannel(WorkerRequestChannel):
     def __init__(self, path: Path, namespace: RevisionNamespace | None,
                  authorized: Callable[[int], bool], repo: Path | None = None, *,
                  git_dir: Path | None = None, common_dir: Path | None = None) -> None:
@@ -34,16 +31,17 @@ class RevisionChannel(EvidenceSocket):
         ) if repo is not None and namespace is not None else None)
         self._disabled = False
         self._budget_notice = encode_frame(serialize(self._status("BUDGET_EXHAUSTED")))
-        super().__init__(None, path, requests=4096, response_bytes=65536,
-                         session_seconds=float("inf"),
-                          reply=self._revision_reply)
+        super().__init__(
+            path, self._revision_reply, requests=4096, response_bytes=65536,
+            response_limit=8192, session_seconds=float("inf"),
+        )
 
     def poll(self) -> None:
         if self._disabled:
             return
         try:
             super().poll()
-        except (EvidenceError, OSError):
+        except (WorkerRequestError, OSError):
             # An exhausted or broken optional read channel must not terminate
             # the worker or change execution authorization.
             self.close()
@@ -59,17 +57,15 @@ class RevisionChannel(EvidenceSocket):
                 "next_cursor": None}
 
     def _authorized_peer(self) -> bool:
-        if self._client is None:
+        credentials = self.peer_credentials()
+        if credentials is None:
             return False
-        size = struct.calcsize("3i")
-        pid, uid, _gid = struct.unpack("3i", self._client.getsockopt(
-            socket.SOL_SOCKET, socket.SO_PEERCRED, size,
-        ))
+        pid, uid, _gid = credentials
         return uid == os.getuid() and pid > 0 and self.authorized(pid)
 
     def _revision_reply(self, raw: bytes) -> bytes:
         if self._remaining < len(self._budget_notice):
-            raise EvidenceError("Change Explorer budget exhausted")
+            raise WorkerRequestError("Change Explorer budget exhausted")
         try:
             request = json.loads(raw)
             valid = (isinstance(request, dict)
