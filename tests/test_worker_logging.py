@@ -4,9 +4,10 @@
 # ruff: noqa: E501
 
 import subprocess
+import threading
 
 import pytest
-from _worker_support import FakeProcess, event, run_worker
+from _worker_support import FakeProcess, event, report, run_worker
 
 import devlegate.worker_supervisor as worker_supervisor
 from devlegate.execution_workspace import ExecutionWorkspace
@@ -69,6 +70,49 @@ def test_execution_logs_are_distinct_and_survive_worker_completion(
     assert first_path != second_path
     assert "worker output" in first_path.read_text()
     assert "worker output" in second_path.read_text()
+
+
+def test_stalled_output_sink_does_not_validate_claim_or_block_log_close(
+    monkeypatch, tmp_path, capsys,
+):
+    release = threading.Event()
+    closed = threading.Event()
+    writing = threading.Event()
+
+    class StalledLog:
+        path = tmp_path / "log"
+
+        def write(self, _text):
+            writing.set()
+            release.wait(5)
+
+        def close(self):
+            assert release.is_set(), "log closed while the writer was still active"
+            closed.set()
+
+    class Process(FakeProcess):
+        def wait(self):
+            assert writing.wait(2)
+            return super().wait()
+
+    monkeypatch.setattr(worker_supervisor, "open_execution_log", lambda *_: StalledLog())
+    monkeypatch.setattr(worker_supervisor, "WORKER_TERMINATION_TIMEOUT", 0.1)
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: Process(report()))
+    supervisor = WorkerSupervisor(
+        "opencode", "provider/model", "", state_dir=tmp_path, state_key="key",
+    )
+    workspace = ExecutionWorkspace("T-1", "branch", tmp_path, "head", "base", False)
+    try:
+        result = supervisor.run(workspace, "prompt", execution_id="execution-1")
+        assert result.worker_group_retired
+        assert result.process_returncode == 0
+        assert result.claim is None
+        assert result.egress_error == "worker output incomplete"
+        assert "stdout/stderr did not drain before deadline" in capsys.readouterr().out
+        assert not closed.is_set()
+    finally:
+        release.set()
+        assert closed.wait(2)
 
 
 def test_execution_log_handoff_markers_follow_sink_and_worker_order(

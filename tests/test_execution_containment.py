@@ -8,8 +8,12 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from devlegate.execution_containment import (
+    ContainmentError,
     DurableDeterministicContainmentProvider,
+    ExecutionContainment,
     LinuxCgroupContainmentProvider,
     _launcher_command,
     default_containment_provider,
@@ -206,3 +210,23 @@ def test_linux_provider_observes_cgroup_states(tmp_path):
     events.write_text("not-a-cgroup-state\n")
     assert provider.observe(identity) == "indeterminate"
     assert provider.observe(f"cgroup:{tmp_path / 'missing'}") == "absent"
+
+
+def test_live_boundary_never_signals_a_replaced_execution_directory(tmp_path):
+    path = tmp_path / "execution"
+    path.mkdir()
+    (path / "cgroup.events").write_text("populated 1\n")
+    owned = ExecutionContainment(path, recursive_kill=True)
+    assert owned.wait_empty(0) is False
+
+    path.rename(tmp_path / "old-execution")
+    path.mkdir()
+    (path / "cgroup.events").write_text("populated 0\n")
+    kill = path / "cgroup.kill"
+    kill.write_text("")
+
+    with pytest.raises(ContainmentError, match="directory identity changed"):
+        owned.force_terminate()
+    with pytest.raises(ContainmentError, match="directory identity changed"):
+        owned.wait_empty(0)
+    assert kill.read_text() == ""

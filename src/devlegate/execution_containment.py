@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -35,7 +36,8 @@ class ContainmentBoundary(Protocol):
 
     def force_terminate(self) -> None: ...
 
-    def wait_empty(self, timeout: float) -> bool: ...
+    def wait_empty(self, timeout: float) -> bool:
+        """Prove empty or report still populated at timeout; raise if uncertain."""
 
     def destroy(self) -> None: ...
 
@@ -220,13 +222,18 @@ _DURABLE_MONITOR = (
     "s,pf,ef,df=sys.argv[1:5];a=sys.argv[sys.argv.index('--')+1:];"
     # PR_SET_CHILD_SUBREAPER keeps detached descendants observable by this
     # test-only monitor after the worker leader exits.
-    "ctypes.CDLL(None).prctl(36,1,0,0,0);"
+    "assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0;\n"
+    "forced=False\n"
+    "def force(n,f):\n"
+    " global forced;forced=True\n"
+    "signal.signal(signal.SIGUSR1,force);"
     "p=subprocess.Popen(a,start_new_session=True);"
     "tmp=pf+'.tmp-'+str(os.getpid());"
     "f=open(tmp,'w',encoding='ascii');f.write(str(p.pid)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
     "os.replace(tmp,pf);\n"
     "def h(n,f):\n"
-    "    try: os.killpg(p.pid,n)\n"
+    "    try:\n"
+    "     if p.returncode is None: os.killpg(p.pid,n)\n"
     "    except (ProcessLookupError,OSError): pass\n"
     "signal.signal(signal.SIGTERM,h);signal.signal(signal.SIGINT,h);\n"
     "def w(path,value):\n"
@@ -235,8 +242,8 @@ _DURABLE_MONITOR = (
     "def reap():\n"
     " while True:\n"
     "  try: x=os.waitpid(-1,os.WNOHANG)\n"
-    "  except ChildProcessError: break\n"
-    "  if x[0]==0: break\n"
+    "  except ChildProcessError: return False\n"
+    "  if x[0]==0: return True\n"
     "def g():\n"
     " m=os.getpid();parents={}\n"
     " for n in os.listdir('/proc'):\n"
@@ -258,21 +265,30 @@ _DURABLE_MONITOR = (
     "   parent=entry[0]\n"
     " return members\n"
     "def d(members): w(df,'\\n'.join(members)+'\\n' if members else '')\n"
-    "returncode=p.wait();"
+    "while p.poll() is None:\n"
+    " if forced: p.kill()\n"
+    " time.sleep(0.01)\n"
+    "returncode=p.returncode;"
     # A test can hold publication after the child has exited to prove that a
     # monitor's completion record is not kernel process-liveness evidence.
     "gate=os.environ.get('DEVLEGATE_TEST_MONITOR_COMPLETION_GATE');"
     "w(gate+'.ready','ready\\n') if gate else None\n"
     "while gate and not os.path.exists(gate+'.release'): time.sleep(0.01)\n"
-    "time.sleep(0.01);reap();alive=g();d(alive)\n"
-    "if not alive: reap();w(s,'absent\\n')\n"
+    "alive=reap();d(g() if alive else [])\n"
+    "if not alive: w(s,'absent\\n')\n"
     "et=ef+'.tmp-'+str(os.getpid());"
     "f=open(et,'w',encoding='ascii');f.write(str(returncode)+'\\n');f.flush();os.fsync(f.fileno());f.close();"
     "os.replace(et,ef);\n"
     "if alive:\n"
     " while True:\n"
-    "  reap();alive=g();d(alive)\n"
-    "  if not alive: reap();break\n"
+    "  if forced:\n"
+    # Direct children cannot have their PIDs reused until this monitor reaps
+    # them. Killing them exposes any remaining descendants to the subreaper.
+    "   for child in open('/proc/thread-self/children').read().split():\n"
+    "    try: os.kill(int(child),signal.SIGKILL)\n"
+    "    except ProcessLookupError: pass\n"
+    "  if not reap(): break\n"
+    "  d(g())\n"
     "  time.sleep(0.01)\n"
     " w(s,'absent\\n');\n"
     "sys.exit(returncode)"
@@ -373,6 +389,19 @@ class ExecutionContainment:
         self.path = path
         self.recursive_kill = recursive_kill
         self.identity = f"cgroup:{path}"
+        metadata = path.stat(follow_symlinks=False)
+        self._directory_identity = (metadata.st_dev, metadata.st_ino)
+
+    @contextmanager
+    def _open_directory(self):
+        fd = os.open(self.path, os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            metadata = os.fstat(fd)
+            if (metadata.st_dev, metadata.st_ino) != self._directory_identity:
+                raise ContainmentError("execution cgroup directory identity changed")
+            yield fd
+        finally:
+            os.close(fd)
 
     @classmethod
     def create(cls, execution_id: str) -> ExecutionContainment:
@@ -405,11 +434,16 @@ class ExecutionContainment:
         return subprocess.Popen(launcher, **kwargs)
 
     def populated(self) -> bool:
-        values = (self.path / "cgroup.events").read_text().splitlines()
-        state = next((line for line in values if line.startswith("populated ")), None)
-        if state is None or state not in {"populated 0", "populated 1"}:
+        with self._open_directory() as directory:
+            fd = os.open("cgroup.events", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+            with os.fdopen(fd, encoding="ascii", errors="replace") as events:
+                states = [
+                    line.rstrip("\n") for line in events
+                    if line.startswith("populated ")
+                ]
+        if states not in (["populated 0"], ["populated 1"]):
             raise ContainmentError("malformed cgroup.events")
-        return state.endswith("1")
+        return states == ["populated 1"]
 
     def request_graceful(self, pid: int | None) -> None:
         if pid is not None:
@@ -422,7 +456,15 @@ class ExecutionContainment:
         if not self.recursive_kill:
             raise ContainmentError("recursive cgroup termination is unavailable")
         try:
-            (self.path / "cgroup.kill").write_text("1\n")
+            with self._open_directory() as directory:
+                fd = os.open(
+                    "cgroup.kill", os.O_WRONLY | os.O_NOFOLLOW, dir_fd=directory
+                )
+                try:
+                    if os.write(fd, b"1\n") != 2:
+                        raise ContainmentError("incomplete execution cgroup kill write")
+                finally:
+                    os.close(fd)
         except OSError as error:
             raise ContainmentError(
                 f"cannot recursively terminate execution cgroup: {error}"
@@ -433,9 +475,10 @@ class ExecutionContainment:
         while True:
             if not self.populated():
                 return True
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 return False
-            time.sleep(0.05)
+            time.sleep(min(0.05, remaining))
 
     def destroy(self) -> None:
         if self.populated():
@@ -710,20 +753,21 @@ class DurableDeterministicContainmentProvider:
                     pass
 
         def force_terminate(self) -> None:
-            if self._process is not None and _process_is_running(self._process):
-                try:
-                    os.killpg(self._process.pid, signal.SIGKILL)
-                except (OSError, ProcessLookupError):
-                    pass
+            if self._process is not None:
+                self._process._monitor.send_signal(signal.SIGUSR1)
 
         def wait_empty(self, timeout: float) -> bool:
             if self._process is None:
                 return True
             deadline = time.monotonic() + timeout
             while self._process._monitor.poll() is None:
+                if self.state.read_text().strip() not in {"absent", "matching-live"}:
+                    raise ContainmentError("indeterminate durable containment state")
                 if time.monotonic() >= deadline:
                     return False
                 time.sleep(0.01)
+            if self.state.read_text().strip() != "absent":
+                raise ContainmentError("durable monitor exited without empty proof")
             return True
 
         def destroy(self) -> None:

@@ -13,6 +13,10 @@ import time
 
 import pytest
 
+from devlegate.execution_containment import (
+    ContainmentError,
+    DurableDeterministicContainmentProvider,
+)
 from devlegate.worker_supervisor import _run_opencode
 
 
@@ -106,6 +110,42 @@ def test_worker_prompt_delivery_handles_early_child_exit(tmp_path):
     assert result.interruption_kind is None
 
 
+def test_worker_prompt_cannot_block_retirement_when_descendant_keeps_stdin(
+    tmp_path, monkeypatch, capsys,
+):
+    boundary = DurableDeterministicContainmentProvider(tmp_path).create("prompt")
+    force = boundary.force_terminate
+
+    def fail():
+        raise ContainmentError("injected termination failure")
+
+    monkeypatch.setattr(boundary, "force_terminate", fail)
+    monkeypatch.setattr("devlegate.worker_supervisor.WORKER_TERMINATION_TIMEOUT", 0.2)
+    started = time.monotonic()
+    delivered = []
+    try:
+        result = _run_opencode(
+            [sys.executable, "-c", """
+import subprocess, sys
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(8)'],
+                 start_new_session=True, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL)
+"""],
+            "prompt\n" * 100_000,
+            containment=boundary,
+            prompt_delivered_handler=lambda: delivered.append(True),
+        )
+        assert time.monotonic() - started < 3
+        assert result.process_returncode == 0
+        assert result.interruption_kind is None
+        assert not result.worker_group_retired
+        assert not delivered
+        assert "prompt delivery did not finish before deadline" in capsys.readouterr().out
+    finally:
+        force()
+        assert boundary.wait_empty(2)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_identity_persistence_failure_terminates_spawned_group():
     captured = []
@@ -153,21 +193,20 @@ def test_natural_leader_exit_does_not_prove_group_retirement(tmp_path):
     )
     assert marker.exists()
     child = __import__("json").loads(marker.read_text())["child"]
-    assert result.worker_group_retired is False
-    assert (
-        result.transport_error
-        == "execution cgroup remains populated"
-    )
-    assert identities
-    assert os.kill(child, 0) is None
     try:
-        os.killpg(identities[0].pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        assert result.worker_group_retired is False
+        assert "containment proof is unavailable" in result.transport_error
+        assert identities
+        assert os.kill(child, 0) is None
+    finally:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
-def test_setsid_descendant_keeps_execution_cgroup_populated(tmp_path):
+def test_setsid_descendant_without_containment_is_not_signalled(tmp_path):
     marker = tmp_path / "escaped.json"
     script = (
         "import json, os, pathlib, subprocess, sys, time; "
@@ -185,12 +224,15 @@ def test_setsid_descendant_keeps_execution_cgroup_populated(tmp_path):
         worker_identity_handler=identities.append,
     )
     child = __import__("json").loads(marker.read_text())["child"]
-    assert result.worker_group_retired is False
-    assert "execution cgroup remains populated" in (result.transport_error or "")
     try:
-        os.kill(child, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        assert result.worker_group_retired is False
+        assert "containment proof is unavailable" in result.transport_error
+        assert os.kill(child, 0) is None
+    finally:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")

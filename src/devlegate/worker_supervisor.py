@@ -4,8 +4,10 @@
 """Live worker process supervision and OpenCode execution."""
 
 import dataclasses
+import io
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -250,6 +252,38 @@ WORKER_TERMINATION_TIMEOUT = 1.0
 WORKER_WAIT_INTERVAL = 0.05
 
 
+def _pipe_fd(stream) -> int | None:
+    try:
+        return stream.fileno()
+    except (AttributeError, io.UnsupportedOperation):
+        return None  # In-memory streams in process doubles.
+
+
+def _await_pipe(poller, cancelled: threading.Event) -> None:
+    while not cancelled.is_set():
+        if poller.poll(int(WORKER_WAIT_INTERVAL * 1000)):
+            return  # HUP/ERR also wake the I/O operation to report EOF/error.
+    raise OSError("worker pipe drain cancelled")
+
+
+class _CancellablePipeReader(io.RawIOBase):
+    """Keep buffered framing, without giving a pipe owner an unbounded read."""
+
+    def __init__(self, fd: int, cancelled: threading.Event) -> None:
+        self.fd = fd
+        self.cancelled = cancelled
+        self.poller = select.poll()
+        self.poller.register(fd, select.POLLIN)
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        _await_pipe(self.poller, self.cancelled)
+        # This thread is the only reader; readiness cannot be consumed elsewhere.
+        return os.readv(self.fd, [buffer])
+
+
 def _wait_process(process, timeout: float | None = None):
     """Wait for Popen-like objects without extending the process contract."""
     if timeout is None:
@@ -325,6 +359,8 @@ def _run_opencode(
     prompt_delivered_handler: Callable[[], None] | None = None,
     containment=None,
     owner_poll: Callable[[], None] | None = None,
+    output_abandoned_handler: Callable[[tuple[threading.Thread, ...]], None]
+    | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -363,10 +399,14 @@ def _run_opencode(
     transport_error: str | None = None
     prompt_error: str | None = None
     log_error: str | None = None
+    read_errors: list[str] = []
+    cancel_io = threading.Event()
 
     def write(text: str, stream) -> None:
         nonlocal log_error
         with output_lock:
+            if cancel_io.is_set():
+                return
             rendered = _render_worker_text(text)
             if not rendered:
                 return
@@ -384,17 +424,16 @@ def _run_opencode(
             if show_worker_output:
                 _write_rendered_worker_text(rendered, stream)
 
-    def consume_stdout() -> None:
+    def consume_stdout(stream) -> None:
         nonlocal transport_error
-        assert process.stdout is not None
-        while raw_line := process.stdout.readline(MAX_STDOUT_EVENT_BYTES + 1):
+        while not cancel_io.is_set() and (
+            raw_line := stream.readline(MAX_STDOUT_EVENT_BYTES + 1)
+        ):
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
                 transport_error = "stdout event exceeds maximum size"
                 _log(f"OpenCode protocol error: {transport_error}")
                 if not raw_line.endswith(b"\n"):
-                    while discarded := process.stdout.readline(
-                        MAX_STDOUT_EVENT_BYTES + 1
-                    ):
+                    while discarded := stream.readline(MAX_STDOUT_EVENT_BYTES + 1):
                         if discarded.endswith(b"\n"):
                             break
                 continue
@@ -451,15 +490,32 @@ def _run_opencode(
                 if error:
                     write(f"OpenCode error: {error}\n", sys.stdout)
 
-    def consume_stderr() -> None:
-        assert process.stderr is not None
-        while raw_chunk := process.stderr.read(4096):
+    def consume_stderr(stream) -> None:
+        while not cancel_io.is_set() and (raw_chunk := stream.read(4096)):
             write(raw_chunk.decode("utf-8", errors="replace"), sys.stderr)
 
-    stdout_thread = threading.Thread(target=consume_stdout, daemon=True)
-    stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
-    stdout_thread.start()
-    stderr_thread.start()
+    def read_output(name, pipe, consume) -> None:
+        try:
+            with pipe:
+                fd = _pipe_fd(pipe)
+                if fd is None:
+                    consume(pipe)
+                else:
+                    raw = _CancellablePipeReader(fd, cancel_io)
+                    with io.BufferedReader(raw) as stream:
+                        consume(stream)
+        except Exception as error:
+            read_errors.append(f"worker {name} drain failed: {error}")
+
+    readers = tuple(
+        threading.Thread(target=read_output, args=(name, pipe, consume), daemon=True)
+        for name, pipe, consume in (
+            ("stdout", process.stdout, consume_stdout),
+            ("stderr", process.stderr, consume_stderr),
+        )
+    )
+    for reader in readers:
+        reader.start()
     stdin = getattr(process, "stdin", None)
 
     def deliver_prompt() -> None:
@@ -467,27 +523,37 @@ def _run_opencode(
         if stdin is None:
             return
         try:
-            remaining = prompt.encode("utf-8")
-            while remaining:
-                written = stdin.write(remaining)
-                if not written:
-                    raise OSError("worker stdin accepted no prompt bytes")
-                remaining = remaining[written:]
-            stdin.flush()
-            if prompt_delivered_handler is not None:
+            with stdin:
+                remaining = memoryview(prompt.encode("utf-8"))
+                fd = _pipe_fd(stdin)
+                if fd is not None:
+                    os.set_blocking(fd, False)
+                    poller = select.poll()
+                    poller.register(fd, select.POLLOUT)
+                while remaining:
+                    if fd is None:
+                        written = stdin.write(remaining)
+                    else:
+                        _await_pipe(poller, cancel_io)
+                        try:
+                            written = os.write(fd, remaining)
+                        except BlockingIOError:
+                            continue
+                    if not written:
+                        raise OSError("worker stdin accepted no prompt bytes")
+                    remaining = remaining[written:]
+                stdin.flush()
+            if prompt_delivered_handler is not None and not cancel_io.is_set():
                 prompt_delivered_handler()
-        except (BrokenPipeError, OSError, ValueError) as error:
+        except Exception as error:
             prompt_error = f"worker prompt delivery failed: {error}"
-        finally:
-            try:
-                stdin.close()
-            except (OSError, ValueError):
-                pass
 
     prompt_thread = threading.Thread(target=deliver_prompt, daemon=True)
     prompt_thread.start()
     interruption_kind: str | None = None
     interruption_error: str | None = None
+    retirement_error: str | None = None
+    leader_exited = True
     worker_process_group = getattr(process, "pid", None)
     if worker_process_group is not None:
         try:
@@ -518,24 +584,26 @@ def _run_opencode(
                 interruption_error = f"interruption persistence failed: {error}"
 
     def finish_interrupted() -> int:
-        nonlocal transport_error
+        nonlocal leader_exited, retirement_error
         try:
             returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
         except subprocess.TimeoutExpired:
             if containment is not None:
-                containment.force_terminate()
-            try:
-                if worker_process_group is not None:
+                try:
+                    containment.force_terminate()
+                except (ContainmentError, OSError) as error:
+                    retirement_error = f"early containment termination failed: {error}"
+            elif worker_process_group is not None:
+                try:
                     os.killpg(worker_process_group, signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                pass
+                except OSError:
+                    pass
             try:
                 returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
             except subprocess.TimeoutExpired:
-                transport_error = "worker did not exit after bounded forced retirement"
+                leader_exited = False
+                retirement_error = retirement_error or "worker leader did not exit"
                 return -1
-        if containment is not None:
-            containment.force_terminate()
         return returncode
 
     identity_error: str | None = None
@@ -597,17 +665,70 @@ def _run_opencode(
                 interrupt("operator_abort")
                 returncode = finish_interrupted()
                 break
-    join_timeout = WORKER_TERMINATION_TIMEOUT if interruption_kind is not None else None
-    stdout_thread.join(join_timeout)
-    stderr_thread.join(join_timeout)
-    if stdout_thread.is_alive() or stderr_thread.is_alive():
-        transport_error = transport_error or "worker output pipes remain owned"
-    if prompt_thread.is_alive() and stdin is not None and interruption_kind is None:
-        try:
-            stdin.close()
-        except (OSError, ValueError):
-            pass
-    prompt_thread.join(WORKER_TERMINATION_TIMEOUT)
+    deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
+
+    def remaining_time() -> float:
+        return max(0, deadline - time.monotonic())
+
+    # Readers and prompt delivery run during the same grace interval as the
+    # boundary wait. Neither EOF nor leader exit proves descendant retirement.
+    group_retired = False
+    if leader_exited and retirement_error is None:
+        if containment is None:
+            group_retired = worker_identity_handler is None
+            if not group_retired:
+                retirement_error = "execution containment proof is unavailable"
+        else:
+            try:
+                empty = containment.wait_empty(remaining_time())
+                if empty is False:
+                    try:
+                        containment.force_terminate()
+                    except (ContainmentError, OSError) as error:
+                        raise ContainmentError(
+                            f"forced termination failed: {error}"
+                        ) from error
+                    deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
+                    empty = containment.wait_empty(remaining_time())
+                    if empty is False:
+                        raise ContainmentError(
+                            "still populated after bounded forced termination"
+                        )
+                if empty is not True:
+                    raise ContainmentError("containment observation is indeterminate")
+                containment.destroy()
+                group_retired = True
+            except (ContainmentError, OSError) as error:
+                retirement_error = str(error)
+
+    for thread in (*readers, prompt_thread):
+        thread.join(remaining_time())
+    output_pending = any(reader.is_alive() for reader in readers)
+    prompt_pending = prompt_thread.is_alive()
+    cancel_io.set()
+    if output_pending and output_abandoned_handler is not None:
+        output_abandoned_handler(readers)
+    drain_error = (
+        "worker stdout/stderr did not drain before deadline" if output_pending else
+        next(iter(read_errors), None)
+    )
+    if prompt_pending:
+        prompt_error = "worker prompt delivery did not finish before deadline"
+    if not group_retired or drain_error or prompt_pending:
+        reasons = [reason for reason in (
+            f"execution containment retirement blocked: {retirement_error}"
+            if not group_retired else None,
+            drain_error,
+            prompt_error if prompt_pending else None,
+        ) if reason]
+        detail = _render_worker_text("; ".join(reasons)[:512]).replace("\n", " ")
+        boundary = getattr(containment, "identity", None)
+        _log(
+            f"worker {'leader exited' if leader_exited else 'leader exit unproven'}: "
+            f"execution={execution_id} returncode={returncode} "
+            f"containment={boundary}; {detail}"
+        )
+    transport_error = transport_error or drain_error
     if identity_error is not None:
         transport_error = identity_error
     elif log_error is not None:
@@ -616,32 +737,9 @@ def _run_opencode(
         transport_error = interruption_error
     elif prompt_error is not None and interruption_kind is None:
         transport_error = transport_error or prompt_error
-    try:
-        group_retired = (
-            containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
-            if containment is not None
-            else worker_identity_handler is None
-        )
-    except (ContainmentError, OSError):
-        group_retired = False
-    if not group_retired and interruption_kind is not None and containment is not None:
-        containment.force_terminate()
-        try:
-            group_retired = containment.wait_empty(WORKER_TERMINATION_TIMEOUT)
-        except (ContainmentError, OSError):
-            group_retired = False
     if not group_retired:
-        detail = getattr(containment, "diagnostics", lambda: "")()
-        populated_error = "execution cgroup remains populated"
-        if detail:
-            populated_error = f"{populated_error}: {detail}"
-        transport_error = transport_error or populated_error
-    elif containment is not None:
-        try:
-            containment.destroy()
-        except ContainmentError as error:
-            transport_error = transport_error or str(error)
-            group_retired = False
+        reason = f"execution containment retirement blocked: {retirement_error}"
+        transport_error = f"{reason}; {transport_error}" if transport_error else reason
     return OpenCodeRunResult(
         returncode, transport_error, interruption_kind, group_retired, True
     )
@@ -858,11 +956,28 @@ export default tool({
             self._active[execution_id] = object()
         execution_log = None
         worker_started = False
-        completion_logged = False
+        output_abandoned = False
 
         def mark_worker_started() -> None:
             nonlocal worker_started
             worker_started = True
+
+        def abandon_output(readers: tuple[threading.Thread, ...]) -> None:
+            nonlocal output_abandoned
+            output_abandoned = True
+            log = execution_log
+            if log is not None:
+                # A reader could be inside a sink write, not a pipe read. Let
+                # the sink close off the owner thread in that exceptional case.
+                def close_after_readers() -> None:
+                    for reader in readers:
+                        reader.join()
+                    try:
+                        log.close()
+                    except OSError:
+                        pass
+
+                threading.Thread(target=close_after_readers, daemon=True).start()
 
         def poll_requests() -> None:
             if evidence is not None:
@@ -901,12 +1016,16 @@ export default tool({
                 worker_started_handler=mark_worker_started,
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
+                output_abandoned_handler=abandon_output,
                 owner_poll=(poll_requests if any(
                     item is not None
                     for item in (owner_poll, evidence, revisions, blackboard)
                 ) else None),
             )
-            claim, egress_error = parser.finish()
+            claim, egress_error = (
+                (None, "worker output incomplete")
+                if output_abandoned else parser.finish()
+            )
             if evidence is not None and claim is not None:
                 try:
                     validate_analysis_claim(claim, evidence.bundle)
@@ -921,28 +1040,26 @@ export default tool({
                 opencode_result.worker_group_retired,
                 opencode_result.process_started,
             )
-            if execution_log is not None and worker_started:
+            if execution_log and worker_started and result.worker_group_retired:
                 service_log(
                     "execution finished: "
                     f"ticket={workspace.ticket_id} execution={execution_id} "
                     f"log={execution_log.path}"
                 )
-                completion_logged = True
             return result
         except (ContainmentError, OSError) as error:
+            if worker_started:
+                detail = _render_worker_text(str(error)[:512]).replace("\n", " ")
+                service_log(
+                    f"execution supervision failed: execution={execution_id}; {detail}"
+                )
             return WorkerRunResult(
                 -1, str(error), None, None,
                 worker_group_retired=not worker_started,
                 process_started=worker_started,
             )
         finally:
-            if execution_log is not None and worker_started and not completion_logged:
-                service_log(
-                    "execution finished: "
-                    f"ticket={workspace.ticket_id} execution={execution_id} "
-                    f"log={execution_log.path}"
-                )
-            if execution_log is not None:
+            if execution_log is not None and not output_abandoned:
                 try:
                     execution_log.close()
                 except OSError:
