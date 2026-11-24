@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
 
+from devlegate.blackboard_channel import BlackboardChannel, blackboard_tool
 from devlegate.change_channel import RevisionChannel, comparison_tool, revisions_tool
 from devlegate.evidence_channel import EvidenceSocket
 from devlegate.evidence_worker import (
@@ -46,6 +47,24 @@ class WorkerSupervisionError(Exception):
 
 class WorkerAdmissionClosed(WorkerSupervisionError):
     """A worker launch was rejected because the supervisor is draining."""
+
+
+@dataclasses.dataclass(frozen=True)
+class PreparedBlackboard:
+    channel: BlackboardChannel
+    config_dir: Path
+
+    @classmethod
+    def install(
+        cls, channel: BlackboardChannel, config_dir: Path,
+    ) -> "PreparedBlackboard":
+        """Stage the optional tool before committing the effective prompt."""
+        tools = config_dir / "tools"
+        tools.mkdir(mode=0o700, parents=True)
+        (tools / "devlegate_blackboard.ts").write_text(
+            blackboard_tool(channel.path, channel.token), encoding="utf-8",
+        )
+        return cls(channel, config_dir)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -416,6 +435,8 @@ def _run_opencode(
                     continue
                 tool = part["tool"]
                 write(f"OpenCode tool: {tool}\n", sys.stdout)
+                if tool == "devlegate_blackboard":
+                    continue  # Never copy note pages into the execution log.
                 state = part["state"]
                 if state.get("status") == "completed":
                     output = state.get("output")
@@ -732,6 +753,7 @@ class WorkerSupervisor:
         evidence: EvidenceSocket | None = None,
         owner_poll: Callable[[], None] | None = None,
         revisions: RevisionChannel | None = None,
+        blackboard: PreparedBlackboard | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
         if isinstance(workspace, EvidenceWorkspace):
@@ -746,6 +768,8 @@ class WorkerSupervisor:
             raise TypeError("worker workspace/channel type differs")
         if revisions is not None and not isinstance(workspace, ExecutionWorkspace):
             raise TypeError("revision channel requires an execution workspace")
+        if blackboard is not None and not isinstance(workspace, ExecutionWorkspace):
+            raise TypeError("blackboard channel requires an execution workspace")
         if not isinstance(prompt, str):
             raise TypeError("worker prompt must be text")
         execution_path = workspace.path.resolve()
@@ -762,9 +786,10 @@ class WorkerSupervisor:
         if self.opencode_agent:
             command.extend(("--agent", self.opencode_agent))
         parser = WorkerEgressParser()
-        config_dir = Path(tempfile.mkdtemp(prefix="devlegate-opencode-"))
+        config_dir = (blackboard.config_dir if blackboard is not None else
+                      Path(tempfile.mkdtemp(prefix="devlegate-opencode-")))
         tool_dir = config_dir / "tools"
-        tool_dir.mkdir()
+        tool_dir.mkdir(exist_ok=blackboard is not None)
         plugin_dir = config_dir / "plugins"
         plugin_dir.mkdir()
         (plugin_dir / "diagnostics.js").write_bytes(
@@ -839,6 +864,17 @@ export default tool({
             nonlocal worker_started
             worker_started = True
 
+        def poll_requests() -> None:
+            if evidence is not None:
+                evidence.poll()
+                return
+            if owner_poll is not None:
+                owner_poll()
+            if revisions is not None:
+                revisions.poll()
+            if blackboard is not None:
+                blackboard.channel.poll()
+
         try:
             if self.state_dir is not None and self.state_key is not None:
                 execution_log = open_execution_log(
@@ -865,11 +901,10 @@ export default tool({
                 worker_started_handler=mark_worker_started,
                 prompt_delivered_handler=prompt_delivered_handler,
                 containment=containment,
-                owner_poll=(
-                    evidence.poll if evidence is not None else
-                    (lambda: (owner_poll and owner_poll(), revisions.poll()))
-                    if revisions is not None else owner_poll
-                ),
+                owner_poll=(poll_requests if any(
+                    item is not None
+                    for item in (owner_poll, evidence, revisions, blackboard)
+                ) else None),
             )
             claim, egress_error = parser.finish()
             if evidence is not None and claim is not None:

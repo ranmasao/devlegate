@@ -13,14 +13,13 @@ from __future__ import annotations
 import json
 import os
 import selectors
-import socket
 import struct
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.abandonment_evidence import EvidenceBundle, EvidenceError
 from devlegate.ipc_protocol import encode_frame
+from devlegate.worker_request_channel import WorkerRequestChannel, WorkerRequestError
 
 MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -52,123 +51,29 @@ def _read_reply(bundle: EvidenceBundle, raw: bytes) -> bytes:
     return encode_frame(payload)
 
 
-class EvidenceSocket:
-    """Owner-polled, manifest-scoped read tool for trusted OpenCode workers.
-
-    No Git capability leaves the calling owner thread. One request per
-    connection, one active connection, bounded frames, shared lifetime quotas,
-    and nonblocking socket I/O keep cancellation and supervision responsive.
-    This endpoint has no privileged service dispatcher or filesystem reader.
-    """
-
+class EvidenceSocket(WorkerRequestChannel):
+    """Owner-polled, manifest-scoped read tool for trusted OpenCode workers."""
     def __init__(
         self, bundle: EvidenceBundle, path: Path, *,
         requests: int = MAX_REQUESTS, response_bytes: int = MAX_RESPONSE_TOTAL,
         io_seconds: float = IO_SECONDS, session_seconds: float = SESSION_SECONDS,
-        reply: Callable[[bytes], bytes] | None = None,
     ) -> None:
-        if min(requests, response_bytes, io_seconds, session_seconds) <= 0:
-            raise EvidenceError("evidence channel budgets must be positive")
         self.bundle = bundle
-        self._reply = reply or (lambda raw: _read_reply(bundle, raw))
-        self.path = path
-        self._requests = requests
-        self._remaining = response_bytes
-        self._io_seconds = io_seconds
-        self._deadline = time.monotonic() + session_seconds
-        self._client: socket.socket | None = None
-        self._input = bytearray()
-        self._output = b""
-        self._position = 0
-        self._client_deadline = 0.0
-        self._listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            # Never unlink an existing socket or follow a symlink on admission.
-            self._listener.bind(str(path))
-            os.chmod(path, 0o600)
-            self._listener.listen(1)
-            self._listener.setblocking(False)
-            self._identity = path.lstat()
-        except BaseException:
-            self._listener.close()
-            raise
-
-    def _drop_client(self) -> None:
-        if self._client is not None:
-            self._client.close()
-        self._client = None
-        self._input.clear()
-        self._output = b""
-        self._position = 0
-
-    def close(self) -> None:
-        self._drop_client()
-        self._listener.close()
-        try:
-            current = self.path.lstat()
-            if (current.st_dev, current.st_ino) == (
-                self._identity.st_dev, self._identity.st_ino,
-            ):
-                self.path.unlink()
-        except FileNotFoundError:
-            pass
-
-    def __enter__(self) -> EvidenceSocket:
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        self.close()
+            super().__init__(
+                path, lambda raw: _read_reply(bundle, raw), requests=requests,
+                response_bytes=response_bytes, request_limit=MAX_REQUEST_BYTES,
+                response_limit=MAX_RESPONSE_BYTES, io_seconds=io_seconds,
+                session_seconds=session_seconds, label="evidence",
+            )
+        except WorkerRequestError as error:
+            raise EvidenceError(str(error)) from error
 
     def poll(self) -> None:
-        """Perform bounded socket work on the repository-owner thread only."""
-        if time.monotonic() >= self._deadline:
-            raise EvidenceError("evidence channel session deadline exhausted")
-        if self._client is None:
-            try:
-                self._client, _ = self._listener.accept()
-            except BlockingIOError:
-                return
-            self._client.setblocking(False)
-            self._client_deadline = time.monotonic() + self._io_seconds
-            self._requests -= 1
-            if self._requests < 0:
-                self._drop_client()
-                raise EvidenceError("evidence channel request budget exhausted")
-        if time.monotonic() >= self._client_deadline:
-            self._drop_client()
-            return
         try:
-            if not self._output:
-                chunk = self._client.recv(MAX_REQUEST_BYTES + 5 - len(self._input))
-                if not chunk:
-                    self._drop_client()
-                    return
-                self._input.extend(chunk)
-                if len(self._input) < 4:
-                    return
-                length = struct.unpack(">I", self._input[:4])[0]
-                if not 1 <= length <= MAX_REQUEST_BYTES:
-                    self._drop_client()
-                    return
-                if len(self._input) < length + 4:
-                    return
-                if len(self._input) != length + 4:
-                    self._drop_client()
-                    return
-                self._output = self._reply(bytes(self._input[4:]))
-                self._remaining -= len(self._output)
-                if self._remaining < 0:
-                    self._drop_client()
-                    raise EvidenceError("evidence aggregate response budget exhausted")
-            self._position += self._client.send(
-                self._output[self._position:self._position + 65536]
-            )
-            if self._position == len(self._output):
-                self._drop_client()
-        except BlockingIOError:
-            pass
-        except (BrokenPipeError, ConnectionResetError):
-            self._drop_client()
+            super().poll()
+        except WorkerRequestError as error:
+            raise EvidenceError(str(error)) from error
 
 
 class EvidencePipe:

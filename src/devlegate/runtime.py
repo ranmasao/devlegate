@@ -12,12 +12,13 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +53,8 @@ from devlegate.agent_protocol import (
     render_project,
     upgrade_project_templates,
 )
+from devlegate.blackboard_channel import BlackboardChannel
+from devlegate.blackboard_store import BlackboardStore
 from devlegate.change_channel import RevisionChannel
 from devlegate.change_revisions import (
     Checkpoint,
@@ -210,6 +213,7 @@ from devlegate.worker_prompt import (
     write_worker_prompt_artifact,
 )
 from devlegate.worker_supervisor import (
+    PreparedBlackboard,
     WorkerAdmissionClosed,
     WorkerProcessIdentity,
     WorkerSupervisionError,
@@ -3855,13 +3859,16 @@ class ServiceEngine:
         )
         self._owned_execution_id = None
         try:
-            return self._run_iteration_body(authorization)
+            with ExitStack() as resources:
+                return self._run_iteration_body(authorization, resources)
         except ExecutionWorkspaceError as error:
             raise WorkflowBlockedError(str(error)) from error
         finally:
             self._owned_execution_id = None
 
-    def _run_iteration_body(self, authorization: ExecutionAuthorization | None) -> int:
+    def _run_iteration_body(
+        self, authorization: ExecutionAuthorization | None, resources: ExitStack,
+    ) -> int:
         self._publish_service_snapshot(lifecycle="processing")
         persisted_force = self._state.get("force_retry_authorization")
         if (
@@ -4957,6 +4964,49 @@ class ServiceEngine:
                 raise DevlegateError(str(error)) from error
             review_feedback = review_binding.content
             review_source = f"{review_binding.path} (sha256:{review_binding.sha256})"
+        directory = None
+
+        def worker_authorized(pid: int) -> bool:
+            identity = _worker_identity_from_value(
+                self._state.get("worker_identity"), execution_id,
+            )
+            current = workspace.path.lstat()
+            return (
+                directory is not None
+                and identity is not None
+                and observe_worker_identity(identity) == "matching-live"
+                and os.getsid(pid) == identity.sid
+                and os.getpgid(pid) == identity.pgid
+                and not workspace.path.is_symlink()
+                and (current.st_dev, current.st_ino)
+                == (directory.st_dev, directory.st_ino)
+                and self._owned_execution_id == execution_id
+                and self._state.get("phase") == "agent_running"
+                and self._state.get("execution_id") == execution_id
+                and self._state.get("execution_ticket_id") == workspace.ticket_id
+                and self._state.get("execution_path") == str(workspace.path)
+            )
+
+        blackboard = None
+        if hasattr(socket, "SO_PEERCRED"):
+            try:
+                board_root = resources.enter_context(
+                    tempfile.TemporaryDirectory(
+                        prefix="devlegate-board-", ignore_cleanup_errors=True,
+                    )
+                )
+                store = BlackboardStore(
+                    self.state_dir, self._state_key, selected_ticket.id,
+                )
+                channel = resources.enter_context(BlackboardChannel(
+                    Path(board_root) / "board.sock", store,
+                    execution_id, worker_authorized,
+                ))
+                blackboard = PreparedBlackboard.install(
+                    channel, Path(board_root) / "opencode",
+                )
+            except OSError:
+                pass  # An optional endpoint is not a workflow admission gate.
         prompt = build_worker_prompt(
             WorkerPromptInput(
                 assignment=selected_ticket.body,
@@ -4965,6 +5015,7 @@ class ServiceEngine:
                 review_source=review_source,
                 historical_review=isinstance(rework, dict)
                 and rework.get("amended_continuation") is True,
+                blackboard_available=blackboard is not None,
             )
         )
         prompt_digest = worker_prompt_sha256(prompt)
@@ -5037,28 +5088,6 @@ class ServiceEngine:
                 from devlegate.ticket_reset import ResetStop, poll_worker
 
                 directory = workspace.path.lstat()
-
-                def explorer_authorized(pid: int) -> bool:
-                    identity = _worker_identity_from_value(
-                        self._state.get("worker_identity"), execution_id,
-                    )
-                    current = workspace.path.lstat()
-                    return (
-                        identity is not None
-                        and observe_worker_identity(identity) == "matching-live"
-                        and os.getsid(pid) == identity.sid
-                        and os.getpgid(pid) == identity.pgid
-                        and not workspace.path.is_symlink()
-                        and (current.st_dev, current.st_ino)
-                        == (directory.st_dev, directory.st_ino)
-                        and self._owned_execution_id == execution_id
-                        and self._state.get("phase") == "agent_running"
-                        and self._state.get("execution_id") == execution_id
-                        and self._state.get("execution_ticket_id")
-                        == workspace.ticket_id
-                        and self._state.get("execution_path") == str(workspace.path)
-                    )
-
                 # Resumed history needs independent checkpoint provenance; do
                 # not mistake Git parents or replay commits for worker sessions.
                 namespace = None
@@ -5120,7 +5149,7 @@ class ServiceEngine:
                     pass  # Unprovable history stays unavailable.
                 with tempfile.TemporaryDirectory(prefix="devlegate-explorer-") as root:
                     with RevisionChannel(
-                        Path(root) / "read.sock", namespace, explorer_authorized,
+                        Path(root) / "read.sock", namespace, worker_authorized,
                         workspace.path, git_dir=git_dir, common_dir=common_dir,
                     ) as revisions:
                         worker_run = self._workers.run(
@@ -5130,6 +5159,7 @@ class ServiceEngine:
                             stop_request=ResetStop(self, selected_ticket.id),
                             owner_poll=lambda: poll_worker(self),
                             revisions=revisions,
+                            blackboard=blackboard,
                             identity_handler=self._record_worker_identity,
                             interruption_handler=lambda kind: self._save_state(
                                 "agent_running", execution_interruption_kind=kind
@@ -5154,6 +5184,8 @@ class ServiceEngine:
                 return 0
             worker_returned = True
         finally:
+            if blackboard is not None:
+                blackboard.channel.close()
             if worker_returned and worker_run.worker_group_retired:
                 binding = self._execution_generation_binding()
                 if binding.operation_pending("worker"):

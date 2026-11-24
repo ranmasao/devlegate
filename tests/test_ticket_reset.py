@@ -18,6 +18,7 @@ from _control_support import Devlegate, control_fixture, git, invoke
 from runtime_helpers import run_test_iteration
 from test_clean_preview import owner as owner  # noqa: F401
 
+from devlegate.blackboard_store import BlackboardStore
 from devlegate.execution_containment import DurableDeterministicContainmentProvider
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.ipc_server import UnixIPCServer
@@ -196,6 +197,11 @@ def test_reset_forbidden_workflow_does_not_admit(owner, state):
 def test_reset_stopped_dirty_generation_restarts_without_old_content(
     owner, monkeypatch,
 ):
+    board = BlackboardStore(owner.state_dir, owner._state_key, "T-1")
+    original_note = board.save(
+        "Historical inventory", "pinned inputs", "text",
+        execution=owner._state["execution_id"],
+    )
     path = owner.recovery_workspace_manager("T-1").path
     (path / "implementation.txt").write_text("discard tracked edits\n")
     (path / "untracked").write_text("discard new source\n")
@@ -216,10 +222,13 @@ def test_reset_stopped_dirty_generation_restarts_without_old_content(
         for name in ("implementation.txt", "untracked", "ignored", "link"):
             assert not (workspace.path / name).exists()
         assert git(workspace.path, "status", "--porcelain").stdout == ""
+        assert "Historical inventory" not in prompt
+        assert "pinned inputs" not in prompt
         return original(workspace, prompt, **kwargs)
 
     monkeypatch.setattr(restored._workers, "run", worker)
     assert run_test_iteration(restored) == 0
+    assert board.read(original_note["id"], None)["content"] == "pinned inputs"
 
 
 @pytest.mark.parametrize("retirement_proved", [True, False])

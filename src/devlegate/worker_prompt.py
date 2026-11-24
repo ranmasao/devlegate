@@ -26,6 +26,7 @@ class WorkerPromptInput:
     review_feedback: str | None = None
     review_source: str | None = None
     historical_review: bool = False
+    blackboard_available: bool = False
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -38,7 +39,9 @@ def _prompt_text(name: str) -> str:
     return path.read_text().rstrip("\r\n")
 
 
-_CORE_CONTRACT = _prompt_text("core_contract.txt")
+_CORE_CONTRACT, _BLACKBOARD_GUIDANCE = _prompt_text("core_contract.txt").split(
+    "\n\n<!-- blackboard-available -->\n", 1,
+)
 _DIRECTIVES = {
     WorkDirective.FRESH: _prompt_text("fresh.txt"),
     WorkDirective.RESUME: _prompt_text("resume.txt"),
@@ -70,7 +73,9 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
         raise ValueError("assigned work must not be empty")
 
     sections = [
-        ("Core Worker Contract", _CORE_CONTRACT, False),
+        ("Core Worker Contract", _CORE_CONTRACT + (
+            "\n\n" + _BLACKBOARD_GUIDANCE if prompt_input.blackboard_available else ""
+        ), False),
         ("Work Directive", _DIRECTIVES[prompt_input.directive], False),
     ]
     sections.append(("Assigned Work", assignment, True))
