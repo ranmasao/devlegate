@@ -5,9 +5,17 @@
 import hashlib
 import json
 import os
+import re
+import select
 import shutil
+import signal
 import socket
 import struct
+import subprocess
+import sys
+import time
+from contextlib import ExitStack, contextmanager
+from pathlib import Path
 
 import pytest
 from _control_support import control_fixture, git, invoke
@@ -34,6 +42,112 @@ from devlegate.worker_prompt import (
     WorkerPromptInput,
     build_worker_prompt,
 )
+
+
+@contextmanager
+def _blackboard_members(root):
+    """Pin live members by pidfd and the synthetic provider's launch marker."""
+    prefix = b"DEVLEGATE_TEST_IDENTITY_ACK=" + os.fsencode(root) + b"/"
+    with ExitStack() as handles:
+        members = {}
+        for process in Path("/proc").iterdir():
+            if not process.name.isdecimal():
+                continue
+            pid = int(process.name)
+            try:
+                environment = (process / "environ").read_bytes().split(b"\0")
+                marker = next((v for v in environment if v.startswith(prefix)), b"")
+                if not re.fullmatch(
+                    rb"execution-[a-zA-Z0-9_-]+\.identity-ack", marker[len(prefix):],
+                ):
+                    continue
+                fd = os.pidfd_open(pid)
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            handles.callback(os.close, fd)
+            try:
+                # Recheck after pinning the PID; a recycled PID is not authority.
+                if marker not in (process / "environ").read_bytes().split(b"\0"):
+                    continue
+                argv = (process / "cmdline").read_bytes().split(b"\0")
+            except (FileNotFoundError, ProcessLookupError, PermissionError):
+                continue
+            if not select.select([fd], [], [], 0)[0]:
+                state = marker.removeprefix(b"DEVLEGATE_TEST_IDENTITY_ACK=")
+                monitor = argv[1:4] == [b"-I", b"-S", b"-c"] and argv[5:6] == [
+                    state.removesuffix(b".identity-ack"),
+                ]
+                members[pid] = fd, monitor
+        yield members
+
+
+def _retire_blackboard_members(root):
+    deadline = time.monotonic() + 5
+    monitor_grace = time.monotonic() + 0.5
+    empty = False
+    while True:
+        with _blackboard_members(root) as members:
+            if not members and empty:
+                return
+            empty = not members
+            for fd, monitor in members.values():
+                # Let the monitor reap its worker first, but bound that wait.
+                if not monitor or time.monotonic() >= monitor_grace:
+                    try:
+                        signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"blackboard test processes did not retire: {sorted(members)}"
+                )
+        time.sleep(0.02)
+
+
+class _BlackboardLiveService(LiveService):
+    def __exit__(self, exc_type, error, traceback):
+        try:
+            super().__exit__(exc_type, error, traceback)
+        except Exception as teardown_error:
+            if error is None:
+                raise
+            error.add_note(f"Service teardown also failed: {teardown_error}")
+
+
+@contextmanager
+def _blackboard_services(repo, config):
+    services = []
+
+    def create():
+        service = _BlackboardLiveService(repo, config)
+        services.append(service)
+        return service
+
+    failure = None
+    try:
+        yield create
+    except BaseException as error:
+        failure = error
+        raise
+    finally:
+        # Stop all foreground launchers before scanning, including a failed start.
+        # Only do this at the scenario boundary: restarts may need live state.
+        errors = []
+        for service in services:
+            try:
+                service.kill(timeout=5)
+            except Exception as error:
+                errors.append(error)
+        try:
+            root = config.parent / ".registry-config" / "containment"
+            _retire_blackboard_members(root)
+        except Exception as error:
+            errors.append(error)
+        if errors:
+            diagnostic = f"Independent blackboard test cleanup failed: {errors!r}"
+            if failure is None:
+                raise AssertionError(diagnostic)
+            failure.add_note(diagnostic)
 
 
 def exchange(channel, request, *, lost=False, raw=None):
@@ -223,8 +337,8 @@ def test_packaged_guidance_is_conditional(directive):
         assert text in effective
 
 
-@pytest.mark.parametrize("next_attempt", ["rework", "crash", "unavailable"])
-def test_live_worker_handoff_via_materialized_adapter(tmp_path, next_attempt):
+@pytest.fixture
+def blackboard_worker(tmp_path):
     node = shutil.which("node")
     assert node is not None, "Node is required to exercise the OpenCode adapter"
     repo, config, state = control_fixture(tmp_path)
@@ -240,7 +354,6 @@ def test_live_worker_handoff_via_materialized_adapter(tmp_path, next_attempt):
     )
     # The model adapter is deterministic; its child executes the exact deployed TS.
     worker = tmp_path / "worker"
-    (tmp_path / "mode").write_text(next_attempt)
     worker.write_text(f"#!{node}\n" + r'''
 const assert = require("node:assert/strict")
 const fs = require("node:fs")
@@ -339,26 +452,40 @@ function report() {
     config.write_text(config.read_text().replace(
         "OPENCODE_BIN=true", f"OPENCODE_BIN={worker}",
     ))
+    return repo, config, state, control
+
+
+@pytest.mark.parametrize("next_attempt", ["rework", "crash", "unavailable"])
+def test_live_worker_handoff_via_materialized_adapter(
+    tmp_path, blackboard_worker, next_attempt,
+):
+    repo, config, state, control = blackboard_worker
+    (tmp_path / "mode").write_text(next_attempt)
+    with _blackboard_services(repo, config) as live_service:
+        _exercise_worker_handoff(tmp_path, state, control, live_service, next_attempt)
+
+
+def _exercise_worker_handoff(tmp_path, state, control, live_service, next_attempt):
     reports = ExecutionReportStore(control)
     if next_attempt == "unavailable":
         target = tmp_path / "denied-board"
         target.mkdir()
         (state / "blackboard").symlink_to(target, target_is_directory=True)
-        with LiveService(repo, config) as service:
+        with live_service() as service:
             service.wait_for(lambda: len(reports.list("T-1")) == 1, timeout=30)
         assert reports.list("T-1")[0].result.claim.outcome == "completed"
         assert not list(target.iterdir())
         return
 
     if next_attempt == "crash":
-        with LiveService(repo, config) as service:
+        with live_service() as service:
             service.wait_for(
                 lambda: "failed execution requires explicit retry" in
                 service.cli("status").stdout,
                 timeout=20,
             )
         (tmp_path / "mode").write_text("resume")
-        with LiveService(repo, config) as service:
+        with live_service() as service:
             store = BlackboardStore(state, service.locator.state_key, "T-1")
             entry, = store.list(None)["entries"]
             page = store.read(entry["id"], None)
@@ -374,7 +501,7 @@ function report() {
         assert store.list(None)["entries"] == [entry]
         return
 
-    with LiveService(repo, config) as service:
+    with live_service() as service:
         peer = tmp_path / "peer.json"
         service.wait_for(peer.exists)
         endpoint, token = json.loads(peer.read_bytes())
@@ -412,7 +539,7 @@ function report() {
     git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
     git(control, "commit", "-m", "Schedule deferred rework")
     git(control, "push", "origin", "devlegate/control")
-    with LiveService(repo, config) as service:
+    with live_service() as service:
         service.wait_for(lambda: len(reports.list("T-1")) == 2, timeout=30)
     second = next(
         report for report in reports.list("T-1")
@@ -425,3 +552,56 @@ function report() {
     original_path = next(path for path in records if path.stem == original["id"])
     record = json.loads(original_path.read_bytes())
     assert record["creator_execution"] == first.execution_id
+
+
+def test_blackboard_aborted_start_retires_only_its_own_processes(
+    tmp_path, blackboard_worker, monkeypatch,
+):
+    repo, config, _, _ = blackboard_worker
+    (tmp_path / "mode").write_text("rework")  # Hold the fake worker at its peer gate.
+    root = config.parent / ".registry-config" / "containment"
+    unrelated = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        env={
+            **os.environ,
+            "DEVLEGATE_TEST_IDENTITY_ACK": f"{root}-other/execution-decoy.identity-ack",
+        },
+    )
+    try:
+        with ExitStack() as handles:
+            pinned = []
+            message = "controlled startup failure"
+            original = AssertionError(message)
+            with (
+                pytest.raises(AssertionError, match=message) as caught,
+                _blackboard_services(repo, config) as live_service,
+            ):
+                service = live_service()
+
+                def abort_startup():
+                    service.wait_for((tmp_path / "peer.json").exists)
+                    with _blackboard_members(root) as members:
+                        roles = [monitor for _, monitor in members.values()]
+                        assert roles.count(True) == 1 and False in roles
+                        for fd, _ in members.values():
+                            pinned.append(os.dup(fd))
+                            handles.callback(os.close, pinned[-1])
+                    raise original
+
+                monkeypatch.setattr(service, "wait_ready", abort_startup)
+                try:
+                    with service:
+                        pytest.fail("aborted startup entered the service body")
+                except AssertionError as error:
+                    assert error is original
+                    assert service.process.poll() == -signal.SIGKILL
+                    assert not select.select(pinned, [], [], 0)[0]
+                    raise
+
+            assert caught.value is original
+            assert not getattr(original, "__notes__", [])
+            assert set(select.select(pinned, [], [], 0)[0]) == set(pinned)
+            assert unrelated.poll() is None
+    finally:
+        unrelated.kill()
+        unrelated.wait(timeout=5)
