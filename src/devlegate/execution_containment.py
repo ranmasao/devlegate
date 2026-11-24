@@ -404,6 +404,10 @@ class ExecutionContainment:
         finally:
             os.close(fd)
 
+    @property
+    def directory_identity(self) -> list[int]:
+        return list(self._directory_identity)
+
     @classmethod
     def create(cls, execution_id: str) -> ExecutionContainment:
         capability = probe_containment()
@@ -471,7 +475,8 @@ class ExecutionContainment:
                         raise ContainmentError("execution cgroup contains a symlink")
                     if child.is_dir(follow_symlinks=False):
                         fd = os.open(
-                            child.name, os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory,
+                            child.name, os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory,
                         )
                         try:
                             collect(fd)
@@ -482,7 +487,7 @@ class ExecutionContainment:
             with self._open_directory() as directory:
                 collect(directory)
             if (worker_pid not in members
-                    or _boundary_stamp(self.path) != list(self._directory_identity)):
+                    or _boundary_stamp(self.path) != self.directory_identity):
                 return None
             return bool(members - {worker_pid})
         except (ContainmentError, OSError, RecursionError, ValueError):
@@ -556,8 +561,18 @@ class LinuxCgroupContainmentProvider:
     def create(self, execution_id: str) -> ExecutionContainment:
         return ExecutionContainment.create(execution_id)
 
-    def boundary_stamp(self, launch: dict) -> list[int] | None:
-        return _boundary_stamp(Path(launch["containment"].removeprefix("cgroup:")))
+    def observe_bound(self, launch: dict, stamp: list[int]) -> str:
+        path = Path(launch["containment"].removeprefix("cgroup:"))
+        try:
+            boundary = ExecutionContainment(path, recursive_kill=False)
+            if boundary.directory_identity != stamp:
+                return "indeterminate"
+            populated = boundary.populated()
+            if _boundary_stamp(path) != stamp:
+                return "indeterminate"
+            return "matching-live" if populated else "absent"
+        except FileNotFoundError:
+            return "absent" if _boundary_stamp(path) is None else "indeterminate"
 
     def launch_evidence(self, execution_id: str) -> dict:
         """Capture the configured launch root before the uncertain spawn window."""
@@ -736,9 +751,15 @@ class DurableDeterministicContainmentProvider:
         return {"containment": f"deterministic:{execution_id}",
                 "root": str(self.root), "identity": [metadata.st_dev, metadata.st_ino]}
 
-    def boundary_stamp(self, launch: dict) -> list[int] | None:
+    def observe_bound(self, launch: dict, stamp: list[int]) -> str:
         execution_id = launch["containment"].removeprefix("deterministic:")
-        return _boundary_stamp(self.root / f"execution-{execution_id}.pid")
+        path = self.root / f"execution-{execution_id}"
+        current = _boundary_stamp(path.with_suffix(".pid"))
+        if current != stamp:
+            if current is not None or path.exists():
+                return "indeterminate"
+            return "absent"
+        return self.observe(launch["containment"])
 
     class _Boundary:
         def __init__(self, state: Path, identity: str) -> None:
@@ -747,6 +768,7 @@ class DurableDeterministicContainmentProvider:
             self._process = None
             self._diagnostic_file = None
             self._identity_ack_file = state.with_suffix(".identity-ack")
+            self.directory_identity = None
 
         def spawn(self, command: Sequence[str], **kwargs):
             self.state.parent.mkdir(parents=True, exist_ok=True)
@@ -796,6 +818,7 @@ class DurableDeterministicContainmentProvider:
             self._process = _MonitoredProcess(
                 monitor_process, worker_pid, exit_file
             )
+            self.directory_identity = _boundary_stamp(pid_file)
             self._diagnostic_file = diagnostic_file
             return self._process
 
@@ -824,11 +847,15 @@ class DurableDeterministicContainmentProvider:
                 return set(Path(f"/proc/{pid}/task/{pid}/children").read_text().split())
 
             try:
+                if (self.directory_identity is None or
+                        _boundary_stamp(self.state.with_suffix(".pid"))
+                        != self.directory_identity):
+                    return None
                 adopted = children(monitor)
                 if str(worker_pid) not in adopted:
                     return None
                 return bool(adopted - {str(worker_pid)} or children(worker_pid))
-            except OSError:
+            except (ContainmentError, OSError):
                 return None
 
         def request_graceful(self, pid: int | None) -> None:
@@ -857,7 +884,7 @@ class DurableDeterministicContainmentProvider:
             return True
 
         def destroy(self) -> None:
+            self.state.unlink(missing_ok=True)
             self.state.with_suffix(".pid").unlink(missing_ok=True)
             self.state.with_suffix(".exit").unlink(missing_ok=True)
             self.state.with_suffix(".members").unlink(missing_ok=True)
-            self.state.unlink(missing_ok=True)

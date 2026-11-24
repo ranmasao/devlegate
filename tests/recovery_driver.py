@@ -32,6 +32,7 @@ def main() -> int:
 
     engine.mark_service_ready = mark_ready
     point = os.environ.get("DEVLEGATE_TEST_CRASH_POINT")
+    watchdog_fault = os.environ.get("DEVLEGATE_TEST_WATCHDOG_FAULT")
     marker_value = os.environ.get("DEVLEGATE_TEST_CRASH_MARKER")
     marker = Path(marker_value) if marker_value else None
     release_marker_value = os.environ.get("DEVLEGATE_TEST_OPERATOR_RELEASE_MARKER")
@@ -45,6 +46,12 @@ def main() -> int:
     original_save = engine._save_state
 
     def save(phase: str, **fields: object) -> None:
+        if (
+            watchdog_fault == "persistence"
+            and fields.get("execution_interruption_kind") == "worker_stalled"
+        ):
+            engine._state_write_uncertain = True
+            raise OSError("test stall state write outcome uncertain")
         original_save(phase, **fields)
         if point == phase and point in {"agent_pending", "merge_pending"}:
             crash()
@@ -56,6 +63,37 @@ def main() -> int:
             crash()
 
     engine._save_state = save
+
+    if watchdog_fault in {"termination", "membership"}:
+        def unavailable(*_args):
+            if watchdog_fault == "termination":
+                raise containment.ContainmentError("test stall termination unavailable")
+            return None
+
+        boundary = containment.DurableDeterministicContainmentProvider._Boundary
+        if watchdog_fault == "termination":
+            boundary.force_terminate = unavailable
+        else:
+            boundary.has_owned_descendants = unavailable
+
+    if watchdog_fault == "changed-owner":
+        original_require = engine._require_execution_generation
+
+        def require(*, clean, remote):
+            original_require(clean=clean, remote=remote)
+            if engine._state.get("execution_stage") == "worker-running" and not remote:
+                engine._owned_execution_id = "changed-execution"
+
+        engine._require_execution_generation = require
+
+    if watchdog_fault == "optional-tools":
+        from devlegate import runtime
+
+        def unavailable(*_args, **_kwargs):
+            raise OSError("test optional endpoint unavailable")
+
+        runtime.BlackboardChannel = unavailable
+        runtime.RevisionChannel = unavailable
 
     if release_marker is not None:
         original_release = engine._release_operator_command

@@ -59,6 +59,28 @@ def test_replaced_containment_cannot_be_used_for_stall_or_retirement(tmp_path):
     with pytest.raises(ContainmentError, match="identity changed"):
         boundary.wait_empty(0)
     assert kill.read_text() == ""
+    provider = LinuxCgroupContainmentProvider()
+    assert provider.observe_bound(
+        {"containment": boundary.identity}, boundary.directory_identity,
+    ) == "indeterminate"
+
+
+def test_bound_restart_observation_requires_well_formed_empty_proof(tmp_path):
+    provider = LinuxCgroupContainmentProvider()
+    path = tmp_path / "execution"
+    path.mkdir()
+    boundary = ExecutionContainment(path, recursive_kill=True)
+    launch = {"containment": boundary.identity}
+    events = path / "cgroup.events"
+    events.write_text("populated 0\npopulated 1\n")
+    with pytest.raises(ContainmentError, match="malformed"):
+        provider.observe_bound(launch, boundary.directory_identity)
+    events.write_text("populated 1\n")
+    assert provider.observe_bound(launch, boundary.directory_identity) == (
+        "matching-live"
+    )
+    events.write_text("populated 0\n")
+    assert provider.observe_bound(launch, boundary.directory_identity) == "absent"
 
 
 def test_isolated_joiner_blocks_startup_hook_before_membership(tmp_path, monkeypatch):

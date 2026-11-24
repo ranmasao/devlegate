@@ -17,58 +17,112 @@ from devlegate.execution_containment import (
     ContainmentError,
     DurableDeterministicContainmentProvider,
 )
+from devlegate.worker_activity import WorkerActivity
 from devlegate.worker_supervisor import _run_opencode
 
 
-def test_activity_observes_partial_stdout_and_stderr_before_worker_exits(tmp_path):
-    release = tmp_path / "release"
+def test_raw_activity_resets_for_each_chunk_even_before_framing(tmp_path, capsys):
+    chunks = [(1, b'{partial'), (2, b'\xc3'), (2, b'\xa9'),
+              (1, b'}\n'), (1, b'{partial}\n'), (1, b'{partial}\n')]
     script = (
-        "import os, pathlib, sys, time; "
-        "os.write(1, b'{partial'); os.write(2, b'error \\xc3'); "
-        "p=pathlib.Path(sys.argv[1]); "
-        "exec('while not p.exists():\\n time.sleep(0.01)'); "
-        "os.write(1, b'}\\n'); os.write(2, b'\\xa9')"
+        "import os, pathlib, sys, time\n"
+        "deadline = time.monotonic() + 8\n"
+        f"for i, (fd, data) in enumerate({chunks!r}):\n"
+        "    while not pathlib.Path(str(i)).exists():\n"
+        "        if time.monotonic() > deadline: sys.exit(70)\n"
+        "        time.sleep(0.005)\n"
+        "    os.write(fd, data)\n"
+        "while not pathlib.Path('done').exists():\n"
+        "    if time.monotonic() > deadline: sys.exit(70)\n"
+        "    time.sleep(0.005)\n"
     )
-    observed = []
-    rendered = []
-    ready = threading.Event()
+    now = [0.0]
+    observed = threading.Semaphore(0)
 
-    def activity(stream, chunk):
-        observed.append((stream, chunk))
-        if {name for name, _ in observed} == {"stdout", "stderr"}:
-            ready.set()
+    class Activity(WorkerActivity):
+        def read(self, ready_read):
+            size = super().read(ready_read)
+            if size:
+                observed.release()
+            return size
 
+    activity = Activity(lambda: now[0])
+    results = []
     thread = threading.Thread(
-        target=lambda: _run_opencode(
-            [sys.executable, "-c", script, str(release)], "prompt",
-            show_worker_output=False, activity_handler=activity,
-            rendered_output_handler=lambda stream, text: rendered.append((stream, text)),
-        )
+        target=lambda: results.append(_run_opencode(
+            [sys.executable, "-c", script], "prompt", cwd=tmp_path, activity=activity,
+        )), daemon=True,
     )
     thread.start()
     try:
-        assert ready.wait(5)
-        assert thread.is_alive()
-        assert ("stdout", b"{partial") in observed
-        assert ("stderr", b"error \xc3") in observed
+        for i in range(len(chunks)):
+            now[0] += 599.875
+            (tmp_path / str(i)).touch()
+            assert observed.acquire(timeout=1)
+            assert activity.snapshot() == (0, i + 1)
+            now[0] += 0.125
+            assert not activity.classify(i, 600, lambda _: pytest.fail("stale poll"))
+            if i == 1:  # Neither the partial JSON nor the partial UTF-8 rendered.
+                assert not capsys.readouterr().err
+    finally:
+        for i in range(len(chunks)):
+            (tmp_path / str(i)).touch()
+        (tmp_path / "done").touch()
+        thread.join(10)
+    assert not thread.is_alive()
+    assert results[0].process_returncode == 0
+    assert results[0].transport_error == "invalid JSON event on stdout"
+    assert "é" in capsys.readouterr().err
+    assert activity.snapshot() is None
+
+
+@pytest.mark.parametrize("winner", ["completion", "operator_abort", "ticket_reset"])
+def test_final_stall_observation_yields_to_completion_and_stop(tmp_path, winner):
+    boundary = DurableDeterministicContainmentProvider(tmp_path).create("race")
+    release = tmp_path / "release"
+    script = (
+        "import pathlib, sys, time\n"
+        "deadline = time.monotonic() + 6\n"
+        "while not pathlib.Path(sys.argv[1]).exists():\n"
+        "    if time.monotonic() > deadline: sys.exit(70)\n"
+        "    time.sleep(0.005)\n"
+    )
+
+    class Request:
+        kind = None
+
+    request = Request()
+    raced = []
+
+    def stall_poll(_identity, _stamp, eligible):
+        if not eligible():
+            return False
+        if winner == "completion":
+            release.touch()
+            boundary._process.wait(timeout=3)
+        else:
+            request.kind = winner
+        raced.append(True)
+        return eligible()
+
+    try:
+        result = _run_opencode(
+            [sys.executable, "-c", script, str(release)], "prompt",
+            containment=boundary, execution_id="race", stop_request=request,
+            worker_identity_handler=lambda _: None, stall_poll=stall_poll,
+        )
+        assert raced == [True]
+        assert result.worker_group_retired
+        if winner == "completion":
+            assert result.interruption_kind is None
+            assert result.process_returncode == 0
+        else:
+            assert result.interruption_kind == winner
     finally:
         release.touch()
-        thread.join(5)
-    assert not thread.is_alive()
-    assert "".join(text for stream, text in rendered if stream == "stderr") == "error é"
-
-
-def test_activity_callback_failure_is_reported_and_pipes_are_drained():
-    def fail(_stream, _chunk):
-        raise RuntimeError("observer unavailable")
-
-    result = _run_opencode(
-        [sys.executable, "-c", "import os; os.write(1, b'{}\\n'); os.write(2, b'x' * 200000)"],
-        "prompt",
-        show_worker_output=False,
-        activity_handler=fail,
-    )
-    assert result.transport_error == "worker activity observation failed: observer unavailable"
+        if boundary._process is not None and boundary._process._monitor.poll() is None:
+            boundary.force_terminate()
+            boundary._process._monitor.wait(timeout=5)
 
 
 @pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])

@@ -523,8 +523,7 @@ class ResourceBinding:
             {"worker": receipt, "evidence": evidence},
         )
 
-    def worker_stall_evidence(self) -> dict:
-        receipt = self.operation_receipt("worker")
+    def worker_stall_evidence(self, receipt: dict[str, object]) -> dict:
         try:
             observed = _read(
                 self.directory / f"worker-stall.{receipt['sequence']:08d}.json"

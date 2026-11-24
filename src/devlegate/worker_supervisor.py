@@ -37,6 +37,7 @@ from devlegate.execution_containment import (
 )
 from devlegate.execution_workspace import ExecutionWorkspace
 from devlegate.operational_log import ExecutionLog, open_execution_log, service_log
+from devlegate.worker_activity import WorkerActivity
 from devlegate.worker_egress import (
     OpenCodeRunResult,
     WorkerEgressParser,
@@ -280,9 +281,10 @@ def _await_pipe(poller, cancelled: threading.Event) -> None:
 class _CancellablePipeReader(io.RawIOBase):
     """Keep buffered framing, without giving a pipe owner an unbounded read."""
 
-    def __init__(self, fd: int, cancelled: threading.Event) -> None:
+    def __init__(self, fd: int, cancelled: threading.Event, read) -> None:
         self.fd = fd
         self.cancelled = cancelled
+        self.read_chunk = read
         self.poller = select.poll()
         self.poller.register(fd, select.POLLIN)
 
@@ -292,7 +294,7 @@ class _CancellablePipeReader(io.RawIOBase):
     def readinto(self, buffer) -> int:
         _await_pipe(self.poller, self.cancelled)
         # This thread is the only reader; readiness cannot be consumed elsewhere.
-        return os.readv(self.fd, [buffer])
+        return self.read_chunk(self.fd, buffer)
 
 
 def _wait_process(process, timeout: float | None = None):
@@ -356,29 +358,7 @@ def worker_environment(
 MAX_STDOUT_EVENT_BYTES = 1024 * 1024  # raw JSONL framing limit
 
 
-def _observed_stdout_lines(stream, activity_handler, cancelled: threading.Event):
-    """Observe bytes as they arrive, while retaining bounded JSONL framing."""
-    read = getattr(stream, "read1", stream.read)
-    pending = bytearray()
-    limit = MAX_STDOUT_EVENT_BYTES + 1
-    while not cancelled.is_set() and (chunk := read(4096)):
-        activity_handler("stdout", chunk)
-        pending.extend(chunk)
-        while pending and not cancelled.is_set():
-            newline = pending.find(b"\n", 0, limit)
-            if newline >= 0:
-                length = newline + 1
-            elif len(pending) >= limit:
-                length = limit
-            else:
-                break
-            yield bytes(pending[:length])
-            del pending[:length]
-    if pending and not cancelled.is_set():
-        yield bytes(pending)
-
-
-StallPoll = Callable[[WorkerProcessIdentity, Callable[[], bool]], bool]
+StallPoll = Callable[[WorkerProcessIdentity, list[int], Callable[[], bool]], bool]
 
 
 def _run_opencode(
@@ -401,8 +381,7 @@ def _run_opencode(
     output_abandoned_handler: Callable[[tuple[threading.Thread, ...]], None]
     | None = None,
     stall_poll: StallPoll | None = None,
-    activity_handler: Callable[[str, bytes], None] | None = None,
-    rendered_output_handler: Callable[[str, str], None] | None = None,
+    activity: WorkerActivity | None = None,
 ) -> OpenCodeRunResult:
     """Run OpenCode headlessly and render its worker output as inert text."""
     try:
@@ -435,30 +414,25 @@ def _run_opencode(
         return OpenCodeRunResult(
             -1, f"execution containment failed: {error}", None, False, False
         )
+    if activity is not None:
+        activity.start()
     if worker_started_handler is not None:
         worker_started_handler()
     output_lock = threading.Lock()
     transport_error: str | None = None
-    activity_error: str | None = None
     prompt_error: str | None = None
     log_error: str | None = None
     read_errors: list[str] = []
     cancel_io = threading.Event()
 
     def write(text: str, stream: str) -> None:
-        nonlocal log_error, rendered_output_handler
+        nonlocal log_error
         with output_lock:
             if cancel_io.is_set():
                 return
             rendered = _render_worker_text(text)
             if not rendered:
                 return
-            if rendered_output_handler is not None:
-                try:
-                    rendered_output_handler(stream, rendered)
-                except Exception:
-                    rendered_output_handler = None
-                    _log("worker recovery excerpt capture unavailable")
             if execution_log is not None:
                 try:
                     execution_log.write(rendered)
@@ -478,24 +452,18 @@ def _run_opencode(
     def write_stdout(text: str) -> None:
         write(text, "stdout")
 
-    def observe_activity(stream: str, data: bytes) -> None:
-        nonlocal activity_error
-        if activity_handler is not None:
-            try:
-                activity_handler(stream, data)
-            except Exception as error:
-                # Keep draining both pipes, but never hide a broken observer.
-                activity_error = f"worker activity observation failed: {error}"
-
     def consume_stdout(stream) -> None:
         nonlocal transport_error
-        lines = _observed_stdout_lines(stream, observe_activity, cancel_io)
-        for raw_line in lines:
+        while not cancel_io.is_set() and (
+            raw_line := stream.readline(MAX_STDOUT_EVENT_BYTES + 1)
+        ):
             if len(raw_line) > MAX_STDOUT_EVENT_BYTES:
                 transport_error = "stdout event exceeds maximum size"
                 _log(f"OpenCode protocol error: {transport_error}")
                 if not raw_line.endswith(b"\n"):
-                    for discarded in lines:
+                    while not cancel_io.is_set() and (
+                        discarded := stream.readline(MAX_STDOUT_EVENT_BYTES + 1)
+                    ):
                         if discarded.endswith(b"\n"):
                             break
                 continue
@@ -537,7 +505,7 @@ def _run_opencode(
                 tool = part["tool"]
                 write_stdout(f"OpenCode tool: {tool}\n")
                 if tool == "devlegate_blackboard":
-                    continue  # Keep note pages out of logs and recovery excerpts.
+                    continue  # Keep note pages out of logs.
                 state = part["state"]
                 if state.get("status") == "completed":
                     output = state.get("output")
@@ -556,7 +524,6 @@ def _run_opencode(
         read = getattr(stream, "read1", stream.read)
         decode = codecs.getincrementaldecoder("utf-8")(errors="replace").decode
         while not cancel_io.is_set() and (raw_chunk := read(4096)):
-            observe_activity("stderr", raw_chunk)
             write(decode(raw_chunk), "stderr")
         write(decode(b"", final=True), "stderr")
 
@@ -567,7 +534,12 @@ def _run_opencode(
                 if fd is None:
                     consume(pipe)
                 else:
-                    raw = _CancellablePipeReader(fd, cancel_io)
+                    def read(fd, buffer):
+                        if activity is None:
+                            return os.readv(fd, [buffer])
+                        return activity.read(lambda: os.readv(fd, [buffer]))
+
+                    raw = _CancellablePipeReader(fd, cancel_io, read)
                     with io.BufferedReader(raw) as stream:
                         consume(stream)
         except Exception as error:
@@ -700,13 +672,13 @@ def _run_opencode(
         return (
             identity is not None
             and identity.containment_id is not None
-            and activity_error is None
+            and not read_errors
             and getattr(containment, "recursive_kill", True)
             and getattr(stop_request, "kind", None) is None
             and descendants is not None
             and descendants(identity.pid) is False
+            and observe_worker_identity(identity, exact_leader=True) == "matching-live"
             and process.poll() is None
-            and observe_worker_identity(identity) == "matching-live"
         )
 
     if identity_error is not None:
@@ -745,10 +717,27 @@ def _run_opencode(
                 break
             # A failed write-ahead classification must not enter the ordinary
             # interruption handler or cause a fallback signal.
-            if stall_poll is not None and identity is not None and stall_poll(
-                identity, eligible_for_stall,
-            ):
+            try:
+                stamp = getattr(containment, "directory_identity", None)
+                stalled = (
+                    stall_poll is not None and identity is not None
+                    and stamp is not None
+                    and stall_poll(identity, stamp, eligible_for_stall)
+                )
+            except Exception as error:
+                # Do not fall back to ResetStop's synthetic interruption on an
+                # uncertain state write. Leave the boundary intact for recovery.
+                observed = process.poll()
+                leader_exited = observed is not None
+                returncode = observed if leader_exited else -1
+                retirement_error = f"worker stall classification blocked: {error}"
+                break
+            if stalled:
                 interruption_kind = "worker_stalled"
+                _log(
+                    "worker stalled after extended output silence: "
+                    f"execution={execution_id}"
+                )
                 try:
                     containment.force_terminate()
                     returncode = _wait_process(process, WORKER_TERMINATION_TIMEOUT)
@@ -763,6 +752,8 @@ def _run_opencode(
                     retirement_error = f"stalled worker termination failed: {error}"
                 break
 
+    if activity is not None:
+        activity.close()
     deadline = time.monotonic() + WORKER_TERMINATION_TIMEOUT
 
     def remaining_time() -> float:
@@ -794,8 +785,7 @@ def _run_opencode(
                         )
                 if empty is not True:
                     raise ContainmentError("containment observation is indeterminate")
-                if interruption_kind != "worker_stalled":
-                    containment.destroy()
+                containment.destroy()
                 group_retired = True
             except (ContainmentError, OSError) as error:
                 retirement_error = str(error)
@@ -813,18 +803,6 @@ def _run_opencode(
     )
     if prompt_pending:
         prompt_error = "worker prompt delivery did not finish before deadline"
-    if interruption_kind == "worker_stalled" and group_retired:
-        # The checkpoint also requires both I/O sides to finish before a
-        # stalled attempt can be recorded as retired and resumed.
-        if output_pending or prompt_pending:
-            group_retired = False
-            retirement_error = "stalled worker I/O did not finish before deadline"
-        else:
-            try:
-                containment.destroy()
-            except (ContainmentError, OSError) as error:
-                group_retired = False
-                retirement_error = str(error)
     if not group_retired or drain_error or prompt_pending:
         reasons = [reason for reason in (
             f"execution containment retirement blocked: {retirement_error}"
@@ -842,8 +820,6 @@ def _run_opencode(
     transport_error = transport_error or drain_error
     if identity_error is not None:
         transport_error = identity_error
-    elif activity_error is not None:
-        transport_error = activity_error
     elif log_error is not None:
         transport_error = log_error
     elif interruption_error is not None:
@@ -911,11 +887,9 @@ class WorkerSupervisor:
         capture = getattr(self.containment_provider, "launch_evidence", None)
         return capture(execution_id) if capture is not None else None
 
-    def containment_stamp(self, launch: dict) -> list[int] | None:
-        capture = getattr(self.containment_provider, "boundary_stamp", None)
-        if capture is None:
-            raise ContainmentError("worker containment identity is unavailable")
-        return capture(launch)
+    def observe_bound_containment(self, launch: dict, stamp: list[int]) -> str:
+        observe = getattr(self.containment_provider, "observe_bound", None)
+        return observe(launch, stamp) if observe is not None else "indeterminate"
 
     def recover_analysis(self, execution_id: str, evidence, identity, *, terminate):
         """Bounded recovery; no process launch and no guessed semantic result."""
@@ -971,8 +945,7 @@ class WorkerSupervisor:
         owner_poll: Callable[[], None] | None = None,
         revisions: RevisionChannel | None = None,
         blackboard: PreparedBlackboard | None = None,
-        activity_handler: Callable[[str, bytes], None] | None = None,
-        rendered_output_handler: Callable[[str, str], None] | None = None,
+        activity: WorkerActivity | None = None,
         stall_poll: StallPoll | None = None,
     ) -> WorkerRunResult:
         """Run one validated worker and return typed process/egress results."""
@@ -1143,8 +1116,7 @@ export default tool({
                     item is not None
                     for item in (owner_poll, evidence, revisions, blackboard)
                 ) else None),
-                activity_handler=activity_handler,
-                rendered_output_handler=rendered_output_handler,
+                activity=activity,
                 stall_poll=stall_poll,
             )
             claim, egress_error = (
