@@ -1,0 +1,30 @@
+{
+  "code_base_head": "d22b5f0e7c485b9c31cd8e515b47fe48ecb9ec36",
+  "conclusion": "completed",
+  "control_head": "9e4b99aea6a0f44196bc6924ed7119e8ac278222",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-184",
+  "execution_id": "dee5d69246fb4854a740f175e8c54b95",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-184",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "f5d58f86a9b90f65add63c814d087a9c04e726fa485fb4b6f9a4329c828b1793",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-184",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented the ticket-scoped blackboard with immutable notes, bounded pagination, and owner-enforced execution budgets. Integrated the OpenCode tool and conditional worker guidance, extracted the shared request transport, and added lifecycle, scope, durability, and packaging regressions."
+  },
+  "workspace_head": "60d9a4ec4313c4fdbb52e85c62dd3927b6ad5ccf"
+}
