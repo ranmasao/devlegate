@@ -165,6 +165,8 @@ Current limits:
 - [Operations](docs/OPERATIONS.md): addressing, services, status, logs, and recovery.
 - [Object Inspection](docs/inspect.md): read-only ticket, execution, workspace,
   and service views.
+- [Change Explorer](docs/change-explorer.md): inspect task checkpoints, changed
+  paths, file diffs, and whitespace diagnostics from the worker.
 - [Architecture](docs/ARCHITECTURE.md): system boundaries and worker ownership.
 - [Abandonment foundations](docs/abandonment.md): request schema, bounded evidence,
   and the current execution/finalization limitation.

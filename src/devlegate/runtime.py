@@ -53,7 +53,11 @@ from devlegate.agent_protocol import (
     upgrade_project_templates,
 )
 from devlegate.change_channel import RevisionChannel
-from devlegate.change_revisions import RevisionUnavailable, proven_linear_history
+from devlegate.change_revisions import (
+    Checkpoint,
+    RevisionUnavailable,
+    published_checkpoint_history,
+)
 from devlegate.cleanup_dependency import (
     accepted_integration_dependency_reason,
     snapshot_integration,
@@ -210,6 +214,7 @@ from devlegate.worker_supervisor import (
     WorkerProcessIdentity,
     WorkerSupervisionError,
     WorkerSupervisor,
+    observe_worker_identity,
 )
 
 
@@ -5033,10 +5038,17 @@ class ServiceEngine:
 
                 directory = workspace.path.lstat()
 
-                def explorer_authorized():
+                def explorer_authorized(pid: int) -> bool:
+                    identity = _worker_identity_from_value(
+                        self._state.get("worker_identity"), execution_id,
+                    )
                     current = workspace.path.lstat()
                     return (
-                        not workspace.path.is_symlink()
+                        identity is not None
+                        and observe_worker_identity(identity) == "matching-live"
+                        and os.getsid(pid) == identity.sid
+                        and os.getpgid(pid) == identity.pgid
+                        and not workspace.path.is_symlink()
                         and (current.st_dev, current.st_ino)
                         == (directory.st_dev, directory.st_ino)
                         and self._owned_execution_id == execution_id
@@ -5050,11 +5062,14 @@ class ServiceEngine:
                 # Resumed history needs independent checkpoint provenance; do
                 # not mistake Git parents or replay commits for worker sessions.
                 namespace = None
+                git_dir = common_dir = None
                 try:
+                    binding = self._execution_generation_binding()
+                    git_dir = binding._validate_local_identity()
+                    common_dir = Path(str(binding.intent["common"]))
                     prior = ExecutionReportStore(self.control_worktree).list(
                         workspace.ticket_id
                     )
-                    history_base, history_head = workspace.base_head, workspace.head
                     if isinstance(rework, dict):
                         previous = rework.get("previous_execution_id")
                         matched = [report for report in prior
@@ -5067,21 +5082,46 @@ class ServiceEngine:
                                 or rework.get("admitted_base_head")
                                 != workspace.base_head):
                             raise RevisionUnavailable("rework provenance unavailable")
-                        history_base = matched[0].code_base_head
-                        history_head = matched[0].workspace_head
-                        if history_head is None:
-                            raise RevisionUnavailable("checkpoint unavailable")
-                    namespace = proven_linear_history(
-                        workspace.path, history_base, history_head,
-                        prior, workspace.ticket_id, workspace.branch,
-                        current_base=workspace.base_head,
+                    reconciliation = self._state.get("reconciliation")
+                    reconciled_replay = (
+                        isinstance(reconciliation, dict)
+                        and reconciliation.get("status") == "resolved"
+                        and reconciliation.get("resolution") == "update-base"
+                        and reconciliation.get("ticket_id") == workspace.ticket_id
+                        and reconciliation.get("effective_base") == workspace.base_head
+                        and reconciliation.get("worker_checkpoint") == workspace.head
                     )
-                except (ExecutionReportError, RevisionUnavailable, OSError):
+                    displaced = None
+                    if reconciled_replay:
+                        previous = reconciliation.get("execution_id")
+                        original_base = reconciliation.get("original_base")
+                        if isinstance(previous, str) and isinstance(original_base, str):
+                            reference = self._reconciliation_evidence_ref(
+                                workspace.ticket_id, previous,
+                            )
+                            displaced_ref = reconciliation.get("displaced_evidence_ref")
+                            if reference == displaced_ref:
+                                original = self._resolve_commit_runtime(
+                                    self.repo, reference,
+                                )
+                                if original:
+                                    displaced = (
+                                        previous, Checkpoint(original, original_base),
+                                    )
+                    namespace = published_checkpoint_history(
+                        workspace.path, self.control_worktree,
+                        workspace.base_head, workspace.head,
+                        prior, workspace.ticket_id, workspace.branch,
+                        allow_replay=reconciled_replay or isinstance(rework, dict),
+                        displaced_checkpoint=displaced,
+                    )
+                except (ExecutionReportError, ExecutionWorkspaceError,
+                        RevisionUnavailable, OSError):
                     pass  # Unprovable history stays unavailable.
                 with tempfile.TemporaryDirectory(prefix="devlegate-explorer-") as root:
                     with RevisionChannel(
                         Path(root) / "read.sock", namespace, explorer_authorized,
-                        workspace.path,
+                        workspace.path, git_dir=git_dir, common_dir=common_dir,
                     ) as revisions:
                         worker_run = self._workers.run(
                             workspace,

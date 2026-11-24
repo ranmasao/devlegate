@@ -1,22 +1,21 @@
 # Copyright (c) 2026 Daniil Romanov
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
-"""Execution-scoped, owner-polled revision inventory channel.
-
-This initial channel deliberately does not infer checkpoint history from Git
-parentage. A missing owner-proven namespace is reported as unavailable.
-"""
+"""Execution-scoped, owner-polled Change Explorer channel."""
 
 from __future__ import annotations
 
 import hmac
 import json
+import os
 import secrets
+import socket
+import struct
 from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.abandonment_evidence import EvidenceError
-from devlegate.change_explorer import ImmutableExplorer, ObservationError
+from devlegate.change_explorer import ImmutableExplorer, ObservationError, serialize
 from devlegate.change_revisions import RevisionNamespace
 from devlegate.evidence_channel import EvidenceSocket
 from devlegate.ipc_protocol import encode_frame
@@ -24,15 +23,20 @@ from devlegate.ipc_protocol import encode_frame
 
 class RevisionChannel(EvidenceSocket):
     def __init__(self, path: Path, namespace: RevisionNamespace | None,
-                 authorized: Callable[[], bool], repo: Path | None = None) -> None:
+                 authorized: Callable[[int], bool], repo: Path | None = None, *,
+                 git_dir: Path | None = None, common_dir: Path | None = None) -> None:
         self.token = secrets.token_hex(32)
         self.namespace = namespace
         self.authorized = authorized
-        self.explorer = (ImmutableExplorer(repo, namespace, secrets.token_bytes(32))
-                         if repo is not None and namespace is not None else None)
+        self.explorer = (ImmutableExplorer(
+            repo, namespace, secrets.token_bytes(32),
+            git_dir=git_dir, common_dir=common_dir,
+        ) if repo is not None and namespace is not None else None)
         self._disabled = False
-        super().__init__(None, path, requests=256, response_bytes=65536,
-                         reply=self._revision_reply)
+        self._budget_notice = encode_frame(serialize(self._status("BUDGET_EXHAUSTED")))
+        super().__init__(None, path, requests=4096, response_bytes=65536,
+                         session_seconds=float("inf"),
+                          reply=self._revision_reply)
 
     def poll(self) -> None:
         if self._disabled:
@@ -49,38 +53,55 @@ class RevisionChannel(EvidenceSocket):
             self._disabled = True
             super().close()
 
+    @staticmethod
+    def _status(status: str) -> dict:
+        return {"status": status, "complete": False, "has_more": False,
+                "next_cursor": None}
+
+    def _authorized_peer(self) -> bool:
+        if self._client is None:
+            return False
+        size = struct.calcsize("3i")
+        pid, uid, _gid = struct.unpack("3i", self._client.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, size,
+        ))
+        return uid == os.getuid() and pid > 0 and self.authorized(pid)
+
     def _revision_reply(self, raw: bytes) -> bytes:
+        if self._remaining < len(self._budget_notice):
+            raise EvidenceError("Change Explorer budget exhausted")
         try:
             request = json.loads(raw)
             valid = (isinstance(request, dict)
                      and isinstance(request["token"], str)
                      and isinstance(request.get("operation"), str)
                      and hmac.compare_digest(request["token"], self.token)
-                     and self.authorized())
-        except (ValueError, UnicodeError, OSError, KeyError, TypeError):
+                     and self._authorized_peer())
+        except (ValueError, OSError, KeyError, TypeError, RecursionError):
             valid = False
         if not valid:
-            result = {"status": "UNAVAILABLE"}
+            result = self._status("UNAVAILABLE")
         elif request.get("operation") == "revisions" and set(request) == {
             "token", "operation",
         } and self.namespace is not None:
-            result = {"status": "OK", **self.namespace.inventory()}
-        elif request.get("operation") in {"revisions", "changes", "diff"} and (
+            result = {**self._status("OK"), "complete": True,
+                      **self.namespace.inventory()}
+        elif request.get("operation") in {"revisions", "changes", "diff", "check"} and (
             self.namespace is None
         ):
-            result = {"status": "HISTORY_UNAVAILABLE"}
+            result = self._status("HISTORY_UNAVAILABLE")
         else:
             operation = request.get("operation")
             required = {"token", "operation", "from", "to"}
             if operation == "diff":
                 required.add("path")
             allowed = required | {"cursor"}
-            if (operation not in {"changes", "diff"} or self.explorer is None
+            if (operation not in {"changes", "diff", "check"} or self.explorer is None
                     or not required <= set(request) <= allowed
                     or not all(isinstance(request[k], str) for k in required)
                     or ("cursor" in request
                         and not isinstance(request["cursor"], str))):
-                result = {"status": "UNAVAILABLE"}
+                result = self._status("UNAVAILABLE")
             else:
                 try:
                     args = [request["from"], request["to"]]
@@ -92,8 +113,15 @@ class RevisionChannel(EvidenceSocket):
                 except (ObservationError, OSError, ValueError) as error:
                     status = (str(error) if isinstance(error, ObservationError)
                               else "UNAVAILABLE")
-                    result = {"status": status, "complete": False, "has_more": False}
-        return encode_frame(json.dumps(result, separators=(",", ":")).encode())
+                    result = self._status(status)
+        payload = serialize(result)
+        if len(payload) > 8192:
+            payload = serialize(self._status("TOO_LARGE"))
+        frame = encode_frame(payload)
+        if len(frame) + len(self._budget_notice) > self._remaining:
+            self._remaining = len(self._budget_notice)
+            return self._budget_notice
+        return frame
 
 
 def revisions_tool(path: Path, token: str) -> str:
@@ -122,7 +150,7 @@ export default tool({
           socket.end(); resolve(received.subarray(4).toString("utf8"))
         }
       })
-      socket.on("error", reject)
+      socket.on("error", () => reject(new Error("Change Explorer unavailable")))
       socket.on("end", () => {
         if (received.length < 4 || received.length !== received.readUInt32BE(0) + 4)
           reject(new Error("incomplete response"))
@@ -135,16 +163,16 @@ export default tool({
 
 def comparison_tool(path: Path, token: str, operation: str) -> str:
     """Build one narrowly scoped client; authority remains in the owner."""
-    if operation not in {"changes", "diff"}:
+    if operation not in {"changes", "diff", "check"}:
         raise ValueError("unknown operation")
+    extra = ""
+    values = ""
     if operation == "changes":
         description = ("List only paths and metadata of changed files; never code or "
                        "patch text. Prefer this before individual diffs and page only "
                        "as far as needed. Submodule status is structural; .gitmodules "
                        "is separate and parent checkpoints do not save nested edits.")
-        extra = ""
-        values = ""
-    else:
+    elif operation == "diff":
         description = ("Return a bounded text diff of one explicit file identified "
                        "with changes first. Request more pages only as needed; "
                        "has_more means the diff is incomplete. Binary, oversized or "
@@ -153,6 +181,15 @@ def comparison_tool(path: Path, token: str, operation: str) -> str:
                        "parent checkpoints do not save nested edits.")
         extra = "path: tool.schema.string(),"
         values = ", path: args.path"
+    else:
+        description = (
+            "On demand, use the equivalent of git diff --check for introduced "
+            "whitespace errors and conflict markers. Use HEAD to WORKTREE for "
+            "this attempt or BASE to WORKTREE for cumulative changes. Findings "
+            "are advice, not a failure or an automatic fix; partial or "
+            "unavailable results are not clean."
+        )
+    description += " WORKTREE pages are live observations; re-query after edits."
     client = revisions_tool(path, token)
     start = client.index('  description:')
     end = client.index('    const header', start)
