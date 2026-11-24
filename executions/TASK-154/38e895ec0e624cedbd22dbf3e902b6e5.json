@@ -1,0 +1,30 @@
+{
+  "code_base_head": "a48ed50a5b27c380b23e25494a4378fc1f8450ff",
+  "conclusion": "completed",
+  "control_head": "2f52f31f52fdf14714ee6d08be448c2062925f07",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-154",
+  "execution_id": "38e895ec0e624cedbd22dbf3e902b6e5",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-154",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "9f1d68d8f3e19ab2128d1472b7583237c4b4649dcdd081f0037f2da62dcc1768",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-154",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Implemented the four owner-authorized Change Explorer tools with live WORKTREE observations, durable virtual checkpoint history, bounded pagination, and a shared execution output budget. Added Git-compatible whitespace and conflict diagnostics, OpenCode tool guidance, and regressions covering checkpoint recovery, replay, and process-bound access."
+  },
+  "workspace_head": "4fa7a1d6711026633cf456bc34d6b4671f1fe591"
+}
