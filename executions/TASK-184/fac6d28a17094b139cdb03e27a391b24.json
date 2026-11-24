@@ -1,0 +1,30 @@
+{
+  "code_base_head": "d22b5f0e7c485b9c31cd8e515b47fe48ecb9ec36",
+  "conclusion": "completed",
+  "control_head": "5752bb8c4d0e38657aabd09cb2a8094c22c3e2a5",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-184",
+  "execution_id": "fac6d28a17094b139cdb03e27a391b24",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-184",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "8c5309af2b5e9e78c120921622ad6ab8132d580e58dc2c8d82dda1698841bda7",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-184",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added bounded, test-only cleanup for the live blackboard service scenarios. Cleanup uses Linux process handles scoped to the disposable containment root; the aborted-start regression verifies the original failure is preserved, the monitor and fake worker exit, and an unrelated process stays alive."
+  },
+  "workspace_head": "853d4d14f576e53ebec5b97392f4bfa4b5d1ee55"
+}
