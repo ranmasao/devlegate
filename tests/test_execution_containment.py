@@ -24,6 +24,43 @@ def test_default_provider_is_production_cgroup_provider():
     assert isinstance(default_containment_provider(), LinuxCgroupContainmentProvider)
 
 
+def test_owned_descendant_observation_requires_worker_and_nested_groups(tmp_path):
+    boundary = ExecutionContainment(tmp_path, recursive_kill=True)
+    procs = tmp_path / "cgroup.procs"
+    procs.write_text("123\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is False
+
+    child = tmp_path / "tool"
+    child.mkdir()
+    (child / "cgroup.procs").write_text("456\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is True
+    assert boundary.has_owned_descendants(999) is None
+
+    (child / "cgroup.procs").write_text("invalid\n", encoding="ascii")
+    assert boundary.has_owned_descendants(123) is None
+    (child / "cgroup.procs").unlink()
+    assert boundary.has_owned_descendants(123) is None
+
+
+def test_replaced_containment_cannot_be_used_for_stall_or_retirement(tmp_path):
+    path = tmp_path / "execution"
+    path.mkdir()
+    boundary = ExecutionContainment(path, recursive_kill=True)
+    path.rename(tmp_path / "original")
+    path.mkdir()
+    (path / "cgroup.procs").write_text("123\n")
+    (path / "cgroup.events").write_text("populated 0\n")
+    kill = path / "cgroup.kill"
+    kill.write_text("")
+
+    assert boundary.has_owned_descendants(123) is None
+    with pytest.raises(ContainmentError, match="identity changed"):
+        boundary.force_terminate()
+    with pytest.raises(ContainmentError, match="identity changed"):
+        boundary.wait_empty(0)
+    assert kill.read_text() == ""
+
+
 def test_isolated_joiner_blocks_startup_hook_before_membership(tmp_path, monkeypatch):
     boundary = tmp_path / "execution"
     boundary.mkdir()
@@ -208,6 +245,8 @@ def test_linux_provider_observes_cgroup_states(tmp_path):
     events.write_text("populated 0\n")
     assert provider.observe(identity) == "absent"
     events.write_text("not-a-cgroup-state\n")
+    assert provider.observe(identity) == "indeterminate"
+    events.unlink()
     assert provider.observe(identity) == "indeterminate"
     assert provider.observe(f"cgroup:{tmp_path / 'missing'}") == "absent"
 

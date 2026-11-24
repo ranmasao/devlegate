@@ -119,6 +119,7 @@ class ReadOnlyView:
     live_execution: dict[str, object] | None = None
     service_failure: dict[str, object] | None = None
     service_metadata: dict[str, object] | None = None
+    worker_liveness: dict[str, object] | None = None
 
 
 def _service_metadata(response: dict[str, object]) -> dict[str, object]:
@@ -199,6 +200,11 @@ def _read_only_view(env_file: Path) -> ReadOnlyView:
                 "running",
                 live_execution,
                 service_metadata=_service_metadata(response),
+                worker_liveness=(
+                    liveness if isinstance(
+                        liveness := response.get("worker_liveness"), dict
+                    ) else None
+                ),
             )
         except IPCClientError as decode_error:
             raise DevlegateError(str(decode_error)) from decode_error
@@ -2451,6 +2457,11 @@ def _render_status_text(
                     else "operator verification required"
                 )
             )
+    liveness = execution.get("worker_liveness")
+    if isinstance(liveness, dict):
+        age = liveness.get("idle_seconds")
+        suffix = f" ({age}s without output)" if isinstance(age, (int, float)) else ""
+        lines.append(f"Worker output: {liveness['state']}{suffix}")
     plan = snapshot.plan
     lifecycle = service_metadata.get("lifecycle") if service_metadata else None
     intent = lifecycle.get("intent") if isinstance(lifecycle, dict) else None
@@ -3710,6 +3721,9 @@ def _main() -> int:
             }
             if view.live_execution is not None:
                 payload["live_execution"] = view.live_execution
+            if view.worker_liveness is not None:
+                execution["worker_liveness"] = view.worker_liveness
+                payload["execution"]["worker_liveness"] = view.worker_liveness
             emit(
                 payload,
                 args.output_format,

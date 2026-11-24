@@ -2,6 +2,7 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -281,6 +282,73 @@ class LiveService:
         except subprocess.TimeoutExpired as error:
             raise AssertionError("service did not die after SIGKILL") from error
         self._collect_output()
+
+    def retire_tagged_processes(self, name: str, value: str) -> None:
+        """Stop this service and prove its uniquely tagged test processes exited.
+
+        Detached workers and monitors inherit the test's environment tag at
+        launch, even if the owner dies before publishing an identity or after
+        clearing it. Use pidfds so neither signaling nor exit checks rely on a
+        potentially recycled PID.
+        """
+        try:
+            self.kill()  # Close admission before draining detached launches.
+        finally:
+            self._drain_tagged_processes(os.fsencode(f"{name}={value}"))
+
+    @staticmethod
+    def _drain_tagged_processes(tag: bytes) -> None:
+        handles: dict[int, int] = {}
+        sent: dict[int, int] = {}
+        try:
+            start = time.monotonic()
+            empty_scans = 0
+            while True:
+                poll = select.poll()
+                for fd in handles.values():
+                    poll.register(fd, select.POLLIN)
+                exited = {fd for fd, _ in poll.poll(0)}
+                for pid, fd in list(handles.items()):
+                    if fd in exited:
+                        os.close(handles.pop(pid))
+                        sent.pop(pid, None)
+                for proc in Path("/proc").iterdir():
+                    if not proc.name.isdecimal() or int(proc.name) in handles:
+                        continue
+                    try:
+                        if tag not in (proc / "environ").read_bytes().split(b"\0"):
+                            continue
+                        fd = os.pidfd_open(int(proc.name))
+                    except (FileNotFoundError, ProcessLookupError, PermissionError):
+                        continue
+                    try:
+                        if tag in (proc / "environ").read_bytes().split(b"\0"):
+                            handles[int(proc.name)] = fd
+                            continue
+                    except (FileNotFoundError, ProcessLookupError, PermissionError):
+                        pass
+                    os.close(fd)
+                # Allow the provider monitor to reap its children and exit on
+                # its own. Escalate if any tagged process refuses to retire.
+                elapsed = time.monotonic() - start
+                sig = signal.SIGKILL if elapsed >= 2 else signal.SIGTERM
+                for pid, fd in handles.items():
+                    if sent.get(pid) != sig:
+                        try:
+                            signal.pidfd_send_signal(fd, sig)
+                        except ProcessLookupError:
+                            pass
+                        sent[pid] = sig
+                empty_scans = 0 if handles else empty_scans + 1
+                if empty_scans == 2:
+                    return
+                assert elapsed < 5, (
+                    f"test processes survived teardown: {sorted(handles)}"
+                )
+                time.sleep(0.02)
+        finally:
+            for fd in handles.values():
+                os.close(fd)
 
     def restart(self, timeout: float = 10) -> "LiveService":
         self.kill(timeout=timeout)

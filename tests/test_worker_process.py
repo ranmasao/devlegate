@@ -20,6 +20,57 @@ from devlegate.execution_containment import (
 from devlegate.worker_supervisor import _run_opencode
 
 
+def test_activity_observes_partial_stdout_and_stderr_before_worker_exits(tmp_path):
+    release = tmp_path / "release"
+    script = (
+        "import os, pathlib, sys, time; "
+        "os.write(1, b'{partial'); os.write(2, b'error \\xc3'); "
+        "p=pathlib.Path(sys.argv[1]); "
+        "exec('while not p.exists():\\n time.sleep(0.01)'); "
+        "os.write(1, b'}\\n'); os.write(2, b'\\xa9')"
+    )
+    observed = []
+    rendered = []
+    ready = threading.Event()
+
+    def activity(stream, chunk):
+        observed.append((stream, chunk))
+        if {name for name, _ in observed} == {"stdout", "stderr"}:
+            ready.set()
+
+    thread = threading.Thread(
+        target=lambda: _run_opencode(
+            [sys.executable, "-c", script, str(release)], "prompt",
+            show_worker_output=False, activity_handler=activity,
+            rendered_output_handler=lambda stream, text: rendered.append((stream, text)),
+        )
+    )
+    thread.start()
+    try:
+        assert ready.wait(5)
+        assert thread.is_alive()
+        assert ("stdout", b"{partial") in observed
+        assert ("stderr", b"error \xc3") in observed
+    finally:
+        release.touch()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert "".join(text for stream, text in rendered if stream == "stderr") == "error é"
+
+
+def test_activity_callback_failure_is_reported_and_pipes_are_drained():
+    def fail(_stream, _chunk):
+        raise RuntimeError("observer unavailable")
+
+    result = _run_opencode(
+        [sys.executable, "-c", "import os; os.write(1, b'{}\\n'); os.write(2, b'x' * 200000)"],
+        "prompt",
+        show_worker_output=False,
+        activity_handler=fail,
+    )
+    assert result.transport_error == "worker activity observation failed: observer unavailable"
+
+
 @pytest.mark.parametrize("kind", ["operator_abort", "ticket_reset"])
 @pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 def test_worker_process_group_isolated_and_interrupts_descendant(tmp_path, kind):

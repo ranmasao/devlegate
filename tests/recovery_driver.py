@@ -50,6 +50,10 @@ def main() -> int:
             crash()
         if point is not None and point == fields.get("execution_stage"):
             crash()
+        if point == "stall_classified" and fields.get(
+            "execution_interruption_kind"
+        ) == "worker_stalled":
+            crash()
 
     engine._save_state = save
 
