@@ -182,6 +182,20 @@ def _log_exists(path: Path) -> bool:
     return True
 
 
+def observe_execution_log(state_dir: Path, state_key: str, execution_id: str) -> dict:
+    """Observe the canonical local log for an already resolved execution."""
+    path = None
+    try:
+        path = execution_log_path(state_dir, state_key, execution_id)
+        if path.resolve() != path:
+            raise LogReaderError("canonical execution log path contains a symlink")
+        status = "present" if _log_exists(path) else "missing"
+    except (OperationalLogError, LogReaderError, OSError, RuntimeError) as error:
+        return {"path": str(path) if path is not None else None,
+                "status": "unavailable", "reason": str(error)}
+    return {"path": str(path), "status": status}
+
+
 class _LogCursor:
     """Read a log tail and continue from the exact byte position it used."""
 

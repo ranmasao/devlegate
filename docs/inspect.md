@@ -14,8 +14,9 @@ The object type selects a versioned schema. Normal `--json` and `--yaml` output
 conventions apply. All four commands use read-only IPC to the existing
 service owner. An unavailable or busy owner is an explicit error; inspection
 does not start a service, launch a worker, or refresh the published status view.
-IPC `inspect` accepts exactly `object_type` and `object_id`; service uses a null
-ID. Inspection is never mutation permission, a reset authorization, or a cleanup
+IPC `inspect` requires `object_type` and `object_id`; service uses a null ID.
+Execution inspection supports the optional boolean `include_prompt`.
+Inspection is never mutation permission, a reset authorization, or a cleanup
 request. Every successful result has `informational: true` and
 `mutation_authorized: false`.
 
@@ -55,6 +56,34 @@ publication chronology, independently of `independent_generation`. A missing
 ResourceBinding does not hide the immutable checkpoint or adopt a historical
 resource. `current_local` is proved only by independent read-only local identity
 checks. This view does not contact the remote or claim remote continuity.
+
+`local_log` reports the canonical execution log path and whether the log is
+`present`, `missing`, or `unavailable` locally. Use `devlegate logs execution
+"$EXECUTION_ID"` to read it. Inspection does not read the log contents.
+
+`worker_prompt` reports local journal availability and, when validated, the
+prompt SHA-256, directive, delivery marker, and a summary of component and
+provenance evidence. The default output omits prompt text and private component
+source details. To request the exact retained text:
+
+```sh
+devlegate inspect execution "$EXECUTION_ID" --prompt --json
+```
+
+The opt-in is execution-only. JSON and YAML preserve the saved UTF-8 text in
+`observation.worker_prompt.text`; human output escapes terminal controls. Treat
+opt-in output as private. The owner checks identity, admission and applicable
+review bindings, SHA-256, and any saved component manifest. Older journals
+without a project key require independent local generation evidence; an older
+journal can also lack a component manifest. Missing, unsafe, unproven or oversized
+evidence is diagnosed without substituting or truncating text. If the prompt and
+the committed view together exceed the IPC limit, the view reports the refusal
+alongside the prompt metadata.
+
+`constructed` means the journal does not record successful stdin delivery;
+`sent` means the local worker adapter recorded a successful stdin write. Neither
+proves provider receipt or the full context used by the model. The journal and
+log are local diagnostics, separate from committed execution evidence.
 
 ## Workspace
 

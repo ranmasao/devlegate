@@ -33,12 +33,24 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
 )
 from devlegate.git import resolve_ref_commit
+from devlegate.log_reader import observe_execution_log
+from devlegate.project_context import load_worker_project_context
+from devlegate.prompt_journal import (
+    PromptJournalError,
+    read_prompt_journal,
+    validate_component_manifest,
+)
 from devlegate.resource_binding import ResourceBinding
+from devlegate.review_provenance import (
+    resolve_amended_rework_review,
+    resolve_rework_review,
+)
 from devlegate.tickets import (
     _validate_cycles,
     is_canonical_ticket_name,
     parse_ticket_text,
 )
+from devlegate.worker_prompt import project_prompt_component, review_prompt_component
 
 ObjectType = Literal["ticket", "execution", "workspace", "service"]
 _FAILURES = (
@@ -74,6 +86,8 @@ class ExecutionObservation(TypedDict):
     latest_execution: str
     independent_generation: dict
     control_head: str
+    local_log: dict
+    worker_prompt: dict
 
 
 class ServiceObservation(TypedDict):
@@ -81,9 +95,15 @@ class ServiceObservation(TypedDict):
     diagnostic_snapshot: dict | None
 
 
-def validate_identity(object_type: str, object_id: str | None) -> None:
+def validate_identity(
+    object_type: str, object_id: str | None, *, include_prompt: bool = False,
+) -> None:
     if object_type not in ("ticket", "execution", "workspace", "service"):
         raise EvidenceError("unsupported inspection object type")
+    if type(include_prompt) is not bool or (
+        include_prompt and object_type != "execution"
+    ):
+        raise EvidenceError("inspection prompt opt-in is boolean and execution-only")
     if object_type == "service":
         if object_id is not None:
             raise EvidenceError("service inspection does not accept an object ID")
@@ -172,8 +192,134 @@ def _ticket(owner, head: str, object_id: str) -> tuple[TicketObservation, list[s
     }, blockers
 
 
+def _prompt_review(control, report, workflow, value, sections) -> str:
+    previous = value.get("reviewed_execution_id")
+    fields = (previous, value.get("reviewed_checkpoint"), value.get("review_path"),
+              value.get("review_publication"), value.get("review_sha256"))
+    invalid = PromptJournalError("Saved prompt review binding is missing or unproven.")
+    directive = value["directive"]
+    review_section = sections.get("review") if sections is not None else None
+    if all(field is None for field in fields):
+        if directive == "rework" or review_section is not None:
+            raise invalid
+        return "none recorded"
+    if (directive == "fresh" or (sections is not None and review_section is None)
+            or not isinstance(previous, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", previous)
+            or previous == report.execution_id):
+        raise invalid
+    admission = report.control_head
+    path = f"executions/{report.ticket_id}/{previous}.json"
+    try:
+        oid = _tree(control, admission, path).get(path)
+        if oid is None:
+            raise invalid
+        prior = ExecutionReport.from_dict(json.loads(_blob(control, oid)))
+        publication = _history(control, admission, path, oid)
+        if (prior.ticket_id != report.ticket_id or prior.execution_id != previous
+                or prior.workspace_head != fields[1] or not lifecycle_commit_is_exact(
+                    control, publication, prior, todo_path=workflow["todo"],
+                    review_path=workflow["review"], runner=observe_git,
+                )):
+            raise invalid
+    except _FAILURES as error:
+        raise invalid from error
+    for historical, resolver in ((False, resolve_rework_review),
+                                 (True, resolve_amended_rework_review)):
+        try:
+            binding = resolver(
+                control, admission, publication, prior, todo_path=workflow["todo"],
+                review_path=workflow["review"], backlog_path=workflow["backlog"],
+                runner=observe_git,
+            )
+        except _FAILURES:
+            continue
+        if fields[2:] != (binding.path, binding.publication, binding.sha256):
+            continue
+        if review_section is not None:
+            title, body = review_prompt_component(
+                binding.content, f"{binding.path} (sha256:{binding.sha256})",
+                historical,
+            )
+            if review_section != f"## {title}\n{body}".encode():
+                continue
+        return "historical" if historical else "verified"
+    raise invalid
+
+
+def _prompt_project(repo, value, sections) -> str:
+    # The manifest's source details are validated privately, never returned.
+    project = next(component for component in value["components"]
+                   if component["kind"] == "project")["source"]
+    if project is None and "project" not in sections:
+        return "not recorded"
+    invalid = PromptJournalError("Saved project component provenance is unproven.")
+    if not isinstance(project, dict):
+        raise invalid
+    try:
+        body, expected = project_prompt_component(
+            load_worker_project_context(repo, project.get("commit")),
+        )
+    except _FAILURES as error:
+        raise invalid from error
+    expected_section = (
+        f"## Project Worker Instructions\n{body}".encode() if body else None
+    )
+    if project != expected or sections.get("project") != expected_section:
+        raise invalid
+    return "pinned"
+
+
+def _observe_prompt(owner, report, workflow, *, proved, bound, include_prompt) -> dict:
+    try:
+        value, prompt = read_prompt_journal(owner.state_dir, report.execution_id)
+    except FileNotFoundError:
+        return {"status": "missing"}
+    except OSError:
+        return {"status": "unavailable",
+                "reason": "Cannot safely read the local prompt journal."}
+    except PromptJournalError as error:
+        return {"status": "unavailable", "reason": str(error)}
+    try:
+        if (value.get("execution_id") != report.execution_id
+                or value.get("ticket_id") != report.ticket_id):
+            raise PromptJournalError("Prompt journal execution or ticket mismatch.")
+        if ("project_key" in value and value["project_key"] != owner._state_key
+                or "project_key" not in value and not bound):
+            raise PromptJournalError("Saved prompt project is foreign or unproven.")
+        if not proved or value.get("admitted_control_head") != report.control_head:
+            raise PromptJournalError("Saved prompt admission does not match control.")
+        if (owner._state.get("execution_id") == report.execution_id and any(
+            owner._state.get(state_key) not in (None, value[key])
+            for state_key, key in (("worker_prompt_sha256", "prompt_sha256"),
+                                   ("worker_prompt_directive", "directive"))
+        )):
+            raise PromptJournalError("Prompt differs from owner's digest or directive.")
+        sections = validate_component_manifest(value, prompt)
+        project_source = None
+        if sections is not None:
+            project_source = _prompt_project(owner.repo, value, sections)
+        review_binding = _prompt_review(
+            owner.control_worktree, report, workflow, value, sections,
+        )
+    except PromptJournalError as error:
+        return {"status": "unavailable", "reason": str(error)}
+    result = {
+        "status": "present", "sha256": value["prompt_sha256"],
+        "directive": value["directive"], "delivery": value["delivery"],
+        "project_binding": "journal" if "project_key" in value else "local generation",
+        "review_binding": review_binding,
+        "manifest": "validated" if sections is not None else "absent",
+    }
+    if sections is not None:
+        result.update(components=list(sections), project_component=project_source)
+    if include_prompt:
+        result.update(text=value["prompt"], text_status="available")
+    return result
+
+
 def _execution(
-    owner, head: str, object_id: str,
+    owner, head: str, object_id: str, identity: dict, *, include_prompt: bool,
 ) -> tuple[ExecutionObservation, list[str]]:
     control = owner.control_worktree
     # Resolve the full ID by canonical artifact path, never by prefix, SHA,
@@ -265,7 +411,8 @@ def _execution(
         blockers.append("historical immutable review disappeared")
     generation: dict = {"state": "unproven", "generation": report.resource_generation,
                         "current_local": "unknown", "current_head": None,
-                        "checkpoint_matches_current": "unknown"}
+                         "checkpoint_matches_current": "unknown"}
+    bound_to_project = False
     try:
         manager = ExecutionWorkspaceManager(
             owner.repo, owner.execution_worktree_root, report.ticket_id,
@@ -286,6 +433,7 @@ def _execution(
         ):
             raise EvidenceError("generation ticket blob differs from admission")
         generation["state"] = "observed"
+        bound_to_project = intent["common"] == identity["common"]
         try:
             workspace = binding.require_local(clean=False, read_only=True)
             generation["current_local"] = "proved"
@@ -330,11 +478,21 @@ def _execution(
         "checkpoint": checkpoint,
         "review": review, "history": history, "latest_execution": latest,
         "independent_generation": generation, "control_head": head,
+        "local_log": observe_execution_log(
+            owner.state_dir, owner._state_key, object_id,
+        ),
+        "worker_prompt": _observe_prompt(
+            owner, report, workflow, proved=provenance == "proved",
+            bound=bound_to_project, include_prompt=include_prompt,
+        ),
     }, blockers
 
 
-def inspect_object(owner, object_type: ObjectType, object_id: str | None) -> dict:
-    validate_identity(object_type, object_id)
+def inspect_object(
+    owner, object_type: ObjectType, object_id: str | None, *,
+    include_prompt: bool = False,
+) -> dict:
+    validate_identity(object_type, object_id, include_prompt=include_prompt)
     owner._assert_repository_owner()
     if object_type == "workspace":
         assert object_id is not None
@@ -360,7 +518,9 @@ def inspect_object(owner, object_type: ObjectType, object_id: str | None) -> dic
         head, identity = _head(owner)
         observation, blockers = (
             _ticket(owner, head, object_id) if object_type == "ticket"
-            else _execution(owner, head, object_id)
+            else _execution(
+                owner, head, object_id, identity, include_prompt=include_prompt,
+            )
         )
         if _head(owner) != (head, identity):
             raise EvidenceError("canonical control changed during inspection")

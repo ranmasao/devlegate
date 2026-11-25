@@ -19,6 +19,7 @@ from pathlib import Path
 
 from devlegate import __version__
 from devlegate.ipc_protocol import (
+    MAX_PAYLOAD_BYTES,
     IPCProtocolError,
     IPCRequest,
     encode_error_response,
@@ -84,7 +85,10 @@ def dispatch_read_only(engine: object, request: IPCRequest) -> dict[str, object]
     if request.method == "inspect":
         from devlegate.inspection import validate_identity
 
-        if set(request.payload) != {"object_type", "object_id"}:
+        if set(request.payload) not in (
+            {"object_type", "object_id"},
+            {"object_type", "object_id", "include_prompt"},
+        ):
             raise IPCProtocolError("invalid_request", "invalid inspection fields")
         try:
             validate_identity(**request.payload)
@@ -612,6 +616,26 @@ class UnixIPCServer:
                         self.engine, request, lifecycle=self.lifecycle
                     )
                     response = encode_success_response(request.request_id, result)
+                    if (request.method == "inspect"
+                            and len(response) > MAX_PAYLOAD_BYTES):
+                        observation = result.get("observation", {})
+                        prompt = dict(observation.get("worker_prompt", {}))
+                        if "text" in prompt:
+                            del prompt["text"]
+                            prompt["text_status"] = "unavailable"
+                            prompt["text_reason"] = (
+                                "Exact prompt plus committed evidence exceeds the "
+                                "local IPC limit; omit --prompt for metadata only."
+                            )
+                            response = encode_success_response(request.request_id, {
+                                **result,
+                                "observation": {**observation, "worker_prompt": prompt},
+                            })
+                        if len(response) > MAX_PAYLOAD_BYTES:
+                            raise IPCProtocolError(
+                                "response_too_large",
+                                "Inspection exceeds the local IPC limit",
+                            )
                 except IPCProtocolError as error:
                     response = encode_error_response(
                         request.request_id if request is not None else "",
