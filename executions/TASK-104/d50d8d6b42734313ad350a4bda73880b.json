@@ -1,0 +1,30 @@
+{
+  "code_base_head": "c95ef89f0756cb0de8ffd55ed2e400c7d9127c6b",
+  "conclusion": "completed",
+  "control_head": "9a3ed2273487299843271429ec9f192d527f5e44",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-104",
+  "execution_id": "d50d8d6b42734313ad350a4bda73880b",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-104",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-104/d50d8d6b42734313ad350a4bda73880b.md",
+  "report_sha256": "79575d3493217e8ced78d288d8bf866f44d51d0eb417843f9d55cb3c66917b4d",
+  "resource_generation": "a19b8b29b8bab1aa89aa4ec7badc737327c4a7c700c2af35fca540fdd18212d2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-104",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "398 focused tests passed, including real owner IPC, Git admission and reconciliation, review binding, prompt journals, and log resolution. ./dev lint and git diff --check passed. Exact-checkpoint hosted CI is deferred to Devlegate after checkpoint publication, per the current review.",
+    "summary": "Execution inspection now checks retained prompt assignment and project components against the committed ticket and the execution\u2019s independently recorded product admission. It withholds unproven prompt text while preserving the committed report, and documents the limits of pre-manifest journals."
+  },
+  "workspace_head": "2e84d4bd6d3a5c7a037f48a0261c1f388739898e"
+}
