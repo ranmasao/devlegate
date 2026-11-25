@@ -92,6 +92,18 @@ TASK-156 already fixed the previous interactive-TTY silent `exit 1` and added fa
 - **Related:** TASK-161 inspection domain is complete. UX-003 concerns help/discovery; UX-004 concerns the default human-readable projection. May be grouped into one bounded CLI-presentation ticket at triage but neither authorizes an immediate runtime change.
 
 
+### UX-005 — Healthy active worker presented as blocked startup reconciliation
+
+- **Status:** Confirmed operator observation on self-hosted Arch, 2026-11-25, runtime 0.5.8.dev0, product 2e84d4b, control 03e4df1.
+- **Action:** Run `devlegate status` during ordinary TASK-193 execution. The active execution row says `running / worker-running`; worker output was recently active (52.9s without output). Yet the next line says:
+  ```text
+  While the current execution continues, the observed scheduler decision: blocked — persisted worker ownership is matching-live; startup reconciliation is blocked
+  ```
+- **Verified boundary:** `runtime.py` derives a hypothetical persisted-state recovery plan from agent_running/worker-running and matching-live ownership; `cli.py` prefixes the same blocked reason during an active execution. Current-service ownership is separately observed. The display mixes normal ongoing execution and startup recovery semantics; the example does not establish an actual recovery blocker.
+- **Desired:** Current-state-first human status that distinguishes an ordinarily owned active worker (serial scheduling waits normally) from genuinely blocked recovery or operator action required. Do not merely rename every blocked plan to running or hide actual faults. Use existing owner evidence rather than new checks. Keep real blockers prominent. Review redundant service running/version labels, State vs Stage, worker-output age phrasing, and clarify that canonical Todo includes the active ticket. Prefer concise normal status and detailed inspection on demand; exact layout deferred to triage.
+- **Regression:** Real status CLI/owner IPC during proven current-service active execution must not imply startup reconciliation is blocked; after restart with surviving/indeterminate persisted ownership and no proven current ownership, report actual recovery uncertainty/blocker. Also cover idle genuine workflow blocker, stop/restart and finalization. Preserve structured evidence and all mutation/admission safeguards; distinguish projections without changing scheduling policy.
+- **Scope:** UX register only; semantic projection correction may require a bounded runtime change at implementation time, not just text formatting. Do not extend active TASK-193.
+
 ## Acceptance criteria
 
 - Each UX observation is independently reproducible or explicitly marked as unconfirmed; command/output evidence and anticipated safe operator path are preserved.
