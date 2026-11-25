@@ -1,0 +1,34 @@
+{
+  "code_base_head": "c95ef89f0756cb0de8ffd55ed2e400c7d9127c6b",
+  "conclusion": "blocked",
+  "control_head": "59a6999c51cbd0bd5005028737ea41cf1a444e03",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-104",
+  "execution_id": "85cfbcabc2794b02bc6c2916e9edfa52",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-104",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate checkpoint these edits and run the required authoritative hosted CI at that exact checkpoint?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-104/85cfbcabc2794b02bc6c2916e9edfa52.md",
+  "report_sha256": "0034f3982fb20d8d0bb4cf7a929e67ceb682e1bd90d69b242112a2546cb71013",
+  "resource_generation": "0b47ab8856e04deb321e5f4db752c1c5617e633e2048841f53f727a18ea3355c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-104",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate checkpoint these edits and run the required authoritative hosted CI at that exact checkpoint?"
+    ],
+    "remaining": [],
+    "report": "All 373 focused tests, ./dev lint, and git diff --check passed. No durable task checkpoint exists yet, and checkpointing and hosted CI are outside worker authority.",
+    "summary": "Extended exact execution inspection with local log status and validated prompt-journal metadata. Added execution-only `--prompt` for exact retained text through owner IPC, with lossless JSON/YAML output and escaped terminal rendering."
+  },
+  "workspace_head": "44b50f861098c681f4eb676fdbe4001e73c6e4a7"
+}
