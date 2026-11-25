@@ -1,0 +1,30 @@
+{
+  "code_base_head": "3b9b6d6fe7b1d8514f8b06cb732b534c2f15397b",
+  "conclusion": "completed",
+  "control_head": "ecdc8ce153303aa0417e3d39740b0f2db2231354",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-194",
+  "execution_id": "d5c28e15db764cdd876b5630b8c6796f",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-194",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-194/d5c28e15db764cdd876b5630b8c6796f.md",
+  "report_sha256": "dbaba460b638d2875c2a995806645fb954b5f00ae47edee5376fa6d76e61e898",
+  "resource_generation": "612e03f5436c99199be291d3d361dce40579a8b4395e443fed94f03b5764f2ba",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-194",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "102 focused tests passed, including real service CLI/IPC, owner and worker lifecycle, workspace cleanup and reset effects. ./dev lint and git diff --check passed. Exact-checkpoint hosted CI remains the independent integration gate.",
+    "summary": "The service owner now handles bounded read-only inspection during scheduled and retry worker supervision without using the mutation slot. Inspection preserves exact committed evidence and saved-prompt verification, while live workspace views expose ownership blockers and leave unproved data unknown."
+  },
+  "workspace_head": "5d856c71b0864ab1bde890b931036dd08530bdac"
+}
