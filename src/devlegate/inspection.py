@@ -18,6 +18,8 @@ from devlegate.abandonment_evidence import (
     OwnerGitEvidence,
     _review_disposition,
 )
+from devlegate.change_explorer import ObservationError
+from devlegate.change_explorer import _git as bounded_git
 from devlegate.clean_preview import (
     _blob,
     _control_identity,
@@ -33,6 +35,7 @@ from devlegate.execution_workspace import (
     ExecutionWorkspaceManager,
 )
 from devlegate.git import resolve_ref_commit
+from devlegate.ipc_protocol import MAX_PAYLOAD_BYTES
 from devlegate.log_reader import observe_execution_log
 from devlegate.project_context import load_worker_project_context
 from devlegate.prompt_journal import (
@@ -50,7 +53,11 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     parse_ticket_text,
 )
-from devlegate.worker_prompt import project_prompt_component, review_prompt_component
+from devlegate.worker_prompt import (
+    assignment_prompt_component,
+    project_prompt_component,
+    review_prompt_component,
+)
 
 ObjectType = Literal["ticket", "execution", "workspace", "service"]
 _FAILURES = (
@@ -247,18 +254,31 @@ def _prompt_review(control, report, workflow, value, sections) -> str:
     raise invalid
 
 
-def _prompt_project(repo, value, sections) -> str:
+def _prompt_assignment(control, path, oid, section) -> None:
+    try:
+        raw = bounded_git(control, "cat-file", "blob", oid, limit=MAX_PAYLOAD_BYTES)
+        # Match the universal newlines used by the runtime's Path.read_text().
+        text = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        ticket = parse_ticket_text(control / path, "todo", text)
+        body = assignment_prompt_component(ticket.body)
+    except (*_FAILURES, ObservationError) as error:
+        raise PromptJournalError(
+            "Cannot read the admitted ticket for prompt validation."
+        ) from error
+    if section != f"## Assigned Work\n{body}".encode():
+        raise PromptJournalError("Saved assignment differs from the admitted ticket.")
+
+
+def _prompt_project(repo, admitted_base, value, sections) -> str:
     # The manifest's source details are validated privately, never returned.
     project = next(component for component in value["components"]
                    if component["kind"] == "project")["source"]
-    if project is None and "project" not in sections:
-        return "not recorded"
     invalid = PromptJournalError("Saved project component provenance is unproven.")
-    if not isinstance(project, dict):
+    if not isinstance(project, dict) or project.get("commit") != admitted_base:
         raise invalid
     try:
         body, expected = project_prompt_component(
-            load_worker_project_context(repo, project.get("commit")),
+            load_worker_project_context(repo, admitted_base),
         )
     except _FAILURES as error:
         raise invalid from error
@@ -270,7 +290,9 @@ def _prompt_project(repo, value, sections) -> str:
     return "pinned"
 
 
-def _observe_prompt(owner, report, workflow, *, proved, bound, include_prompt) -> dict:
+def _observe_prompt(
+    owner, report, workflow, *, proved, admission, include_prompt,
+) -> dict:
     try:
         value, prompt = read_prompt_journal(owner.state_dir, report.execution_id)
     except FileNotFoundError:
@@ -285,20 +307,32 @@ def _observe_prompt(owner, report, workflow, *, proved, bound, include_prompt) -
                 or value.get("ticket_id") != report.ticket_id):
             raise PromptJournalError("Prompt journal execution or ticket mismatch.")
         if ("project_key" in value and value["project_key"] != owner._state_key
-                or "project_key" not in value and not bound):
+                or "project_key" not in value and admission is None):
             raise PromptJournalError("Saved prompt project is foreign or unproven.")
         if not proved or value.get("admitted_control_head") != report.control_head:
             raise PromptJournalError("Saved prompt admission does not match control.")
-        if (owner._state.get("execution_id") == report.execution_id and any(
-            owner._state.get(state_key) not in (None, value[key])
+        state = owner._state
+        if state.get("execution_id") != report.execution_id:
+            state = {}
+        if any(
+            state.get(state_key) not in (None, value[key])
             for state_key, key in (("worker_prompt_sha256", "prompt_sha256"),
-                                   ("worker_prompt_directive", "directive"))
-        )):
+                                    ("worker_prompt_directive", "directive"))
+        ):
             raise PromptJournalError("Prompt differs from owner's digest or directive.")
         sections = validate_component_manifest(value, prompt)
         project_source = None
         if sections is not None:
-            project_source = _prompt_project(owner.repo, value, sections)
+            if admission is None:
+                raise PromptJournalError("Independent prompt admission is unproven.")
+            admitted_base, ticket_blob = admission
+            if state.get("execution_admitted_base_head") not in (None, admitted_base):
+                raise PromptJournalError("Prompt product admission is unproven.")
+            _prompt_assignment(
+                owner.control_worktree, f"{workflow['todo']}/{report.ticket_id}.md",
+                ticket_blob, sections["assignment"],
+            )
+            project_source = _prompt_project(owner.repo, admitted_base, value, sections)
         review_binding = _prompt_review(
             owner.control_worktree, report, workflow, value, sections,
         )
@@ -314,7 +348,13 @@ def _observe_prompt(owner, report, workflow, *, proved, bound, include_prompt) -
     if sections is not None:
         result.update(components=list(sections), project_component=project_source)
     if include_prompt:
-        result.update(text=value["prompt"], text_status="available")
+        digest_matches = state.get("worker_prompt_sha256") == value["prompt_sha256"]
+        if sections is None and not digest_matches:
+            result.update(text_status="unavailable", text_reason=(
+                "Saved prompt has no component manifest or matching owner digest."
+            ))
+        else:
+            result.update(text=value["prompt"], text_status="available")
     return result
 
 
@@ -412,7 +452,7 @@ def _execution(
     generation: dict = {"state": "unproven", "generation": report.resource_generation,
                         "current_local": "unknown", "current_head": None,
                          "checkpoint_matches_current": "unknown"}
-    bound_to_project = False
+    prompt_admission = None
     try:
         manager = ExecutionWorkspaceManager(
             owner.repo, owner.execution_worktree_root, report.ticket_id,
@@ -422,8 +462,8 @@ def _execution(
         intent = binding.intent
         if (intent["generation"] != report.resource_generation
             or intent["control"] != report.control_head
-            or intent["base"] != report.code_base_head
             or intent["path"] != report.execution_path
+            or intent["ref"] != f"refs/heads/{report.execution_branch}"
             or intent["remote"] != owner.remote_name
             or manager.branch != report.execution_branch):
             raise EvidenceError("report and independent generation disagree")
@@ -432,8 +472,14 @@ def _execution(
             intent["ticket_blob"]
         ):
             raise EvidenceError("generation ticket blob differs from admission")
+        # The intent belongs to this attempt (including a new resume after a
+        # reconciliation). Use its admission, not the predecessor's base,
+        # a later effective workspace base, or the journal's chosen commit.
+        if intent["common"] == identity["common"]:
+            prompt_admission = intent["base"], intent["ticket_blob"]
+        if intent["base"] != report.code_base_head:
+            raise EvidenceError("report and independent generation disagree")
         generation["state"] = "observed"
-        bound_to_project = intent["common"] == identity["common"]
         try:
             workspace = binding.require_local(clean=False, read_only=True)
             generation["current_local"] = "proved"
@@ -483,7 +529,7 @@ def _execution(
         ),
         "worker_prompt": _observe_prompt(
             owner, report, workflow, proved=provenance == "proved",
-            bound=bound_to_project, include_prompt=include_prompt,
+            admission=prompt_admission, include_prompt=include_prompt,
         ),
     }, blockers
 

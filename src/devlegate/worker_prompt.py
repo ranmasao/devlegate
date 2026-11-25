@@ -74,6 +74,13 @@ def _fenced_content(value: str) -> str:
     return f"{fence}text\n{value}\n{fence}"
 
 
+def assignment_prompt_component(assignment: str) -> str:
+    body = _content(assignment)
+    if not body:
+        raise ValueError("assigned work must not be empty")
+    return _fenced_content(body)
+
+
 def project_prompt_component(
     project: WorkerProjectContext | None,
 ) -> tuple[str | None, dict | None]:
@@ -114,9 +121,7 @@ def render_worker_prompt(prompt_input: WorkerPromptInput) -> RenderedWorkerPromp
         raise TypeError("prompt input must be WorkerPromptInput")
     if not isinstance(prompt_input.directive, WorkDirective):
         raise ValueError("unknown work directive")
-    assignment = _content(prompt_input.assignment)
-    if not assignment:
-        raise ValueError("assigned work must not be empty")
+    assignment = assignment_prompt_component(prompt_input.assignment)
 
     directive_text = _DIRECTIVES[prompt_input.directive]
     if (
@@ -158,7 +163,7 @@ def render_worker_prompt(prompt_input: WorkerPromptInput) -> RenderedWorkerPromp
         "template": f"{prompt_input.directive.value}.txt",
         "resumed_after_stall": directive_text != _DIRECTIVES[prompt_input.directive],
     })
-    add("assignment", "Assigned Work", _fenced_content(assignment), "admitted ticket")
+    add("assignment", "Assigned Work", assignment, "admitted ticket")
     if prompt_input.review_feedback is not None:
         feedback = prompt_input.review_feedback
         if prompt_input.directive is WorkDirective.FRESH:

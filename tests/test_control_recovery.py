@@ -1531,6 +1531,8 @@ def test_reconciliation_fails_closed_on_bad_evidence(
 
 
 def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
+    from devlegate.inspection import inspect_object
+
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -1606,6 +1608,13 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
     assert run_test_iteration(resumed) == 0
     assert resumed_ids[0] != old_id
     assert "Continue the existing implementation" in prompts[0]
+    observation = inspect_object(
+        resumed, "execution", resumed_ids[0], include_prompt=True,
+    )["observation"]
+    assert observation["checkpoint"]["base_head"] == reconciliation["observed_product"]
+    assert observation["worker_prompt"]["project_component"] == "pinned"
+    assert observation["worker_prompt"]["directive"] == "resume"
+    assert observation["worker_prompt"]["text"] == prompts[0]
     assert (execution / "implementation.txt").read_text() == "worker work\n"
     assert (
         next((state / "worktrees").glob("*/control")) / "kanban/review/T-1.md"

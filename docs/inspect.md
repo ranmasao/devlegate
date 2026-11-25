@@ -73,12 +73,15 @@ devlegate inspect execution "$EXECUTION_ID" --prompt --json
 The opt-in is execution-only. JSON and YAML preserve the saved UTF-8 text in
 `observation.worker_prompt.text`; human output escapes terminal controls. Treat
 opt-in output as private. The owner checks identity, admission and applicable
-review bindings, SHA-256, and any saved component manifest. Older journals
-without a project key require independent local generation evidence; an older
-journal can also lack a component manifest. Missing, unsafe, unproven or oversized
-evidence is diagnosed without substituting or truncating text. If the prompt and
-the committed view together exceed the IPC limit, the view reports the refusal
-alongside the prompt metadata.
+review bindings, SHA-256, and any saved component manifest. The saved assignment
+must match the admitted control ticket, and the project component must match the
+execution's independently recorded product admission, even when that admission
+has no worker documents. Older journals without a project key require independent
+local generation evidence. A journal without a component manifest can show
+metadata, but exact text requires a matching owner-recorded execution digest.
+Missing, unsafe, unproven or oversized evidence is diagnosed without substituting
+or truncating text. If the prompt and the committed view together exceed the IPC
+limit, the view reports the refusal alongside the prompt metadata.
 
 `constructed` means the journal does not record successful stdin delivery;
 `sent` means the local worker adapter recorded a successful stdin write. Neither

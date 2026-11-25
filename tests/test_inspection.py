@@ -10,7 +10,8 @@ import threading
 import unicodedata
 
 import pytest
-from _control_support import git
+from _control_support import Devlegate, control_fixture, git, invoke
+from runtime_helpers import run_test_iteration
 from test_clean_preview import owner as preview_owner  # noqa: F401
 from test_clean_preview import snapshot
 
@@ -24,15 +25,16 @@ from devlegate.inspection import (
 from devlegate.ipc_protocol import IPCProtocolError, IPCRequest
 from devlegate.ipc_server import dispatch_request
 from devlegate.operational_log import execution_log_path
+from devlegate.project_context import load_worker_project_context
+from devlegate.prompt_journal import validate_component_manifest
 from devlegate.runtime import OperatorCommand
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
-    mark_worker_prompt_sent,
     render_worker_prompt,
     worker_prompt_artifact_path,
     worker_prompt_sha256,
-    write_worker_prompt_artifact,
 )
 
 
@@ -154,7 +156,6 @@ def test_prompt_journal_evidence_gaps(owner, journal, change, status, reason):
 
     identifier, path = journal
     payload = json.loads(path.read_text())
-    exact = payload["prompt"]
     path.unlink()
     if change == "missing":
         pass
@@ -201,9 +202,9 @@ def test_prompt_journal_evidence_gaps(owner, journal, change, status, reason):
     if change == "legacy":
         assert prompt["manifest"] == "absent"
         assert prompt["project_binding"] == "local generation"
-        assert prompt["text"] == exact and prompt["delivery"] == "constructed"
-    else:
-        assert "text" not in prompt
+        assert prompt["text_status"] == "unavailable"
+        assert prompt["delivery"] == "constructed"
+    assert "text" not in prompt
 
 
 @pytest.mark.parametrize("kind", ["ticket", "workspace", "service"])
@@ -584,7 +585,7 @@ def test_service_render_incomplete_fields():
     assert "Execution stage: unavailable" in text
 
 
-def test_latest_report_is_not_current_independent_generation(owner):
+def _publish_newer_unbound_report(owner, *, amend=False):
     from dataclasses import replace
 
     from devlegate.execution_result import ExecutionReportStore
@@ -595,6 +596,9 @@ def test_latest_report_is_not_current_independent_generation(owner):
     review = control / owner.review_path / "T-1.md"
     todo = control / owner.todo_path / "T-1.md"
     review.rename(todo)
+    if amend:
+        todo.write_text(todo.read_text().removesuffix("work\n")
+                        + "PRIVATE DIFFERENT ASSIGNMENT\n")
     git(control, "add", ".")
     git(control, "commit", "-m", "retry admission fixture")
     second = replace(
@@ -605,6 +609,11 @@ def test_latest_report_is_not_current_independent_generation(owner):
     todo.rename(review)
     git(control, "add", ".")
     git(control, "commit", "-m", "publish unbound retry fixture")
+    return first, second
+
+
+def test_latest_report_is_not_current_independent_generation(owner):
+    first, second = _publish_newer_unbound_report(owner)
     before = snapshot(owner.repo.parent)
     historical = inspect_object(owner, "execution", first.execution_id)["observation"]
     latest = inspect_object(owner, "execution", second.execution_id)["observation"]
@@ -620,6 +629,82 @@ def test_latest_report_is_not_current_independent_generation(owner):
     assert "Current local: proved" in text
     assert "not current local proof" in text
     assert snapshot(owner.repo.parent) == before
+
+
+@pytest.mark.parametrize("change", [
+    "matching", "assignment", "other-product", "omitted-source", "legacy", "no-intent",
+])
+def test_historical_prompt_checks_independent_admission(owner, journal, change):
+    identifier, path = journal
+    first, second = _publish_newer_unbound_report(owner, amend=True)
+    assert first.execution_id == identifier
+    owner._state["execution_id"] = second.execution_id
+    owner._state.pop("worker_prompt_sha256", None)
+    saved = json.loads(path.read_text())
+    original = saved["prompt"]
+
+    # Advance product independently. A valid new context is not the context of
+    # the historical execution, even though both commits belong to this project.
+    manifest = owner.repo / ".devlegate/project.md"
+    manifest.write_text(manifest.read_text().removesuffix("---\n")
+                        + '"worker":\n  - "README.md"\n---\n')
+    (owner.repo / "README.md").write_text("PRIVATE NEW PRODUCT CONTEXT\n")
+    git(owner.repo, "add", ".")
+    git(owner.repo, "commit", "-m", "new product worker context")
+    newer_base = git(owner.repo, "rev-parse", "HEAD").stdout.strip()
+
+    if change in {"assignment", "other-product", "omitted-source"}:
+        base = newer_base if change == "other-product" else first.code_base_head
+        context = (None if change == "omitted-source"
+                   else load_worker_project_context(owner.repo, base))
+        rendered = render_worker_prompt(WorkerPromptInput(
+            "PRIVATE DIFFERENT ASSIGNMENT\n" if change == "assignment" else "work\n",
+            WorkDirective.FRESH, project=context,
+        ))
+        saved.update(
+            prompt=rendered.text, prompt_sha256=worker_prompt_sha256(rendered.text),
+            components=list(rendered.components),
+        )
+        assert validate_component_manifest(saved, rendered.text.encode()) is not None
+        path.write_text(json.dumps(saved))
+    elif change == "legacy":
+        del saved["components"]
+        path.write_text(json.dumps(saved))
+    elif change == "no-intent":
+        intent = (owner.execution_worktree_root / "bindings"
+                  / first.resource_generation / "intent.json")
+        intent.unlink()
+
+    for include_prompt in (False, True):
+        observation = inspect_object(
+            owner, "execution", identifier, include_prompt=include_prompt,
+        )["observation"]
+        assert observation["report"] == first.as_dict()
+        assert observation["latest_execution"] == "historical"
+        assert observation["provenance_state"] == "proved"
+        prompt = observation["worker_prompt"]
+        assert "PRIVATE" not in json.dumps(prompt)
+        if change == "matching":
+            assert prompt["status"] == "present" and prompt["manifest"] == "validated"
+            assert prompt["project_component"] == "pinned"
+            assert prompt["delivery"] == "constructed"
+            # No worker route at admission.
+            assert "project" not in prompt["components"]
+            assert prompt.get("text") == (original if include_prompt else None)
+        elif change == "legacy":
+            assert prompt["status"] == "present" and prompt["manifest"] == "absent"
+            assert "components" not in prompt and "text" not in prompt
+            if include_prompt:
+                assert prompt["text_status"] == "unavailable"
+                assert "no component manifest" in prompt["text_reason"]
+        else:
+            assert prompt["status"] == "unavailable" and "text" not in prompt
+            assert {
+                "assignment": "admitted ticket",
+                "other-product": "component provenance",
+                "omitted-source": "component provenance",
+                "no-intent": "independent prompt admission",
+            }[change] in prompt["reason"].lower()
 
 
 @pytest.mark.parametrize("columns", [80, 120])
@@ -727,40 +812,66 @@ def test_execution_render_proved_review(owner):
 
 @pytest.mark.parametrize("output", ["--json", "--yaml", None, "oversized-response"])
 def test_execution_prompt_cli_over_real_owner_socket(
-    owner, journal, short_state_dir, monkeypatch, capsys, output,
+    tmp_path, short_state_dir, monkeypatch, capsys, output,
 ):
     import devlegate.cli as cli
     from devlegate._vendor import nanoyaml
     from devlegate.ipc_client import request
     from devlegate.ipc_protocol import MAX_PAYLOAD_BYTES
     from devlegate.ipc_server import UnixIPCServer
-    from devlegate.project_context import load_worker_project_context
 
-    identifier, path = journal
-    original = json.loads(path.read_text())
-    assignment = "JOURNAL-ONLY: café 界 🙂\nunsafe:\x1b[2J\x00\r\x85\u202e\n"
-    project_commit = original["components"][2]["source"]["commit"]
-    context = load_worker_project_context(owner.repo, project_commit)
+    repo, config, _ = control_fixture(tmp_path)
+    manifest = repo / ".devlegate/project.md"
+    manifest.write_text(manifest.read_text().removesuffix("---\n")
+                        + '"worker":\n  - "README.md"\n---\n')
+    git(repo, "add", ".")
+    git(repo, "commit", "-m", "worker context fixture")
+    git(repo, "push", "origin", "main")
+    project_commit = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+    control = owner.control_worktree
+    ticket = control / owner.todo_path / "T-1.md"
+    assignment = (
+        "ADMITTED ASSIGNMENT: café 界 🙂\r\nunsafe:\x1b[2J\x00\r\x85\u202e\n~~~\n"
+    )
+    if output == "oversized-response":
+        assignment += "x" * (MAX_PAYLOAD_BYTES - 8_192)
+    ticket.write_bytes(
+        ticket.read_bytes().removesuffix(b"work\n") + assignment.encode(),
+    )
+    git(control, "add", ".")
+    git(control, "commit", "-m", "admit exact assignment fixture")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    delivered = []
 
-    def save(assignment):
-        rendered = render_worker_prompt(WorkerPromptInput(
-            assignment, WorkDirective.FRESH, project=context,
-        ))
-        write_worker_prompt_artifact(
-            owner.state_dir, identifier, rendered, ticket_id="T-1",
-            directive=WorkDirective.FRESH, review_path=None, review_sha256=None,
-            admitted_control_head=original["admitted_control_head"],
-            project_key=owner._state_key,
+    def worker(workspace, prompt, *, prompt_delivered_handler, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("implementation\n")
+        delivered.append(prompt)
+        prompt_delivered_handler()
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "implemented", (), ()), None,
         )
-        mark_worker_prompt_sent(path)
-        return rendered.text
 
-    exact = save(assignment)
+    monkeypatch.setattr(owner._workers, "run", worker)
+    assert run_test_iteration(owner) == 0
+    exact, = delivered
+    setup_output = capsys.readouterr()
+    assert "worker prompt sent:" in setup_output.out
+    assert all("ADMITTED ASSIGNMENT" not in text
+               for text in (setup_output.out, setup_output.err))
+    identifier = owner._state["execution_id"]
     owner._state.pop("worker_prompt_sha256", None)
     if output == "oversized-response":
         # The journal remains readable, but the whole response will not fit.
-        exact = save("x" * (MAX_PAYLOAD_BYTES - path.stat().st_size + 25))
+        path = worker_prompt_artifact_path(owner.state_dir, identifier)
         assert path.stat().st_size <= MAX_PAYLOAD_BYTES
+        review = control / f"reviews/T-1/{identifier}.md"
+        review.parent.mkdir(parents=True, exist_ok=True)
+        review.write_text("review fixture\n" + "x" * 8_192)
+        git(control, "add", ".")
+        git(control, "commit", "-m", "large committed review observation fixture")
         assert (inspect_object(owner, "execution", identifier, include_prompt=True)
                 ["observation"]["worker_prompt"]["text"]) == exact
     log = execution_log_path(owner.state_dir, owner._state_key, identifier)
@@ -803,10 +914,10 @@ def test_execution_prompt_cli_over_real_owner_socket(
         prompt = observation["worker_prompt"]
         assert observation["id"] == identifier == observation["report"]["execution_id"]
         assert prompt["manifest"] == "validated"
-        assert "assignment" in prompt["components"]
+        assert {"assignment", "project"} <= set(prompt["components"])
         assert prompt["directive"] == "fresh" and prompt["delivery"] == "sent"
         assert prompt["sha256"] == worker_prompt_sha256(exact)
-        assert "text" not in prompt and "JOURNAL-ONLY" not in default
+        assert "text" not in prompt and "ADMITTED ASSIGNMENT" not in default
         assert project_commit not in json.dumps(prompt)
         fmt = "--json" if output == "oversized-response" else output
         explicit = cli_request(["--prompt", *([fmt] if fmt else [])], True)
@@ -824,7 +935,8 @@ def test_execution_prompt_cli_over_real_owner_socket(
                 assert observed["text"].encode() == exact.encode()
                 assert observed["delivery"] == "sent"
         else:
-            assert "JOURNAL-ONLY: café 界 🙂" in explicit and "\\u001b[2J" in explicit
+            assert "ADMITTED ASSIGNMENT: café 界 🙂" in explicit
+            assert "\\u001b[2J" in explicit
             assert not set(explicit).intersection("\x1b\x00\r\x85\u202e")
         assert snapshot(owner.repo.parent) == before
         assert owner._runtime_store.observe() == state
