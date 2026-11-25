@@ -430,23 +430,23 @@ def _science_binary(tmp_path):
     return tools / BUILDER.SCIENCE_ASSET
 
 
-# Independent protocol reference for Science 0.21.0 / PBS 20261110 / CPython
+# Independent protocol reference for Science 0.21.0 / PBS 20261124 / CPython
 # 3.12.16. These are literal release identities, not builder-generated metadata.
 # Size is the byte length of the SHA-256-verified release archive. A pin update
 # requires deliberate review of this reference as well as the production pins.
 PBS_REFERENCE = {
     "digest": {
         "fingerprint": (
-            "6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39"
+            "7e1adaea26c959d13aa1120be1ae62a1ea1bb52adcb382679fffe9217e22adff"
         ),
-        "size": 34709145,
+        "size": 34754163,
     },
     "file_type": "tar.gz",
     "name": (
-        "cpython-3.12.16+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+        "cpython-3.12.16+20261124-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
     ),
-    "rel_path": "download/20261110/"
-    "cpython-3.12.16+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "rel_path": "download/20261124/"
+    "cpython-3.12.16+20261124-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
     "target_triple": "x86_64-unknown-linux-gnu",
     "version": "3.12.16",
 }
@@ -463,11 +463,11 @@ def _assert_pinned_mirror(assets):
     assert BUILDER.PBS_SHA256 == PBS_REFERENCE["digest"]["fingerprint"]
     provider = assets / "providers" / "PythonBuildStandalone"
     metadata = (
-        provider / "download/20261110/distributions-3.12.16-install_only_stripped.json"
+        provider / "download/20261124/distributions-3.12.16-install_only_stripped.json"
     )
     assert json.loads(metadata.read_text()) == {
         "base_url": "https://github.com/astral-sh/python-build-standalone/releases",
-        "release": "20261110",
+        "release": "20261124",
         "assets": [PBS_REFERENCE],
     }
     archive = provider / PBS_REFERENCE["rel_path"]
@@ -690,7 +690,7 @@ def test_scie_command_pins_runtime_inputs(tmp_path):
         tmp_path / "science",
     )
 
-    assert ["--scie-pbs-release", "20261110"] == command[
+    assert ["--scie-pbs-release", "20261124"] == command[
         command.index("--scie-pbs-release") : command.index("--scie-pbs-release") + 2
     ]
     python_pin = command.index("--scie-python-version")

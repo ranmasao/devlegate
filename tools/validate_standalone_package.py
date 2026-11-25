@@ -188,7 +188,7 @@ def validate(
         expected_provenance = stable_provenance(
             report,
             manifest_path,
-            split_inventory(executable, Path(split_dir)),
+            split_inventory(executable, Path(split_dir), manifest_path),
             repo,
         )
     if provenance != expected_provenance:

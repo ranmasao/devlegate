@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -16,16 +17,17 @@ import subprocess
 import tarfile
 import tempfile
 import tomllib
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 COMPLIANCE_DIR = "packaging/standalone-compliance"
 MANIFEST_SCHEMA = "devlegate.standalone-compliance.v1"
 TARGET = "linux-x86_64"
 LIBC = "glibc"
 PBS_ARCHIVE = (
-    "cpython-3.12.16+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+    "cpython-3.12.16+20261124-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
 )
-PBS_SHA256 = "6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39"
+PBS_SHA256 = "7e1adaea26c959d13aa1120be1ae62a1ea1bb52adcb382679fffe9217e22adff"
 PEX_VERSION = "2.103.2"
 PEX_WHEEL = "pex-2.103.2-py3.py312-none-any.whl"
 PEX_WHEEL_SHA256 = "f1316f1f6f0e125c44c8d6f49cd6ebc4b294b7582a385b3999e814824e607ec7"
@@ -37,8 +39,9 @@ SCIE_JUMP_SHA256 = "a5afd5cd99ac201865d329980e9856521d394e2780441c4abc2f73add5b7
 SCIENCE_ASSET = "science-fat-linux-x86_64"
 SCIENCE_SHA256 = "2070de7f823033a3b0e8a2ceb56e9fdfa8375fda1762a0d71ba11cd36d5c730f"
 PBS_PROVIDER = "PythonBuildStandalone"
-PBS_RELEASE = "20261110"
+PBS_RELEASE = "20261124"
 PBS_PYTHON_VERSION = "3.12.16"
+PBS_PIP_VERSION = "26.3"
 EXPECTED_REPRODUCIBILITY_SCOPE = (
     "byte-reproducible on the tested Linux x86_64 build environment "
     "from the pinned immutable inputs"
@@ -291,7 +294,93 @@ def notice_text(records: list[dict]) -> str:
     )
 
 
-def split_inventory(artifact: Path, destination: Path) -> dict[str, dict[str, object]]:
+def validate_pbs_licenses(archive: Path, manifest_path: Path) -> None:
+    """Compare the verified PBS payload, including pip's wheel, to the catalog."""
+    stdlib = f"python/lib/python{PBS_PYTHON_VERSION.rsplit('.', 1)[0]}/"
+    site = f"{stdlib}site-packages/"
+    pip = f"pip-{PBS_PIP_VERSION}"
+    metadata = f"{pip}.dist-info/licenses/"
+    wheel_path = f"{stdlib}ensurepip/_bundled/{pip}-py3-none-any.whl"
+    snapshot_root = f"python-runtime/{pip}/"
+    cpython_snapshot = f"python-runtime/CPython-{PBS_PYTHON_VERSION}-LICENSE.txt"
+
+    def pip_license(name: str) -> tuple[str, str] | None:
+        if name.startswith(metadata):
+            return "metadata", name.removeprefix(metadata).removeprefix("src/pip/")
+        basename = PurePosixPath(name).name.lower()
+        if name.startswith("pip/_vendor/") and basename.startswith(
+            ("license", "licence", "copying", "notice", "authors", "copyright")
+        ):
+            return "vendored", name.removeprefix("pip/")
+        return None
+
+    manifest_files = {
+        file["path"]: file["sha256"]
+        for _, file in manifest_file_records(load_manifest(manifest_path))
+    }
+    expected = {
+        path.removeprefix(snapshot_root): digest
+        for path, digest in manifest_files.items()
+        if path.startswith(snapshot_root)
+    }
+    cpython = None
+    wheel = None
+    installed: dict[str, dict[str, str]] = {"metadata": {}, "vendored": {}}
+    bundled: dict[str, dict[str, str]] = {"metadata": {}, "vendored": {}}
+    try:
+        with tarfile.open(archive, "r|gz") as runtime:
+            for member in runtime:
+                if not member.isfile():
+                    continue
+                if member.name == f"{stdlib}LICENSE.txt":
+                    data = runtime.extractfile(member).read()
+                    cpython = hashlib.sha256(data).hexdigest()
+                elif member.name == wheel_path:
+                    wheel = runtime.extractfile(member).read()
+                elif member.name.startswith(site) and (
+                    license_path := pip_license(member.name.removeprefix(site))
+                ):
+                    group, name = license_path
+                    data = runtime.extractfile(member).read()
+                    installed[group][name] = hashlib.sha256(data).hexdigest()
+        if wheel is None:
+            raise PackageError("PBS ensurepip wheel missing from payload")
+        with zipfile.ZipFile(io.BytesIO(wheel)) as runtime:
+            for member_in_wheel in runtime.infolist():
+                if not member_in_wheel.is_dir() and (
+                    license_path := pip_license(member_in_wheel.filename)
+                ):
+                    group, name = license_path
+                    data = runtime.read(member_in_wheel)
+                    bundled[group][name] = hashlib.sha256(data).hexdigest()
+    except (OSError, EOFError, tarfile.TarError, zipfile.BadZipFile) as error:
+        raise PackageError(f"cannot read PBS license inventory: {error}") from error
+
+    if cpython is None or cpython != manifest_files.get(cpython_snapshot):
+        raise PackageError("PBS CPython LICENSE.txt differs from compliance manifest")
+    expected_vendored = {
+        name: digest for name, digest in expected.items() if name.startswith("_vendor/")
+    }
+    copies = (("installed pip", installed), ("ensurepip wheel", bundled))
+    for origin, inventory in copies:
+        for group, actual in inventory.items():
+            required = expected if group == "metadata" else expected_vendored
+            if actual != required:
+                altered = sorted(
+                    name for name in actual.keys() & required.keys()
+                    if actual[name] != required[name]
+                )
+                raise PackageError(
+                    f"PBS {origin} {group} licenses differ from compliance manifest: "
+                    f"missing={sorted(actual.keys() - required.keys())}, "
+                    f"extra={sorted(required.keys() - actual.keys())}, "
+                    f"altered={altered}"
+                )
+
+
+def split_inventory(
+    artifact: Path, destination: Path, manifest_path: Path
+) -> dict[str, dict[str, object]]:
     from build_standalone import split_scie
 
     files = split_scie(artifact, destination)
@@ -316,6 +405,7 @@ def split_inventory(artifact: Path, destination: Path) -> dict[str, dict[str, ob
         raise PackageError("embedded scie-jump hash does not match target asset")
     if inventory[PBS_ARCHIVE]["sha256"] != PBS_SHA256:
         raise PackageError("embedded PBS archive hash mismatch")
+    validate_pbs_licenses(files[PBS_ARCHIVE], manifest_path)
     return inventory
 
 
@@ -522,7 +612,7 @@ def package(
             notice_text(manifest["records"]), encoding="utf-8"
         )
         split_dir = assembly_root / "split"
-        inventory = split_inventory(artifact, split_dir)
+        inventory = split_inventory(artifact, split_dir, manifest_path)
         provenance = stable_provenance(report, manifest_path, inventory, repo)
         (stage / "BUILD-PROVENANCE.json").write_text(
             json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"

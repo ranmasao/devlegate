@@ -2,11 +2,14 @@
 # Licensed under the EUPL-1.2.
 # SPDX-License-Identifier: EUPL-1.2
 
+import hashlib
 import importlib.util
 import io
+import json
 import shutil
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -46,7 +49,7 @@ def provenance_report():
             "science_asset": PACKAGE.SCIENCE_ASSET,
             "science_sha256": PACKAGE.SCIENCE_SHA256,
             "pbs_provider": BUILDER.PBS_PROVIDER,
-            "pbs_release": "20261110",
+            "pbs_release": "20261124",
             "pbs_python_version": "3.12.16",
             "scie_jump_version": PACKAGE.SCIE_JUMP_VERSION,
         },
@@ -125,6 +128,79 @@ def test_devlegate_snapshot_must_match_repository_source(tmp_path):
         PACKAGE.validate_manifest(snapshot / "manifest.json", MANIFEST.parents[2])
 
 
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (None, None),
+        ("omit CPython", r"CPython LICENSE\.txt"),
+        ("omit AUTHORS", r"missing=.*AUTHORS\.txt"),
+        ("alter snapshot and digest", r"altered=.*_vendor/example/COPYING"),
+        ("alter wheel duplicate", r"ensurepip wheel vendored.*altered=.*COPYING"),
+    ],
+)
+def test_pbs_compliance_matches_payload(tmp_path, change, error):
+    contents = {
+        "AUTHORS.txt": b"Pip Authors\n",
+        "LICENSE.txt": b"Pip License\n",
+        "src/pip/_vendor/example/COPYING": b"Vendor License\n",
+    }
+    metadata = "pip-26.3.dist-info/licenses/"
+    duplicate = "pip/_vendor/example/COPYING"
+    installed = {metadata + name: data for name, data in contents.items()}
+    installed[duplicate] = contents["src/" + duplicate]
+    installed["pip/_vendor/example/support.py"] = b"pass\n"
+    wheel = io.BytesIO()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, data in installed.items():
+            if change == "alter wheel duplicate" and name == duplicate:
+                data = b"Wrong Vendor License\n"
+            archive.writestr(name, data)
+
+    cpython = b"CPython License\n"
+    stdlib = "python/lib/python3.12/"
+    pbs = tmp_path / "payload.tar.gz"
+    with tarfile.open(pbs, "w:gz") as archive:
+        members = {
+            "LICENSE.txt": cpython,
+            "ensurepip/_bundled/pip-26.3-py3-none-any.whl": wheel.getvalue(),
+            **{"site-packages/" + name: data for name, data in installed.items()},
+        }
+        for name, data in members.items():
+            member = tarfile.TarInfo(stdlib + name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+
+    snapshots = {
+        "CPython-3.12.16-LICENSE.txt": cpython,
+        "pip-26.3/AUTHORS.txt": b"Pip Authors\n",
+        "pip-26.3/LICENSE.txt": b"Pip License\n",
+        "pip-26.3/_vendor/example/COPYING": b"Vendor License\n",
+    }
+    if change == "omit CPython":
+        del snapshots["CPython-3.12.16-LICENSE.txt"]
+    elif change == "omit AUTHORS":
+        del snapshots["pip-26.3/AUTHORS.txt"]
+    elif change == "alter snapshot and digest":
+        snapshots["pip-26.3/_vendor/example/COPYING"] = b"Wrong Vendor License\n"
+    files = []
+    for name, data in snapshots.items():
+        path = f"python-runtime/{name}"
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_bytes(data)
+        files.append({"path": path, "sha256": hashlib.sha256(data).hexdigest()})
+    manifest = PACKAGE.load_manifest(MANIFEST)
+    manifest["records"] = [dict(manifest["records"][0], files=files)]
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    PACKAGE.validate_manifest(manifest_path)
+
+    if error:
+        with pytest.raises(PACKAGE.PackageError, match=error):
+            PACKAGE.validate_pbs_licenses(pbs, manifest_path)
+    else:
+        PACKAGE.validate_pbs_licenses(pbs, manifest_path)
+
+
 def test_notices_are_deterministic_and_classify_build_only():
     records = PACKAGE.load_manifest(MANIFEST)["records"]
 
@@ -133,9 +209,12 @@ def test_notices_are_deterministic_and_classify_build_only():
 
     assert first == second
     assert "PEX vendored runtime libraries" in first
+    assert "| PBS pip and vendored libraries | 26.3 in PBS 20261124 |" in first
+    assert "`LICENSES/python-runtime/pip-26.3/AUTHORS.txt`" in first
+    assert "`LICENSES/python-runtime/CPython-3.12.16-LICENSE.txt`" in first
     assert "Science" in first
     assert (
-        "| python-build-standalone build machinery | 20261110 | "
+        "| python-build-standalone build machinery | 20261124 | "
         "build provenance not redistributed |"
     ) in first
     assert "| Science | 0.21.0 | build provenance not redistributed |" in first

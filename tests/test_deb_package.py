@@ -111,7 +111,10 @@ def make_package(
         script.chmod(0o755)
     package = tmp_path / "devlegate.deb"
     subprocess.run(
-        ["dpkg-deb", "--build", "--root-owner-group", str(root), str(package)],
+        [
+            "dpkg-deb", "-Zgzip", "--build", "--root-owner-group",
+            str(root), str(package),
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -160,7 +163,7 @@ def complete_report(standalone, repo, manifest_path, extracted, monkeypatch):
             "science_asset": standalone.SCIENCE_ASSET,
             "science_sha256": standalone.SCIENCE_SHA256,
             "pbs_provider": standalone.PBS_PROVIDER,
-            "pbs_release": "20261110",
+            "pbs_release": "20261124",
             "pbs_python_version": "3.12.16",
             "scie_jump_version": standalone.SCIE_JUMP_VERSION,
         },

@@ -36,6 +36,18 @@ the glibc target and records the GNU scie-jump asset identity.
 safe extraction, executable modes, artifact identity, manifest hashes, notice
 references, and absence of transient build paths.
 
+For PBS `20261124`, the catalog includes the exact `python/lib/python3.12/LICENSE.txt`
+from the verified split archive, in addition to the existing upstream library
+snapshots. The separate PBS pip 26.3 catalog snapshots `AUTHORS.txt`, `LICENSE.txt`,
+and the 20 vendored license files from `site-packages/pip-26.3.dist-info/licenses/`
+under that same standard-library directory. The snapshots strip the `src/pip/`
+prefix from vendored paths. Each vendored text also occurs under `pip/_vendor/`;
+both layouts repeat byte-for-byte in `ensurepip/_bundled/pip-26.3-py3-none-any.whl`.
+Packaging and validation compare paths and SHA-256 against all four pip copies
+and the CPython license, without contacting upstream. Equal texts stay separately
+attributed when they cover distinct libraries (e.g. tomli and tomli-w) or separate
+payloads (e.g. the packaging license texts in PBS pip and PEX).
+
 The packaged `DEVLEGATE-LICENSING.md` is a byte-identical compliance snapshot of
 the repository-root `LICENSING.md`, required by the package integrity checks. It
 is distribution payload, not an ordinary repository-relative Markdown document;
@@ -88,9 +100,9 @@ actual embedded PBS archive, and `readelf -lW`, `-dW`, and `-VW` on the launcher
 `python/bin/python3.12`, `libpython3.12.so.1.0`, and the remaining PBS ELF files.
 Do not infer host dependencies merely from bundled library license records.
 
-For the 0.5.8 refresh, the executable's `SCIE=split` payload was separately
-inspected with PBS CPython 3.12.16 / 20261110 (archive SHA-256
-`6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39`).
+For the 0.5.8 refresh, inspection used the pinned PBS CPython 3.12.16 /
+20261124 archive (SHA-256
+`7e1adaea26c959d13aa1120be1ae62a1ea1bb52adcb382679fffe9217e22adff`).
 The ten non-symlink ELF files in the extracted PBS runtime were checked with
 `readelf -lW`, `-dW`, and `-VW`. The interpreter requests
 `/lib64/ld-linux-x86-64.so.2`; its direct dependencies are the glibc SONAMEs
@@ -102,16 +114,11 @@ remains the pinned 1.13.0 GNU asset and supplies the `GCC_4.2.0` requirement.
 These observations do not change the Git capability requirement or native
 dependency declarations below.
 
-An inventory of that split PBS payload also found `lib/python3.12/LICENSE.txt`
-(SHA-256 `3b2f81fe21d181c499c59a256c8e1968455d6689d269aa85373bfb6af41da3bf`)
-and pip 26.3 under `lib/python3.12/site-packages`. Its dist-info `licenses/`
-contains pip's license and authors file plus licenses for its vendored packages;
-the vendored package directories contain duplicate license texts. These are
-distinct from the PEX-vendored pip 20.3.4 record. The PEX itself contains the
-Devlegate wheel and bootstrap modules, while Science is a build-time input.
-The current compliance snapshot does not yet cover all of these PBS payload
-license files; a successful internal package validation alone is not a complete
-redistribution audit.
+The matching full PBS archive's `PYTHON.json` identifies the static links for
+OpenSSL 3, SQLite, Expat, and zlib (not zlib-ng). The install-only runtime
+reports Expat 2.11.0, OpenSSL 3.5.9, SQLite 3.54.1, and zlib 1.4. The full
+archive also carries build inputs, such as the zstd static archive, that are
+not linked into this CPython 3.12 install-only payload.
 
 | Logical requirement | Verified payload requirement | Arch declaration | Debian declaration |
 | --- | --- | --- | --- |

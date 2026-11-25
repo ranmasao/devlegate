@@ -24,12 +24,15 @@ python3 tools/build_standalone.py prove \
 ```
 
 The build pins PEX `2.103.2`, Science `0.21.0`, Python Standalone Builds release
-`20261110`, and bundled CPython `3.12.16`. The PBS archive target is
-`x86_64-unknown-linux-gnu`, `install_only_stripped`. Its 34,709,145-byte
-archive has SHA-256 `6a9e62dad033790aef722dbd370e0ce76ce17b73627ba3ae679f537049350b39`,
-verified against the immutable PBS release and the downloaded bytes. Python's
+[`20261124`](https://github.com/astral-sh/python-build-standalone/releases/tag/20261124),
+and bundled CPython `3.12.16`. The PBS archive target is
+`x86_64-unknown-linux-gnu`, `install_only_stripped` (standard GIL-enabled build).
+Its 34,754,163-byte archive has SHA-256
+`7e1adaea26c959d13aa1120be1ae62a1ea1bb52adcb382679fffe9217e22adff`,
+verified against the immutable release asset metadata and the downloaded bytes. Python's
 source-only 3.12.16 security release addresses CVE-2026-115557 and other fixes;
-PBS supplies the separately identified binary distribution. The wheel is built in an ephemeral
+PBS supplies the separately identified binary distribution, including Expat
+2.11.0 security fixes in this release. The wheel is built in an ephemeral
 environment containing exact, hash-verified pip `24.3.1`, setuptools `77.0.3`,
 and wheel `0.45.1`. The local wheel is resolved without PyPI for the Devlegate
 payload, and the scie is assembled with eager mode. PEX 2.103.2 also requires
@@ -177,7 +180,7 @@ acceptance rule is also Python `>=3.12`, but the currently validated build host
 is CPython; acceptance by the version predicate is not a tested interpreter
 support matrix. The builder is not coupled to the bundled runtime minor
 version. The current bundled runtime is independently pinned to CPython
-`3.12.16` from PBS release `20261110`.
+`3.12.16` from PBS release `20261124`.
 
 The native standalone target is Linux x86_64 with glibc. Its eager scie uses
 the official `scie-jump-gnu-linux-x86_64` asset from scie-jump `1.13.0`, not
