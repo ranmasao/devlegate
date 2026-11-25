@@ -1,0 +1,30 @@
+{
+  "code_base_head": "f836ad74fe92f6848ca56e2ddd8bdfe69e595468",
+  "conclusion": "completed",
+  "control_head": "5f094e186a23453c13c556e512b5e0e28c5a8dab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-190",
+  "execution_id": "7d4c52bb54cb44bf93257b24d41ea37d",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-190",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "fb4dc25b3adaf448a38e6d1e94e992b692971947ca52cf35c3bc8427939945fd",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-190",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Rebuilt worker prompts around a concise universal protocol, project instructions pinned to the admitted product commit, and guidance for prepared tools. Added an ordered, byte-verifiable component manifest to the private prompt journal and moved Devlegate\u2019s validation rules into its own worker instructions. Documented the prompt comparison and added real-Git and adapter delivery regressions."
+  },
+  "workspace_head": "c95ef89f0756cb0de8ffd55ed2e400c7d9127c6b"
+}
