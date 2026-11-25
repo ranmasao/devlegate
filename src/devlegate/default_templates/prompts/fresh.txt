@@ -1,1 +1,1 @@
-Implement the assigned work in the current workspace.
+FRESH: Start the assigned implementation.

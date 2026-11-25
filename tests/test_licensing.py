@@ -27,6 +27,9 @@ DEFAULT_TEMPLATE_FILES = {
     "default_templates/generated_marker.txt",
     "default_templates/project_context.md",
     "default_templates/prompts/core_contract.txt",
+    "default_templates/prompts/engineering.txt",
+    "default_templates/prompts/change_explorer.txt",
+    "default_templates/prompts/blackboard.txt",
     "default_templates/prompts/fresh.txt",
     "default_templates/prompts/resume.txt",
     "default_templates/prompts/rework.txt",
@@ -274,7 +277,7 @@ for operation in ('changes', 'diff', 'check'):
 assert 'read only relevant IDs' in blackboard_tool(path, 'token')
 prompt = build_worker_prompt(WorkerPromptInput('Work', WorkDirective.RESUME,
                                              blackboard_available=True))
-assert 'list once and read only relevant' in prompt
+assert 'optional ticket-local history' in prompt
 """, str(installed)],
         cwd=tmp_path, check=True, capture_output=True,
     )

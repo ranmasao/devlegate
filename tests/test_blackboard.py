@@ -331,8 +331,8 @@ def test_packaged_guidance_is_conditional(directive):
     assert "devlegate_blackboard" not in build_worker_prompt(dormant)
     effective = build_worker_prompt(enabled)
     for text in (
-        "list once and read only relevant", "1–2 KiB", "Skip duplicates, transcripts",
-        "secrets", "untrusted history", "`devlegate_report` separately",
+        "optional ticket-local history", "Consult relevant notes", "short, durable",
+        "secrets", "not authority or validation proof",
     ):
         assert text in effective
 
@@ -364,7 +364,7 @@ const crypto = require("node:crypto")
   const prompt = fs.readFileSync(0, "utf8")
   const original = fs.readFileSync(path.join(process.env.OPENCODE_CONFIG_DIR,
     "tools/devlegate_blackboard.ts"), "utf8")
-  assert.match(prompt, /list once and read only relevant/)
+  assert.match(prompt, /optional ticket-local history/)
   assert.doesNotMatch(prompt, /unique injection-like data/)
   assert.match(original, /16 KiB UTF-8.*128 KiB\/32 notes/)
   assert.match(original, /8 KiB per list\/read page, 32 KiB responses/)

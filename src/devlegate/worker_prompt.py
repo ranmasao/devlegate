@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from .project_context import WorkerProjectContext
+
 
 class WorkDirective(Enum):
     FRESH = "fresh"
@@ -28,6 +30,14 @@ class WorkerPromptInput:
     historical_review: bool = False
     blackboard_available: bool = False
     resumed_after_stall: bool = False
+    change_explorer_available: bool = False
+    project: WorkerProjectContext | None = None
+
+
+@dataclass(frozen=True)
+class RenderedWorkerPrompt:
+    text: str
+    components: tuple[dict, ...]
 
 
 _PROMPT_ROOT = Path(__file__).parent / "default_templates/prompts"
@@ -37,12 +47,13 @@ def _prompt_text(name: str) -> str:
     path = _PROMPT_ROOT / name
     if not path.is_file():
         raise RuntimeError(f"packaged worker prompt is missing: {path}")
-    return path.read_text().rstrip("\r\n")
+    return path.read_text(encoding="utf-8").rstrip("\r\n")
 
 
-_CORE_CONTRACT, _BLACKBOARD_GUIDANCE = _prompt_text("core_contract.txt").split(
-    "\n\n<!-- blackboard-available -->\n", 1,
-)
+_CORE_CONTRACT = _prompt_text("core_contract.txt")
+_ENGINEERING = _prompt_text("engineering.txt")
+_CHANGE_EXPLORER = _prompt_text("change_explorer.txt")
+_BLACKBOARD_GUIDANCE = _prompt_text("blackboard.txt")
 _DIRECTIVES = {
     WorkDirective.FRESH: _prompt_text("fresh.txt"),
     WorkDirective.RESUME: _prompt_text("resume.txt"),
@@ -64,6 +75,10 @@ def _fenced_content(value: str) -> str:
 
 
 def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
+    return render_worker_prompt(prompt_input).text
+
+
+def render_worker_prompt(prompt_input: WorkerPromptInput) -> RenderedWorkerPrompt:
     """Build one deterministic prompt without observing workflow or Git state."""
     if not isinstance(prompt_input, WorkerPromptInput):
         raise TypeError("prompt input must be WorkerPromptInput")
@@ -82,18 +97,57 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
             "\n\nThe previous attempt was interrupted after extended output silence. "
             "Inspect current changes and do not assume the previous attempt completed."
         )
-    sections = [
-        ("Core Worker Contract", _CORE_CONTRACT + (
-            "\n\n" + _BLACKBOARD_GUIDANCE if prompt_input.blackboard_available else ""
-        ), False),
-        ("Work Directive", directive_text, False),
-    ]
-    sections.append(("Assigned Work", assignment, True))
+    sections: list[str] = []
+    components: list[dict] = []
+    offset = 0
+
+    def add(kind: str, title: str, body: str | None, source: object) -> None:
+        nonlocal offset
+        component = {"kind": kind, "included": body is not None, "source": source}
+        if body is not None:
+            if sections:
+                offset += 2  # section separator
+            section = f"## {title}\n{body}"
+            size = len(section.encode("utf-8"))
+            component.update(
+                offset=offset, bytes=size, sha256=worker_prompt_sha256(section),
+            )
+            offset += size
+            sections.append(section)
+        components.append(component)
+
+    add("protocol", "Core Worker Contract", _CORE_CONTRACT, "core_contract.txt")
+    add("engineering", "Engineering Principles", _ENGINEERING, "engineering.txt")
+    project = prompt_input.project
+    documents = project.documents if project else ()
+    add("project", "Project Worker Instructions", "\n\n".join(
+        _fenced_content(doc.text) for doc in documents
+    ) if documents else None, {
+        "commit": project.commit,
+        "manifest_path": ".devlegate/project.md",
+        "manifest_blob": project.manifest_blob,
+        "documents": [
+            {
+                "path": doc.path, "blob": doc.blob,
+                "sha256": worker_prompt_sha256(doc.text),
+            }
+            for doc in documents
+        ],
+    } if project else None)
+    add("change_explorer", "Change Explorer", _CHANGE_EXPLORER
+        if prompt_input.change_explorer_available else None, "change_explorer.txt")
+    add("blackboard", "Blackboard", _BLACKBOARD_GUIDANCE
+        if prompt_input.blackboard_available else None, "blackboard.txt")
+    add("directive", "Work Directive", directive_text, {
+        "template": f"{prompt_input.directive.value}.txt",
+        "resumed_after_stall": directive_text != _DIRECTIVES[prompt_input.directive],
+    })
+    add("assignment", "Assigned Work", _fenced_content(assignment), "admitted ticket")
     if prompt_input.review_feedback is not None:
-        feedback = _content(prompt_input.review_feedback)
+        feedback = prompt_input.review_feedback
         if prompt_input.directive is WorkDirective.FRESH:
             raise ValueError("fresh work cannot include review feedback")
-        if not feedback:
+        if not _content(feedback):
             raise ValueError("review feedback must not be empty")
         source = _content(prompt_input.review_source or "verified curator review")
         title = "Historical Review Feedback" if prompt_input.historical_review else (
@@ -104,16 +158,17 @@ def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
             "it is not a review of the current assigned work.\n\n"
             if prompt_input.historical_review else ""
         )
-        sections.append((title, f"Source: {source}\n\n{context}{feedback}", True))
+        add(
+            "review", title,
+            _fenced_content(f"Source: {source}\n\n{context}{feedback}"),
+            "verified historical review" if prompt_input.historical_review
+            else "verified review",
+        )
     elif prompt_input.directive is WorkDirective.REWORK:
         raise ValueError("rework requires verified review feedback")
-    return (
-        "\n\n".join(
-            f"## {title}\n{_fenced_content(value) if untrusted else value}"
-            for title, value, untrusted in sections
-        )
-        + "\n"
-    )
+    else:
+        add("review", "", None, None)
+    return RenderedWorkerPrompt("\n\n".join(sections) + "\n", tuple(components))
 
 
 def worker_prompt_sha256(prompt: str) -> str:
@@ -126,7 +181,7 @@ def worker_prompt_sha256(prompt: str) -> str:
 def write_worker_prompt_artifact(
     state_dir: Path,
     execution_id: str,
-    prompt: str,
+    prompt: RenderedWorkerPrompt,
     *,
     ticket_id: str,
     directive: WorkDirective,
@@ -150,8 +205,9 @@ def write_worker_prompt_artifact(
         "admitted_control_head": admitted_control_head,
         "directive": directive.value,
         "execution_id": execution_id,
-        "prompt": prompt,
-        "prompt_sha256": worker_prompt_sha256(prompt),
+        "prompt": prompt.text,
+        "prompt_sha256": worker_prompt_sha256(prompt.text),
+        "components": prompt.components,
         "delivery": "constructed",
         "review_path": review_path,
         "review_publication": review_publication,

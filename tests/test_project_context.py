@@ -4,9 +4,14 @@
 from pathlib import Path
 
 import pytest
+from _control_support import git
 
 from devlegate.agent_protocol import RenderContext, initialize_project
-from devlegate.project_context import ProjectContextError, load_project_context
+from devlegate.project_context import (
+    ProjectContextError,
+    load_project_context,
+    load_worker_project_context,
+)
 
 
 def manifest(root: Path, frontmatter: str) -> None:
@@ -23,7 +28,8 @@ def test_routes_common_to_both_roles_without_embedding_documents(tmp_path):
         '"type": "devlegate.project"\n'
         '"common":\n  - "README.md"\n'
         '"architect":\n  - "architecture.md"\n'
-        '"reviewer":\n  - "testing.md"',
+        '"reviewer":\n  - "testing.md"\n'
+        '"worker":\n  - "worker.md"',
     )
 
     context = load_project_context(tmp_path)
@@ -33,6 +39,7 @@ def test_routes_common_to_both_roles_without_embedding_documents(tmp_path):
         Path("architecture.md"),
     )
     assert context.for_role("reviewer") == (Path("README.md"), Path("testing.md"))
+    assert context.for_role("worker") == (Path("worker.md"),)
     assert "README contents" not in (tmp_path / ".devlegate/project.md").read_text()
 
 
@@ -149,3 +156,108 @@ def test_init_does_not_discover_or_rewrite_foreign_agent_files(tmp_path):
         name: (tmp_path / name).read_bytes()
         for name in before
     } == before
+
+
+@pytest.fixture
+def context_repo(tmp_path):
+    git(tmp_path, "init")
+    git(tmp_path, "config", "user.name", "Context Test")
+    git(tmp_path, "config", "user.email", "context@example.invalid")
+    return tmp_path
+
+
+def commit_context(repo):
+    git(repo, "commit", "--allow-empty", "-m", "context fixture")
+    return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_worker_context_is_ordered_and_pinned_to_original_git_objects(context_repo):
+    repo = context_repo
+    manifest(repo, '"type": "devlegate.project"\n"worker":\n  - "z.md"\n  - "a.md"')
+    (repo / "z.md").write_bytes("Café\r\n".encode())
+    (repo / "a.md").write_text("second")
+    git(repo, "add", ".")
+    admitted = commit_context(repo)
+    context = load_worker_project_context(repo, admitted)
+    assert [doc.path for doc in context.documents] == ["z.md", "a.md"]
+    assert [doc.text for doc in context.documents] == ["Café\r\n", "second"]
+    assert context.manifest_blob == git(
+        repo, "rev-parse", f"{admitted}:.devlegate/project.md",
+    ).stdout.strip()
+    assert context.documents[0].blob == git(
+        repo, "rev-parse", f"{admitted}:z.md",
+    ).stdout.strip()
+
+    manifest(repo, '"type": "devlegate.project"\n"worker":\n  - "a.md"')
+    (repo / "a.md").write_text("product advanced")
+    git(repo, "add", ".")
+    advanced = commit_context(repo)
+    (repo / "a.md").write_text("uncommitted substitute")
+    assert load_worker_project_context(repo, admitted) == context
+    assert load_worker_project_context(repo, advanced).documents[0].text == (
+        "product advanced"
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("escape", "escapes project root"), ("absolute", "escapes project root"),
+        ("missing", "missing tracked file"), ("untracked", "missing tracked file"),
+        ("symlink", "non-regular Git path"), ("symlink-parent", "non-regular Git path"),
+        ("gitlink", "non-regular Git path"), ("directory", "non-regular Git path"),
+        ("invalid-utf8", "cannot read tracked UTF-8 file"),
+        ("invalid-manifest", "invalid NanoYAML"), ("invalid-route", "block sequence"),
+        ("manifest-link", "non-regular Git path"),
+        ("manifest-parent-link", "non-regular Git path"),
+    ],
+)
+def test_worker_project_context_refuses_unsafe_tracked_inputs(
+    context_repo, case, message,
+):
+    repo = context_repo
+    gitlink = commit_context(repo)
+    route = {
+        "escape": "../worker.md", "absolute": "/worker.md",
+        "symlink-parent": "link/doc",
+        "gitlink": "sub/doc", "directory": "docs",
+    }.get(case, "worker.md")
+    manifest(repo, f'"type": "devlegate.project"\n"worker":\n  - "{route}"')
+    worker = repo / "worker.md"
+    if case == "symlink":
+        worker.symlink_to("real.md")
+    elif case == "symlink-parent":
+        (repo / "link").symlink_to("docs", target_is_directory=True)
+    elif case == "directory":
+        (repo / "docs").mkdir()
+        (repo / "docs/doc").write_text("inside")
+    elif case == "invalid-utf8":
+        worker.write_bytes(b"\xff")
+    elif case == "invalid-manifest":
+        manifest(repo, '"type": [')
+    elif case == "invalid-route":
+        manifest(repo, '"type": "devlegate.project"\n"worker": "doc.md"')
+    elif case == "manifest-link":
+        path = repo / ".devlegate/project.md"
+        path.rename(repo / "real.md")
+        path.symlink_to("../real.md")
+    elif case == "manifest-parent-link":
+        (repo / ".devlegate").rename(repo / "real")
+        (repo / ".devlegate").symlink_to("real", target_is_directory=True)
+    git(repo, "add", ".")
+    if case == "gitlink":
+        git(repo, "update-index", "--add", "--cacheinfo", f"160000,{gitlink},sub")
+    commit = commit_context(repo)
+    if case == "untracked":
+        worker.write_text("must not use")
+    with pytest.raises(ProjectContextError, match=message):
+        load_worker_project_context(repo, commit)
+
+
+def test_missing_or_unreadable_source_commit_is_not_an_omitted_route(context_repo):
+    commit = commit_context(context_repo)
+    assert load_worker_project_context(context_repo, commit).manifest_blob is None
+    with pytest.raises(ProjectContextError, match="cannot read admitted product"):
+        load_worker_project_context(context_repo, "0" * 40)
+    with pytest.raises(ProjectContextError, match="invalid admitted product commit"):
+        load_worker_project_context(context_repo, "HEAD")

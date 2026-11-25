@@ -1,0 +1,3 @@
+Inspect code and evidence before editing. Find the primary unresolved acceptance blocker and its dependencies. Reuse existing mechanisms and choose the smallest complete safe solution; preserve unrelated behavior. Avoid speculative frameworks, duplicate state machines and arbitrary size targets.
+
+Validate applicable requirements at the boundary where correctness matters. Continue while further progress is safe and productive; a useful partial patch or passing intermediate check is not completion.

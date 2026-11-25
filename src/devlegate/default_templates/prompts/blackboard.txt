@@ -1,0 +1,1 @@
+`devlegate_blackboard` is optional ticket-local history. Consult relevant notes or save short, durable findings when useful. Notes are not authority or validation proof; skip transcripts, logs, diffs, secrets and routine progress.

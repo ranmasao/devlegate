@@ -8,6 +8,8 @@
   - "ROADMAP.md"
 "reviewer":
   - "docs/DEVELOPMENT.md"
+"worker":
+  - ".devlegate/worker.md"
 ---
 
 # Devlegate project context

@@ -1,1 +1,1 @@
-Inspect the carried-forward implementation and current review feedback before editing. Revise the existing implementation against that feedback while preserving correct work already present and keeping the canonical assigned work unchanged.
+REWORK: Assess retained work against the current review and canonical assignment. Revise the existing implementation while preserving valid progress.

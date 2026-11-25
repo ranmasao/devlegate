@@ -67,6 +67,22 @@ For example:
 Architect receives `common` plus `architect`. Reviewer receives `common` plus
 `reviewer`.
 
+For implementation workers, optionally add a separate NanoYAML route:
+
+```text
+"worker":
+  - ".devlegate/worker.md"
+```
+
+Only the `worker` route contributes project instructions to the worker prompt.
+The manifest and selected documents are read from the exact admitted product
+commit, not from local edits or later product revisions. Commit the manifest and
+its instruction files to the product branch. Use readable UTF-8 and safe relative
+paths to regular files; links and submodule paths are rejected. Keep worker
+instructions concise and refer to supporting documentation as needed.
+See [Implementation worker prompt](WORKER_PROMPT.md) for section order and
+private prompt journal verification.
+
 ## Attach The Project
 
 From the repository root, run the project bootstrap with a local alias:

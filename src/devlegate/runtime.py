@@ -148,7 +148,11 @@ from devlegate.git import (
 )
 from devlegate.operational_log import service_log
 from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supported
-from devlegate.project_context import ProjectContextError, load_project_context
+from devlegate.project_context import (
+    ProjectContextError,
+    load_project_context,
+    load_worker_project_context,
+)
 from devlegate.reconciliation import (
     has_valid_evidence_identity,
     reconciliation_evidence_ref,
@@ -211,8 +215,8 @@ from devlegate.worker_egress import WorkerRunResult
 from devlegate.worker_prompt import (
     WorkDirective,
     WorkerPromptInput,
-    build_worker_prompt,
     mark_worker_prompt_sent,
+    render_worker_prompt,
     worker_prompt_sha256,
     write_worker_prompt_artifact,
 )
@@ -5005,7 +5009,14 @@ class ServiceEngine:
                 raise DevlegateError(str(error)) from error
             review_feedback = review_binding.content
             review_source = f"{review_binding.path} (sha256:{review_binding.sha256})"
-        directory = None
+        try:
+            project_context = load_worker_project_context(
+                self.repo,
+                self._state.get("execution_admitted_base_head", workspace.base_head),
+            )
+        except ProjectContextError as error:
+            raise WorkspacePreparationBlockedError(str(error)) from error
+        directory = workspace.path.lstat()
 
         def worker_authorized(pid: int) -> bool:
             identity = _worker_identity_from_value(
@@ -5013,8 +5024,7 @@ class ServiceEngine:
             )
             current = workspace.path.lstat()
             return (
-                directory is not None
-                and identity is not None
+                identity is not None
                 and observe_worker_identity(identity) == "matching-live"
                 and os.getsid(pid) == identity.sid
                 and os.getpgid(pid) == identity.pgid
@@ -5048,7 +5058,10 @@ class ServiceEngine:
                 )
             except OSError:
                 pass  # An optional endpoint is not a workflow admission gate.
-        prompt = build_worker_prompt(
+        revisions = self._prepare_worker_revisions(
+            resources, workspace, rework, worker_authorized,
+        )
+        rendered = render_worker_prompt(
             WorkerPromptInput(
                 assignment=selected_ticket.body,
                 directive=directive,
@@ -5057,10 +5070,12 @@ class ServiceEngine:
                 historical_review=isinstance(rework, dict)
                 and rework.get("amended_continuation") is True,
                 blackboard_available=blackboard is not None,
+                change_explorer_available=revisions is not None,
+                project=project_context,
                 resumed_after_stall=self._resumed_after_worker_stall(selected_ticket.id),
             )
         )
-        prompt_digest = worker_prompt_sha256(prompt)
+        prompt_digest = worker_prompt_sha256(rendered.text)
         review_path = None
         review_digest = None
         review_publication = None
@@ -5083,7 +5098,7 @@ class ServiceEngine:
         prompt_artifact = write_worker_prompt_artifact(
             self.state_dir,
             execution_id,
-            prompt,
+            rendered,
             ticket_id=selected_ticket.id,
             directive=directive,
             review_path=review_path if isinstance(review_path, str) else None,
@@ -5100,8 +5115,7 @@ class ServiceEngine:
             admitted_control_head=str(self._state["execution_control_head"]),
         )
         _log(
-            f"worker prompt persisted: execution={execution_id} "
-            f"path={str(prompt_artifact)!r} sha256={prompt_digest}"
+            f"worker prompt persisted: execution={execution_id} sha256={prompt_digest}"
         )
         self._save_state(
             "agent_running",
@@ -5127,7 +5141,6 @@ class ServiceEngine:
             self._watchdog_view = (execution_id, activity)
         warning_generation: int | None = None
         policy = self._watchdog_policy
-        revisions = None
 
         def poll_worker_activity() -> None:
             nonlocal warning_generation
@@ -5198,79 +5211,9 @@ class ServiceEngine:
             try:
                 from devlegate.ticket_reset import ResetStop, poll_worker
 
-                directory = workspace.path.lstat()
-                # Resumed history needs independent checkpoint provenance; do
-                # not mistake Git parents or replay commits for worker sessions.
-                namespace = None
-                git_dir = common_dir = None
-                try:
-                    binding = self._execution_generation_binding()
-                    git_dir = binding._validate_local_identity()
-                    common_dir = Path(str(binding.intent["common"]))
-                    prior = ExecutionReportStore(self.control_worktree).list(
-                        workspace.ticket_id
-                    )
-                    if isinstance(rework, dict):
-                        previous = rework.get("previous_execution_id")
-                        matched = [report for report in prior
-                                   if report.execution_id == previous]
-                        if (len(matched) != 1
-                                or matched[0].workspace_head
-                                != rework.get("previous_report_checkpoint")
-                                or matched[0].code_base_head
-                                != rework.get("previous_base_head")
-                                or rework.get("admitted_base_head")
-                                != workspace.base_head):
-                            raise RevisionUnavailable("rework provenance unavailable")
-                    reconciliation = self._state.get("reconciliation")
-                    reconciled_replay = (
-                        isinstance(reconciliation, dict)
-                        and reconciliation.get("status") == "resolved"
-                        and reconciliation.get("resolution") == "update-base"
-                        and reconciliation.get("ticket_id") == workspace.ticket_id
-                        and reconciliation.get("effective_base") == workspace.base_head
-                        and reconciliation.get("worker_checkpoint") == workspace.head
-                    )
-                    displaced = None
-                    if reconciled_replay:
-                        previous = reconciliation.get("execution_id")
-                        original_base = reconciliation.get("original_base")
-                        if isinstance(previous, str) and isinstance(original_base, str):
-                            reference = self._reconciliation_evidence_ref(
-                                workspace.ticket_id, previous,
-                            )
-                            displaced_ref = reconciliation.get("displaced_evidence_ref")
-                            if reference == displaced_ref:
-                                original = self._resolve_commit_runtime(
-                                    self.repo, reference,
-                                )
-                                if original:
-                                    displaced = (
-                                        previous, Checkpoint(original, original_base),
-                                    )
-                    namespace = published_checkpoint_history(
-                        workspace.path, self.control_worktree,
-                        workspace.base_head, workspace.head,
-                        prior, workspace.ticket_id, workspace.branch,
-                        allow_replay=reconciled_replay or isinstance(rework, dict),
-                        displaced_checkpoint=displaced,
-                    )
-                except (ExecutionReportError, ExecutionWorkspaceError,
-                        RevisionUnavailable, OSError):
-                    pass  # Unprovable history stays unavailable.
-                try:
-                    root = resources.enter_context(tempfile.TemporaryDirectory(
-                        prefix="devlegate-explorer-", ignore_cleanup_errors=True,
-                    ))
-                    revisions = resources.enter_context(RevisionChannel(
-                        Path(root) / "read.sock", namespace, worker_authorized,
-                        workspace.path, git_dir=git_dir, common_dir=common_dir,
-                    ))
-                except OSError:
-                    pass  # Optional read access is not a workflow admission gate.
                 worker_run = self._workers.run(
                     workspace,
-                    prompt,
+                    rendered.text,
                     execution_id=execution_id,
                     stop_request=ResetStop(self, selected_ticket.id),
                     owner_poll=poll_worker_activity,
@@ -6683,6 +6626,73 @@ class ServiceEngine:
         ):
             raise ExecutionWorkspaceError("cannot verify previous rework checkpoint")
         return evidence
+
+    def _prepare_worker_revisions(
+        self, resources: ExitStack, workspace: ExecutionWorkspace, rework,
+        worker_authorized,
+    ) -> RevisionChannel | None:
+        if not hasattr(socket, "SO_PEERCRED"):
+            return None
+        # Resumed history needs independent checkpoint provenance; do not mistake
+        # Git parents or replay commits for worker sessions.
+        namespace = None
+        git_dir = common_dir = None
+        try:
+            binding = self._execution_generation_binding()
+            git_dir = binding._validate_local_identity()
+            common_dir = Path(str(binding.intent["common"]))
+            prior = ExecutionReportStore(self.control_worktree).list(
+                workspace.ticket_id,
+            )
+            if isinstance(rework, dict):
+                previous = rework.get("previous_execution_id")
+                checkpoint = rework.get("previous_report_checkpoint")
+                matched = [r for r in prior if r.execution_id == previous]
+                if (len(matched) != 1
+                        or matched[0].workspace_head != checkpoint
+                        or matched[0].code_base_head != rework.get("previous_base_head")
+                        or rework.get("admitted_base_head") != workspace.base_head):
+                    raise RevisionUnavailable("rework provenance unavailable")
+            reconciliation = self._state.get("reconciliation")
+            reconciled_replay = (
+                isinstance(reconciliation, dict)
+                and reconciliation.get("status") == "resolved"
+                and reconciliation.get("resolution") == "update-base"
+                and reconciliation.get("ticket_id") == workspace.ticket_id
+                and reconciliation.get("effective_base") == workspace.base_head
+                and reconciliation.get("worker_checkpoint") == workspace.head
+            )
+            displaced = None
+            if reconciled_replay:
+                previous = reconciliation.get("execution_id")
+                original_base = reconciliation.get("original_base")
+                if isinstance(previous, str) and isinstance(original_base, str):
+                    reference = self._reconciliation_evidence_ref(
+                        workspace.ticket_id, previous,
+                    )
+                    if reference == reconciliation.get("displaced_evidence_ref"):
+                        original = self._resolve_commit_runtime(self.repo, reference)
+                        if original:
+                            displaced = (previous, Checkpoint(original, original_base))
+            namespace = published_checkpoint_history(
+                workspace.path, self.control_worktree, workspace.base_head,
+                workspace.head, prior, workspace.ticket_id, workspace.branch,
+                allow_replay=reconciled_replay or isinstance(rework, dict),
+                displaced_checkpoint=displaced,
+            )
+        except (ExecutionReportError, ExecutionWorkspaceError,
+                RevisionUnavailable, OSError):
+            pass  # Unprovable history stays unavailable.
+        try:
+            root = resources.enter_context(tempfile.TemporaryDirectory(
+                prefix="devlegate-explorer-", ignore_cleanup_errors=True,
+            ))
+            return resources.enter_context(RevisionChannel(
+                Path(root) / "read.sock", namespace, worker_authorized,
+                workspace.path, git_dir=git_dir, common_dir=common_dir,
+            ))
+        except OSError:
+            return None  # Optional read access is not a workflow admission gate.
 
     def _record_prompt_delivery(
         self, artifact: Path, execution_id: str, prompt_digest: str
