@@ -537,7 +537,7 @@ class RetryCandidate:
 
 @dataclasses.dataclass
 class OperatorCommand:
-    """One process-local operator mutation submitted to the service owner."""
+    """One process-local operator request submitted to the service owner."""
 
     request_id: str
     method: str
@@ -552,6 +552,7 @@ class OperatorCommand:
     plan_digest: str | None = None
     generation: str | None = None
     include_prompt: bool = False
+    observation_deadline: float | None = None
     reset_intent: dict[str, object] | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
@@ -701,6 +702,9 @@ def _log_cleanup_decision(scope: str, decision: dict[str, object]) -> None:
 
 
 OPERATOR_ADMISSION_TIMEOUT = 1.0
+OBSERVATION_WAIT_SECONDS = 1.75  # Leave time for the default 2s IPC response.
+# Leave room in a mutation admission wait for the next reset poll.
+WORKER_OBSERVATION_SECONDS = 0.75
 
 
 def _todo_fingerprint(repo: Path, todo_path: str) -> tuple[str, int]:
@@ -845,6 +849,7 @@ class ServiceEngine:
         self._state_write_uncertain = False
         self._receipt_lock = threading.Lock()
         self._operator_command: OperatorCommand | None = None
+        self._operator_observation: OperatorCommand | None = None
         self._operator_active = False
         self._operator_active_command: OperatorCommand | None = None
         self._scheduler_active = False
@@ -1366,9 +1371,15 @@ class ServiceEngine:
         generation: str | None = None,
         include_prompt: bool = False,
     ) -> dict[str, object]:
+        if not mutable:
+            return self._submit_operator_observation(OperatorCommand(
+                request_id=request_id, method=method, fingerprint=fingerprint,
+                ticket_id=ticket_id, onto=onto, mutable=False,
+                include_prompt=include_prompt,
+            ))
         new_command = False
         with self._operator_command_lock:
-            if mutable and self._state_write_uncertain:
+            if self._state_write_uncertain:
                 raise DevlegateError(
                     "runtime state write outcome uncertain; restart required"
                 )
@@ -1382,7 +1393,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "service is draining; runtime command was not admitted"
                 )
-            receipt = self._mutable_receipt(request_id) if mutable else None
+            receipt = self._mutable_receipt(request_id)
             if receipt is not None:
                 if (
                     receipt.get("method") != method
@@ -1446,10 +1457,8 @@ class ServiceEngine:
                     execution_id=execution_id,
                     rewrite_published=rewrite_published,
                     force=force,
-                    mutable=mutable,
                     plan_digest=plan_digest,
                     generation=generation,
-                    include_prompt=include_prompt,
                 )
                 self._operator_command = command
                 new_command = True
@@ -1480,6 +1489,42 @@ class ServiceEngine:
                     + (f"repeat devlegate reset {ticket_id}" if method == "reset"
                        else "retry with the same request id")
                 )
+        return self._admission_result(command)
+
+    def _observation_lifecycle_error(self) -> str | None:
+        if self._service_shutdown.is_set() or (
+            self._stop_event is not None and self._stop_event.is_set()
+        ):
+            return "service is shutting down; read-only observation unavailable"
+        if self._lifecycle_drain_pending():
+            return "service is draining; read-only observation unavailable"
+        return None
+
+    def _submit_operator_observation(self, command: OperatorCommand) -> dict:
+        command.observation_deadline = time.monotonic() + OBSERVATION_WAIT_SECONDS
+        timed_out = "read-only observation timed out at the owner"
+        if not self._operator_command_lock.acquire(timeout=OBSERVATION_WAIT_SECONDS):
+            raise DevlegateError(timed_out)
+        try:
+            if reason := self._observation_lifecycle_error():
+                raise DevlegateError(reason)
+            if time.monotonic() >= command.observation_deadline:
+                raise DevlegateError(timed_out)
+            if (self._operator_observation is not None
+                    and not self._operator_observation.cancelled.is_set()):
+                raise DevlegateError(
+                    "service busy; read-only observation already queued"
+                )
+            self._operator_observation = command
+        finally:
+            self._operator_command_lock.release()
+        self.wake()
+        remaining = command.observation_deadline - time.monotonic()
+        if not command.admission_event.wait(remaining):
+            command.cancelled.set()
+            # The owner will discard it before doing any IO. Don't wait again
+            # for the mutation lock after the coordination deadline expires.
+            raise DevlegateError(timed_out)
         return self._admission_result(command)
 
     def _validate_retry_admission(self, ticket_id: str, force: bool = False) -> None:
@@ -2772,7 +2817,70 @@ class ServiceEngine:
             keys = keys[start:] + keys[:start]
         return [candidates[key] for key in keys[:limit]]
 
+    def _observe_operator_command(
+        self, command: OperatorCommand, *, supervising_worker: bool = False,
+    ) -> None:
+        from devlegate.change_explorer import observation_budget, observation_timeout
+        from devlegate.inspection import inspect_object
+
+        deadline = command.observation_deadline
+        if deadline is None:
+            deadline = time.monotonic() + OBSERVATION_WAIT_SECONDS
+        if supervising_worker:
+            deadline = min(deadline, time.monotonic() + WORKER_OBSERVATION_SECONDS)
+
+        def cancelled() -> bool:
+            return (
+                command.cancelled.is_set()
+                or self._observation_lifecycle_error() is not None
+            )
+
+        token = observation_budget.set((deadline, cancelled))
+        try:
+            self._assert_repository_owner()
+            if reason := self._observation_lifecycle_error():
+                raise DevlegateError(reason)
+            observation_timeout()
+            if command.method == "inspect":
+                result = inspect_object(
+                    self, command.onto,
+                    None if command.onto == "service" else command.ticket_id,
+                    include_prompt=command.include_prompt,
+                    supervising_worker=supervising_worker,
+                )
+            elif command.method in {"workspace-ls", "cleanup-workspaces"}:
+                if supervising_worker:
+                    raise DevlegateError(
+                        "workspace inventory observation unavailable during worker "
+                        "supervision; a complete scan may require remote and local "
+                        "workspace proofs; use inspect workspace ID for a partial view"
+                    )
+                result = self.workspace_inventory(
+                    limit=int(command.onto) if command.onto is not None else 10000,
+                )
+            else:
+                raise DevlegateError("unsupported read-only observation")
+            if reason := self._observation_lifecycle_error():
+                raise DevlegateError(reason)
+            observation_timeout()
+            command.admission_result = result
+        except Exception as error:
+            # An observation cannot stop a worker, change the enclosing command's
+            # result, or set its reconciliation diagnostics.
+            detail = self._observation_lifecycle_error()
+            if detail is None:
+                detail = ("read-only observation time budget expired"
+                          if isinstance(error, subprocess.TimeoutExpired)
+                          else f"read-only observation failed: {error}")
+            command.admission_error = DevlegateError(detail)
+        finally:
+            observation_budget.reset(token)
+            command.admission_event.set()
+
     def _admit_operator_command(self, command: OperatorCommand) -> None:
+        if not command.mutable:
+            self._observe_operator_command(command)
+            return
         recording = False
         try:
             with self._operator_command_lock:
@@ -2780,28 +2888,6 @@ class ServiceEngine:
                     raise DevlegateError(
                         "service busy; mutable request was not admitted"
                     )
-                if command.method == "workspace-ls" or (
-                    command.method == "cleanup-workspaces" and not command.mutable
-                ):
-                    command.admission_result = self.workspace_inventory(
-                        limit=int(command.onto) if command.onto is not None else 10000,
-                    )
-                    return
-                if command.method == "inspect":
-                    from devlegate.inspection import inspect_object
-
-                    try:
-                        command.admission_result = inspect_object(
-                            self, command.onto,
-                            None if command.onto == "service" else command.ticket_id,
-                            include_prompt=command.include_prompt,
-                        )
-                    except (
-                        ValueError, RuntimeError, OSError, subprocess.SubprocessError,
-                        ExecutionWorkspaceError,
-                    ) as error:
-                        raise DevlegateError(str(error)) from error
-                    return
                 if self._lifecycle_drain_pending():
                     raise DevlegateError(
                         "service is draining; runtime command was not admitted"
@@ -2911,18 +2997,32 @@ class ServiceEngine:
         self, allow_operator: bool
     ) -> tuple[OperatorCommand | None, bool]:
         with self._operator_command_lock:
-            if allow_operator and self._operator_command is not None:
-                if self._operator_active or self._scheduler_active:
-                    return None, False
-                command = self._operator_command
-                self._operator_command = None
-                self._operator_active = True
-                self._operator_active_command = command
-                return command, False
             if self._operator_active or self._scheduler_active:
                 return None, False
+            if allow_operator and self._operator_command is not None:
+                command = self._operator_command
+                self._operator_command = None
+                if command.mutable:
+                    self._operator_active = True
+                    self._operator_active_command = command
+                return command, False
+            if allow_operator and self._operator_observation is not None:
+                command = self._operator_observation
+                self._operator_observation = None
+                return command, False
             self._scheduler_active = True
             return None, True
+
+    def _poll_worker_observation(self) -> None:
+        with self._operator_command_lock:
+            # Mutations (including a reset arriving after the reset poll) get
+            # priority, but the enclosing retry retains its active command.
+            if self._operator_command is not None:
+                return
+            command = self._operator_observation
+            self._operator_observation = None
+        if command is not None:
+            self._observe_operator_command(command, supervising_worker=True)
 
     def _release_operator_command(self) -> None:
         with self._operator_command_lock:
@@ -2936,17 +3036,27 @@ class ServiceEngine:
     def _reject_pending_operator_command_on_shutdown(self) -> None:
         with self._operator_command_lock:
             command = self._operator_command
-            if command is None:
-                return
             self._operator_command = None
-            command.admission_error = DevlegateError(
-                "service is shutting down; runtime command was not admitted"
-            )
-            command.admission_event.set()
+            observation = self._operator_observation
+            self._operator_observation = None
+            if command is not None:
+                command.admission_error = DevlegateError(
+                    "service is shutting down; runtime command was not admitted"
+                )
+                command.admission_event.set()
+            if observation is not None:
+                observation.admission_error = DevlegateError(
+                    self._observation_lifecycle_error()
+                    or "service is shutting down; read-only observation unavailable"
+                )
+                observation.admission_event.set()
 
     def _operator_command_pending(self) -> bool:
         with self._operator_command_lock:
-            return bool(self._operator_command is not None)
+            return (
+                self._operator_command is not None
+                or self._operator_observation is not None
+            )
 
     def service_snapshot(self) -> ServiceSnapshot:
         """Return the latest published snapshot without performing observation I/O."""
@@ -5150,6 +5260,8 @@ class ServiceEngine:
         def poll_worker_activity() -> None:
             nonlocal warning_generation
             poll_worker(self)
+            if ResetStop(self, selected_ticket.id).kind != "ticket_reset":
+                self._poll_worker_observation()
             snapshot = activity.snapshot()
             if snapshot is not None:
                 idle, generation = snapshot
@@ -10355,6 +10467,11 @@ class ServiceEngine:
                     if self._lifecycle_exit_ready():
                         continue
                 operator_command, scheduler_active = self._claim_owner_work(True)
+                if operator_command is not None and not operator_command.mutable:
+                    self._observe_operator_command(operator_command)
+                    if once:
+                        return 0 if operator_command.admission_error is None else 1
+                    continue
                 workflow_blocked = False
                 self._iteration_diagnostic = None
                 try:
@@ -10363,7 +10480,7 @@ class ServiceEngine:
                         status = (
                             0
                             if operator_command.method in {
-                                "cleanup-workspaces", "workspace-ls", "inspect",
+                                "cleanup-workspaces",
                                 "clean-apply",
                                 "reset",
                             }

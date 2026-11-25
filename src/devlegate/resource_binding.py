@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import TypedDict
 
+from devlegate.change_explorer import observation_timeout
 from devlegate.execution_workspace import (
     ExecutionWorkspace,
     ExecutionWorkspaceError,
@@ -187,6 +188,7 @@ class ResourceBinding:
         _safe_path(root)
         matches = []
         for path in root.glob("*/intent.json"):
+            observation_timeout()
             intent = _read(path)
             if (
                 intent.get("execution_id") == execution_id

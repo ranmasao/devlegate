@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from devlegate.change_explorer import observation_timeout
 from devlegate.execution_provenance import lifecycle_commit_is_exact
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
 from devlegate.git import GitAncestryError, GitObservationError
@@ -98,7 +99,7 @@ class OwnerGitEvidence:
             raise EvidenceError("evidence source budgets must be positive")
         self._bytes_left = byte_budget
         self._calls_left = call_budget
-        self._deadline = time.monotonic() + seconds_budget
+        self._deadline = time.monotonic() + observation_timeout(seconds_budget)
         self.limits = MappingProxyType({
             "source_bytes": byte_budget, "source_calls": call_budget,
             "source_seconds": seconds_budget, "command_seconds": MAX_COMMAND_SECONDS,

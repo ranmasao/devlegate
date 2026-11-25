@@ -136,14 +136,16 @@ class InspectionView:
         return value
 
 
-def _head(owner) -> tuple[str, dict]:
+def _head(owner, *, supervising_worker: bool) -> tuple[str, dict]:
     control = owner.control_worktree
     head = observe_git(control, "rev-parse", "HEAD").stdout.strip()
     if resolve_ref_commit(
         owner.repo, f"refs/heads/{owner.control_branch}", runner=observe_git,
     ) != head:
         raise EvidenceError("control HEAD differs from canonical branch")
-    return head, _control_identity(owner, control, head)
+    return head, _control_identity(
+        owner, control, head, committed_only=supervising_worker,
+    )
 
 
 def _ticket(owner, head: str, object_id: str) -> tuple[TicketObservation, list[str]]:
@@ -359,6 +361,7 @@ def _observe_prompt(
 
 def _execution(
     owner, head: str, object_id: str, identity: dict, *, include_prompt: bool,
+    supervising_worker: bool,
 ) -> tuple[ExecutionObservation, list[str]]:
     control = owner.control_worktree
     # Resolve the full ID by canonical artifact path, never by prefix, SHA,
@@ -479,18 +482,23 @@ def _execution(
         if intent["base"] != report.code_base_head:
             raise EvidenceError("report and independent generation disagree")
         generation["state"] = "observed"
-        try:
-            workspace = binding.require_local(clean=False, read_only=True)
-            generation["current_local"] = "proved"
-            generation["current_head"] = workspace.head
-            generation["checkpoint_matches_current"] = (
-                workspace.head == report.workspace_head
-            )
-        except _FAILURES as error:
-            generation["current_local"] = "unproven"
-            blockers.append(f"current generation unproven: {error}")
+        if not supervising_worker:
+            try:
+                workspace = binding.require_local(clean=False, read_only=True)
+                generation["current_local"] = "proved"
+                generation["current_head"] = workspace.head
+                generation["checkpoint_matches_current"] = (
+                    workspace.head == report.workspace_head
+                )
+            except _FAILURES as error:
+                generation["current_local"] = "unproven"
+                blockers.append(f"current generation unproven: {error}")
     except _FAILURES as error:
         blockers.append(f"independent generation unproven: {error}")
+    if supervising_worker:
+        blockers.append(
+            "current workspace continuity not inspected during worker supervision"
+        )
     # Publication chronology determines latest; generation identity is separate.
     latest = "unknown"
     publications = []
@@ -535,14 +543,14 @@ def _execution(
 
 def inspect_object(
     owner, object_type: ObjectType, object_id: str | None, *,
-    include_prompt: bool = False,
+    include_prompt: bool = False, supervising_worker: bool = False,
 ) -> dict:
     validate_identity(object_type, object_id, include_prompt=include_prompt)
     owner._assert_repository_owner()
     if object_type == "workspace":
         assert object_id is not None
         # TASK-130/131 consume the same v2 schema and canonical identity digest.
-        return inspect_clean(owner, object_id)
+        return inspect_clean(owner, object_id, supervising_worker=supervising_worker)
     if object_type == "service":
         from devlegate.ipc_server import _service_identity
         from devlegate.runtime import DevlegateError
@@ -560,14 +568,15 @@ def inspect_object(
         blockers = []
     else:
         assert object_id is not None
-        head, identity = _head(owner)
+        head, identity = _head(owner, supervising_worker=supervising_worker)
         observation, blockers = (
             _ticket(owner, head, object_id) if object_type == "ticket"
             else _execution(
                 owner, head, object_id, identity, include_prompt=include_prompt,
+                supervising_worker=supervising_worker,
             )
         )
-        if _head(owner) != (head, identity):
+        if _head(owner, supervising_worker=supervising_worker) != (head, identity):
             raise EvidenceError("canonical control changed during inspection")
     reset = owner._state.get("ticket_reset")
     if isinstance(reset, dict) and (
