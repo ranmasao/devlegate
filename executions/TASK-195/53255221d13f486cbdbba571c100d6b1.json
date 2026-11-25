@@ -1,0 +1,30 @@
+{
+  "code_base_head": "3b9b6d6fe7b1d8514f8b06cb732b534c2f15397b",
+  "conclusion": "completed",
+  "control_head": "935f8bc4a06223040f72a44b7399a483bfbae7ab",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-195",
+  "execution_id": "53255221d13f486cbdbba571c100d6b1",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-195",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-195/53255221d13f486cbdbba571c100d6b1.md",
+  "report_sha256": "1a9d5b2d3ae41078e86cb1a53b9b67ee813e1f4f0a26e87cd635d9ca96f790b7",
+  "resource_generation": "3b499cbdca872f3adfe9aaf9235b68545081e3184fc7412c9fac4141f57cefcb",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-195",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The focused run passed 103 tests; the projection tests were rerun after the final test-only lint fix and all 16 passed. ./dev lint and git diff --check passed. Exact-checkpoint hosted CI is owned by Devlegate and was not run by this worker.",
+    "summary": "Added an immutable committed workflow projection with bounded graph and parsed-blob caches. It reuses canonical ticket validation and scheduling, retains invalid claims for inspection, and binds every observation to the exact requested control commit. Added real Git regressions and documented the interface and performance measurements."
+  },
+  "workspace_head": "c449c44728163d8257258ea627cb7565df80c899"
+}
