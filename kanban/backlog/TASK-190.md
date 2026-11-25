@@ -1,123 +1,61 @@
 ---
 "type": "devlegate.ticket"
-"title": "Separate universal worker contracts, project instructions and prompt composition provenance"
+"title": "Separate and simplify worker prompt contracts, project instructions and provenance"
+"depends_on": ["TASK-056", "TASK-154", "TASK-184"]
 ---
 
 ## Milestone
 
-Future Devlegate iteration (candidate 0.5.8) — universal worker-prompt architecture for arbitrary managed software projects. **Backlog only until curator explicitly schedules it.** This records the agreed direction, not authorization to rewrite the currently active worker prompt or launch an implementation. Do not make current TASK-056 recovery or release work depend on this ticket.
+Devlegate 0.5.8 — project-independent, concise worker instructions after integrated Change Explorer, Blackboard and watchdog.
 
 ## Goal
 
-Make the implementation worker's exact delivered prompt a reproducible composition of **Devlegate-owned universal protocol**, **Devlegate-owned engineering principles**, **project-owned concise instructions**, and **execution-specific assignment/feedback/continuation data**. The same composition applies when Devlegate is developing itself and when it manages an unrelated repository: self-hosting must not have a special prompt assembly path.
-
-Keep the existing simple deterministic text renderer and exact private prompt artifact. Do not introduce a template engine, plugin framework, arbitrary hierarchy of programmable policies, or alternate worker execution architecture.
+One deterministic prompt composition for self-hosted Devlegate and arbitrary managed projects: universal protocol and engineering principles, explicitly configured project instructions, actual available tool guidance, and execution-specific assignment/directive/review. Reduce duplicated instructions and preserve essential semantics and exact delivered-prompt provenance.
 
 ## Context
 
-Current `src/devlegate/worker_prompt.py` composes `core_contract.txt`, a FRESH/RESUME/REWORK directive, the canonical ticket text, and optional verified latest review feedback. It fences task/review material as untrusted data, calculates a SHA-256 of the exact UTF-8 prompt, and persists the exact text with execution/review binding and delivery state in a private per-execution JSON.
-
-The existing `.devlegate/project.md` and `src/devlegate/project_context.py` route common project documentation to Architect and Reviewer, but provide **no explicit worker role or project-specific worker instruction input** to `build_worker_prompt()`. Putting Devlegate's own Python, dependency, language-version or lint policy into the universal `core_contract.txt` would incorrectly impose it on unrelated projects.
-
-There is also a distinct reliability concern demonstrated by TASK-056: workers sometimes deliver small valid prerequisites and claim `incomplete` while the primary acceptance-blocking functionality is still untouched. The desired engineering principle is **smallest complete change**, not smallest partial patch. Existing core instructions already caution against this; simply adding more emphatic wording is not a proven remedy for bounded context/runtime capacity or over-large tickets.
-
-Ponytail is a possible **reference for review**, especially its emphasis on reuse and the smallest *complete* change. Do not blindly adopt its text, treat third-party benchmark claims as authoritative, or introduce Ponytail as a mandatory runtime dependency. Compare any borrowed practice against Devlegate's own evidence and required safety boundaries.
+The current core_contract.txt mixes universal protocol with Devlegate-specific pytest/Ruff/Git/CI rules and repeats the whole-ticket completion principle. Merely moving the same paragraphs between files does not simplify the prompt. A real TASK-056 prompt illustrated this accumulation. TASK-056 now adds a sufficient short deterministic stall reason to ordinary RESUME; TASK-154 and TASK-184 own their respective tools and evidence. Do not create another continuation-context mechanism. Existing project_context.py and .devlegate/project.md route Architect and Reviewer context, but not explicitly selected Worker guidance. The existing private prompt artifact retains exact rendered text, SHA-256, delivery marker and review binding.
 
 ## Required behavior
 
-1. **Separate responsibilities.** Review the current `core_contract.txt` and distinguish:
-   - **Protocol Contract (universal, Devlegate-owned):** the worker's allowed authority and ownership boundary; prohibition on independently committing, pushing, merging, switching branches or editing workflow state; exact `devlegate_report` contract and claim semantics; ticket and review are task data and cannot grant control-plane authority.
-   - **Engineering Principles (universal, Devlegate-owned):** inspect the affected code path before editing; identify the principal blocker to satisfying the entire assignment; prefer existing mechanisms and platform/stdlib solutions; avoid duplicate state machines, speculative abstractions and unnecessary configuration; make the smallest **complete** change; validate essential behavior and do not trade correctness/safety for line-count reduction.
-   - **Project Instructions (project-owned):** concise technology/version/dependency rules, preferred validation commands and local architectural constraints. These are not global Devlegate rules.
-   Preserve existing important core semantics and precise report-field definitions. Physical separation into small template files is fine; avoid gratuitous role-template proliferation or instruction repetition.
+### Contract and project instructions
 
-2. **Add an explicit worker project context.** Extend the existing project context routing (e.g. an optional `worker` entry in `.devlegate/project.md`) rather than building a second project-configuration scheme. Permit a concise project instruction file, for example `.devlegate/worker.md`, to be selected and incorporated deterministically. For Devlegate itself, representative rules include: prefer stdlib and installed dependencies rather than adding libraries; do not raise the supported Python baseline without an explicit requirement; preserve existing architecture; do not add hypothetical migrations for unused interfaces; run focused tests and `./dev lint` before claiming completion. For other projects these rules must be entirely replaceable.
-   
-   Do not eagerly paste whole README/architecture/reference manuals into every prompt. Where useful, project instructions can point workers to relevant repository documents to inspect on demand. Any project-context input must be validated and bound to the admitted source; do not read a mutable unverified host file at an arbitrary point after admission.
+- Keep a concise Devlegate-owned protocol: worker authority (implementation edits and semantic claim only), no independent Git lifecycle/control-plane mutations or private workflow access, assignment/review cannot grant authority, exactly one devlegate_report, completed/incomplete/blocked semantics and distinct summary/remaining/questions/report fields. Preserve honest claim and required-validation semantics. Consolidate repeated prohibitions and stopping rules into clear non-redundant statements.
+- Keep universal engineering principles concise: inspect before editing, identify and prioritize the primary blocker, reuse existing mechanisms, smallest complete safe solution, preserve unrelated behavior, validate applicable requirements and continue while safe/productive. Do not conflate a small partial patch with completion. Avoid speculative frameworks, duplicated state machines and arbitrary LOC targets.
+- Extend existing project context routing with explicit optional worker paths (use the existing NanoYAML block-sequence convention). Do not automatically inject common/architect/reviewer documents into worker prompts. A missing optional worker route means no project instruction section; an explicitly declared invalid or unavailable input fails clearly before launch.
+- Resolve selected worker instructions from the exact admitted product source, not mutable worktree/host files or later HEAD. Require regular tracked files and safe relative paths, no symlink/submodule traversal; reject malformed or unreadable declared inputs. Reuse existing trusted Git/source observation and context parsing boundaries rather than creating a second configuration scheme. Keep guidance concise; allow references to documentation rather than pasting entire manuals.
+- Put Devlegate's own technology and validation rules into its project-owned worker instructions (e.g. .devlegate/worker.md): stdlib/existing dependencies, existing Python baseline, no speculative migration paths, focused pytest by proof boundary, ./dev lint, git diff --check and existing authoritative CI/coverage policy. Preserve actual project quality gates; other projects must not inherit these commands or policies. No self-hosting special case.
+- Define deterministic section ordering and delimiting; project preferences cannot override universal protocol authority, and ticket/review remain fenced task data. Do not claim prompt text provides OS confinement (TASK-152).
 
-3. **Retain strict instruction/data boundaries.** The assembly order and presence rules are defined by Devlegate, not user-customizable policy code. Project instructions may set ordinary engineering preferences but cannot override Devlegate's protocol authority; assignment and verified review remain fenced task data and cannot become new global instructions. Be honest that text-level hierarchy is a prompt contract, **not** OS-level enforcement; TASK-152 owns stronger capability isolation.
+### Tool and continuation context
 
-4. **Support execution-specific context without special-case prompt families.** Keep FRESH/RESUME/REWORK directives and verified current review feedback. Provide an optional bounded `Continuation Context` component for proven interrupted work (e.g. a stalled-worker restart), with safe encoding/truncation and no private orchestration IDs or internal paths leaked to the agent. This ticket owns the **generic composition interface**; TASK-056 owns generation of watchdog evidence, retirement and recovery decisions, and TASK-184 owns durable task blackboard data. Do not recreate either system or make them dependencies.
+- Supply short conditional Change Explorer guidance only when the corresponding tools are available. BASE = admitted base; HEAD = latest durable task checkpoint (BASE before first checkpoint); HEAD-N = earlier actual checkpoints, not Git parents or attempt count; WORKTREE = live edits. Discover endpoints with revisions; cross-base comparisons may be unavailable. On RESUME/REWORK inspect cumulative changes(BASE, WORKTREE), use changes(HEAD, WORKTREE) for current edits, select relevant diff pages. check is advisory, unavailable/partial is not clean and live observations are not immutable QA evidence. Raw Git inspection commands are not universal requirements.
+- Retain concise Blackboard guidance only when available: optional relevant history and short durable findings, not transcripts, authority or validation proof. Avoid redundant instructions and mandatory tool calls/notes. Absence of either optional tool does not block work.
+- Preserve FRESH/RESUME/REWORK, verified current/historical review attribution and TASK-056's existing short stall reason on RESUME. Preserve exact feedback content; distinguish historical review of superseded specifications. Do not add a continuation framework, transcript injection, new recovery state or change admission/retirement/recovery semantics. Derive availability from existing preparation/adapter boundaries; do not invent capability negotiation.
 
-5. **Materialized prompt and provenance.** Preserve the existing exact UTF-8 delivered prompt, SHA-256, private `delivery` marker, control admission and verified review attribution. Augment the existing private artifact with a small **ordered composition manifest**: section kind, source identity appropriate to its trust boundary, source content digest and whether a section was included. Bind project-input content to the actual admitted version rather than relying on mutable file names. Exact rendering and the private diagnostic manifest must describe the same bytes. This artifact proves what Devlegate assembled and handed to its worker adapter; it must **not claim to represent hidden provider/OpenCode instructions** or the complete model context.
+### Rendering and provenance
 
-6. **Self-hosted = ordinary project.** Devlegate's local project instructions live in its repository just like those of other managed projects, while universal contracts remain packaged in the Devlegate distribution. Avoid hardcoded Devlegate-only implementation advice in universal templates; no special `self_hosting` mode, dual renderer or project-name check.
-
-7. **Keep the scope narrow.** Reuse `WorkerPromptInput`, `build_worker_prompt()`, `project_context.py` and the existing private artifact path as much as possible. A small explicit typed composition structure is acceptable; no arbitrary templating language, instruction plugin registry, new daemon/service, duplicated stored prompt, extensive configuration surface or compatibility/migration layer for hypothetical customers. If research reveals distinct release-sized implementation tasks, propose a bounded split for curator approval rather than creating a sprawling implementation.
-
-### Change Explorer guidance and validation contract
-
-TASK-154 is integrated: implementation workers receive four OpenCode tools
-(`revisions`, `changes`, `diff`, `check`) through the adapter, with
-individual tool descriptions, but the current packaged worker prompt does
-not explain their combined use or virtual revision vocabulary. In particular,
-the universal core contract still explicitly requires `git diff --check`
-before a completed claim. Address these together during prompt restructuring,
-not by changing the already integrated Change Explorer or an admitted
-assignment.
-
-Add concise Devlegate-owned guidance for the available tool capability, not
-project-specific Git instructions. Explain:
-
-- BASE is the admitted product base; HEAD is the latest durable task
-  checkpoint (aliases BASE before the first checkpoint); HEAD-N identifies
-  earlier actual task checkpoints, not Git parents or execution counts.
-  WORKTREE is the live editable state. Use revisions to discover valid
-  endpoints; cross-base comparisons may be unavailable, and live HEAD
-  comparisons after replay use the admitted replay of the checkpoint.
-- On RESUME/REWORK, inspect retained cumulative changes (normally
-  changes(BASE, WORKTREE)) before editing; changes(HEAD, WORKTREE) identifies
-  changes since the latest checkpoint. Request diff for a specific relevant
-  file only, not every page or every historical revision.
-- Use check(BASE, WORKTREE) for cumulative whitespace/conflict diagnostics
-  and check(HEAD, WORKTREE) for current edits as appropriate. Findings are
-  advisory; incomplete/unavailable results are not clean. WORKTREE
-  observations are live, not immutable proof of source integrity.
-- Do not prescribe direct Git commands as the universal way to inspect task
-  changes. Separate project-required validation and completion criteria from
-  generic Change Explorer guidance. Preserve meaningful project quality
-  gates and honest reporting of unperformed required checks; do not silently
-  weaken them, make all advisory findings universal completion blockers, or
-  treat Change Explorer as CI/QA proof. Do not encourage bypassing future
-  worker capability restrictions (TASK-152).
-
-Keep the prompt guidance short and conditional on the corresponding
-materialized tool availability, alongside the existing tool descriptions.
-Reuse the generic deterministic composition mechanism; no new tool registry,
-capability negotiation protocol, or automatic exhaustive inspection.
-Retain TASK-184's own worker-facing blackboard guidance when restructuring
-the prompt; do not require Blackboard implementation or changes under this
-ticket.
+- Reuse WorkerPromptInput, the existing renderer, project context and private artifact. A small ordered component description is sufficient; preserve exact rendered UTF-8 prompt, overall SHA-256, delivery marker and existing admission/review binding. Record ordered included/omitted component kinds, appropriate source identity and content digest, including admitted source identities for project instructions. The manifest must describe the actual rendered components and support reproduction/verification from retained prompt and pinned inputs; no duplicate prompt store, template language, registry, new service or generic policy engine.
+- Keep private source identity and execution metadata in the existing private artifact, not new worker-visible content or default logs. The artifact proves Devlegate's constructed/delivered adapter prompt, not hidden provider instructions or the entire model context.
+- Compare old/new representative self-hosted prompts with identical assignment/review and equivalent capabilities. Report section word/byte counts or another reproducible measure, removed repetitions, relocated project-specific rules and retained semantics. Require substantive consolidation, not an arbitrary token quota. Do not shorten canonical task/review data to meet a metric. Full historical prompt audit and LLM behavioral evaluation are separate work.
 
 ## Acceptance criteria
 
-- A worker in an unrelated sample Python/Go/other project receives exactly the same Devlegate protocol and engineering rules as self-hosted Devlegate, but only **that project's** configured instructions; no Devlegate-specific language/version/linter constraints leak.
-- All mandatory protocol capabilities and `devlegate_report` claim semantics remain intact across FRESH, RESUME and REWORK.
-- Worker project context is explicitly opt-in/declared, path-safe, exact-source-bound and deterministic; absent optional project guidance has a defined valid behavior.
-- The private prompt artifact retains the exact delivered text and delivery status and records an ordered, checkable component manifest with stable source digests.
-- Assignment/review/continuation remain appropriately delimited; internal control-plane information is absent from worker-visible text unless explicitly within the established worker interface.
-- The prompt renderer stays simple, deterministic and reusable without a separate self-hosting variant.
-- Universal methodology clearly favors the **smallest complete** safe solution and reuse of existing code; it does not accidentally encourage early `incomplete` termination on trivial helper patches.
-- Available Change Explorer tools are explained coherently in the actual worker prompt, including selective inspection, virtual revisions and advisory check semantics; project-specific validation remains explicit and universal instructions no longer demand raw Git as the inspection mechanism.
-- No change to agent authorization, lifecycle ownership, Git integration or TASK-056's runtime recovery logic under this ticket.
+- Unrelated sample projects and Devlegate receive the same universal protocol/engineering principles, with only their own selected project instructions; absence of optional project guidance works. No Devlegate-specific validation or dependency rules in universal text.
+- Exact admitted-source binding, safe paths, deterministic section boundaries, report contract, FRESH/RESUME/REWORK and current/historical feedback preserved. No new runtime migration, generic context framework or lifecycle mechanism.
+- Actual worker prompts expose concise guidance only for available tools, preserve the existing stall reason, and do not duplicate context-transfer responsibilities. Existing project quality gates remain effective.
+- Exact prompt and private provenance are consistent and checkable, including delivery state. Demonstrate reduced redundant universal wording with representative before/after evidence.
+- Focused tests, lint, diff check and authoritative exact-checkpoint CI pass.
 
 ## Required regressions
 
-1. Render FRESH/RESUME/REWORK with and without optional project instructions, review and continuation context; assert stable exact bytes, ordering, deterministic hashes and omission rules.
-2. Configure two distinct sample projects: verify no project-specific instruction from one appears in the other's prompt; prove that neither can override the universal protocol text or section placement.
-3. Try unsafe/symlinked/missing/stale project-context paths or changed source after admission: deterministic refusal or pinned content; no silent late substitution of new instructions.
-4. Inject section-heading or fence-like instructions in ticket/review/project-context data and verify deterministic separation and absence of escaped content reinterpreted as a top-level section.
-5. Round-trip materialized prompt artifact and manifest: reproduce the exact prompt from pinned inputs; verify per-component digests, total SHA-256, review provenance and `constructed` → `sent` state.
-6. Ensure prompt contents, private source paths and internal execution identities do not leak through default logs; preserve current no-commit/no-push/no-control-access worker contract.
-7. Inspect effective FRESH/RESUME/REWORK prompts with and without Change Explorer capability. Verify the revision vocabulary, selective use, cumulative/current comparison distinction, no unconditional raw Git inspection requirement, advisory check semantics and preservation of project-specific mandatory validation. Preserve existing Blackboard instructions if present; do not require new tool calls in tests of prompt composition alone.
-8. Run focused prompt/context tests, relevant worker-level integration, `./dev lint` and authoritative CI for the eventual implementation. Do not assert that a textual prompt can guarantee an LLM's behavior without a separate behavioral evaluation.
+1. Render FRESH/RESUME/REWORK with optional project instructions, each tool availability combination, current/historical review and stall RESUME. Verify stable bytes/order, correct omission, unchanged report semantics and preserved feedback/stall reason.
+2. Two projects with distinct instructions plus one without a worker route: no cross-project or Devlegate-specific leakage; other role routing unchanged. Verify actual delivered prompt, not just a helper result.
+3. Unsafe/missing/symlink/submodule/untracked declared input, invalid manifest or unreadable source refuses safely. Mutable worktree edits or product advancement cannot silently substitute instructions for the admitted source. Use real Git for source-binding proof.
+4. Fence-like project/ticket/review content cannot create new structural sections or override the protocol layout. Manifest component digests and total SHA-256 match actual text; constructed-to-sent preserves provenance and default logs remain private.
+5. Optional tools unavailable: ordinary launch still works; available guidance matches existing revision/blackboard semantics. Retain existing TASK-056/154/184 behavior and focused worker-level integration. Do not require new tool calls to establish prompt composition.
+6. Verify Devlegate's own project validation instructions retain current mandatory gates; run affected prompt, context, adapter/service tests, ./dev lint and git diff --check. Hosted CI is authoritative.
 
-## Boundaries and related tickets
+## Non-goals
 
-- **TASK-056**: watchdog detection and real recovery-context evidence production; do not modify its running implementation here.
-- **TASK-154**: integrated Change Explorer; this ticket owns only the worker-prompt guidance, not changes to its tools or transport.
-- **TASK-184**: durable worker-authored notes and cross-attempt blackboard; do not substitute a prompt manifest for it.
-- **TASK-152**: hard capability isolation; instructions are not security confinement.
-- The current source prompt's exact byte layout may change by deliberate design; update behavioral/digest tests accordingly without treating incidental text typography as a public compatibility contract.
-
-**Status: architecture/product refinement backlog.** No automatic admission or implementation is authorized merely by recording this ticket.
+Prompt-history audit, provider behavior guarantees, third-party methodology dependency, OS capability isolation, new recovery context subsystem, Git lifecycle or scheduler redesign, compatibility migrations, and unrelated runtime decomposition.
