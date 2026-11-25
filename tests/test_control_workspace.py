@@ -3684,7 +3684,14 @@ def test_independently_published_headerless_review_is_rejected(tmp_path, monkeyp
     assert len(prompts) == 1
 
 
-def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("destination", "restart"), [
+    ("todo", "no"), ("todo", "valid"), ("backlog", "valid"), ("todo", "corrupt"),
+])
+def test_review_backlog_deferral_preserves_feedback_binding(
+    tmp_path, monkeypatch, destination, restart,
+):
+    from devlegate.inspection import inspect_object
+
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -3693,6 +3700,13 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
 
     def worker(workspace, prompt, **_kwargs):
         prompts.append(prompt)
+        if len(prompts) == 2:
+            provenance = devlegate._state["rework_provenance"]
+            assert provenance["previous_execution_id"] == report.execution_id
+            assert provenance["previous_report_checkpoint"] == report.workspace_head
+            assert provenance["amended_continuation"] is False
+            assert provenance["review"] == binding
+            assert (workspace.path / "attempt-1.txt").is_file()
         (workspace.path / f"attempt-{len(prompts)}.txt").write_text("checkpoint\n")
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
@@ -3713,16 +3727,89 @@ def test_review_backlog_deferral_preserves_feedback_binding(tmp_path, monkeypatc
         "-->\n"
         f"{feedback}\n"
     )
-    git(control, "mv", "kanban/review/T-1.md", "kanban/backlog/T-1.md")
+    for ticket in range(2, 7):
+        (control / f"kanban/backlog/T-{ticket}.md").write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Other work"\n'
+            '"depends_on":\n  - "T-1"\n---\nwork\n'
+        )
+    git(control, "add", "kanban/backlog")
+    git(control, "commit", "-m", "add independently scheduled tickets")
+    def ticket_blob(workflow_state):
+        return git(
+            control, "rev-parse", f"HEAD:kanban/{workflow_state}/T-1.md",
+        ).stdout.strip()
+
+    reviewed_blob = ticket_blob("review")
+    git(control, "mv", "kanban/review/T-1.md", f"kanban/{destination}/T-1.md")
     git(control, "add", str(artifact.relative_to(control)))
     git(control, "commit", "-m", "defer reviewed rework")
-    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
-    git(control, "commit", "-m", "schedule deferred rework")
+    publication = git(control, "rev-parse", "HEAD").stdout.strip()
+    assert ticket_blob(destination) == reviewed_blob
+    transitions = [publication]
+
+    def move(source, target, *other_tickets):
+        git(control, "mv", f"kanban/{source}/T-1.md", f"kanban/{target}/T-1.md")
+        for ticket in other_tickets:
+            git(control, "mv", f"kanban/backlog/T-{ticket}.md", "kanban/todo/")
+        git(control, "commit", "-m", f"move T-1 to {target} and schedule other tickets")
+        transitions.append(git(control, "rev-parse", "HEAD").stdout.strip())
+        assert ticket_blob(target) == reviewed_blob
+
+    if destination == "todo":
+        move("todo", "backlog", 2, 3)
+    (control / "notes").mkdir()
+    # A matching basename outside the configured workflow is not a ticket path.
+    (control / "notes/T-1.md").write_text("unrelated notes\n")
+    git(control, "add", "notes")
+    git(control, "commit", "-m", "record unrelated notes")
+    move("backlog", "todo", 4)
+    move("todo", "backlog", 5)
+    move("backlog", "todo", 6)
     git(control, "push", "origin", "devlegate/control")
+
+    binding = {
+        "content": artifact.read_text(),
+        "path": str(artifact.relative_to(control)),
+        "publication": publication,
+        "transition": transitions,
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    }
+    if restart != "no":
+        monkeypatch.setattr(
+            devlegate, "_stop_before_admission",
+            lambda: devlegate._state.get("phase") == "agent_pending",
+        )
+        assert run_test_iteration(devlegate) == 0
+        assert len(prompts) == 1
+        assert devlegate._state["rework_provenance"]["review"] == binding
+        if restart == "corrupt":
+            persisted = copy.deepcopy(devlegate._state)
+            persisted["rework_provenance"]["review"]["transition"][-1] = publication
+            devlegate._runtime_store.replace(persisted)
+            with pytest.raises(DevlegateError, match="curator review transition"):
+                run_test_iteration(Devlegate(config))
+            return
+        pending_id = devlegate._state["execution_id"]
+        devlegate = Devlegate(config)
+        monkeypatch.setattr(devlegate._workers, "run", worker)
 
     assert run_test_iteration(devlegate) == 0
     assert len(prompts) == 2
     assert feedback in prompts[1]
+    resumed = next(
+        item for item in ExecutionReportStore(control).list("T-1")
+        if item.execution_id != report.execution_id
+    )
+    if restart != "no":
+        assert resumed.execution_id == pending_id
+    view = inspect_object(
+        devlegate, "execution", resumed.execution_id, include_prompt=True,
+    )
+    prompt = view["observation"]["worker_prompt"]
+    assert prompt["status"] == "present", prompt
+    assert prompt["review_binding"] == "verified"
+    assert prompt["directive"] == ("rework" if restart == "no" else "resume")
+    assert prompt["text"] == prompts[1]
 
 
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(

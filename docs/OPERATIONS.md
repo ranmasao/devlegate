@@ -308,8 +308,11 @@ For rework, the Reviewer publishes immutable feedback at
 unchanged ticket from review to todo, optionally through
 backlog. Devlegate binds only that reviewed execution's exact artifact and injects
 it over worker stdin. Missing, mutable, conflicting, stale, or
-mismatched artifacts block worker launch regardless of marker history. If an old
-pending REWORK has no valid current-protocol artifact, Devlegate does not infer
+mismatched artifacts block worker launch regardless of marker history. After the
+review is published, an unadmitted ticket may move between todo and backlog
+repeatedly. Each move must preserve the ticket blob, but can share a commit with
+independent ticket moves. These scheduling commits do not replace the original
+review. If an old pending REWORK has no valid artifact, Devlegate does not infer
 feedback or start it as FRESH. Stop the service, preserve and inspect its workspace
 and evidence, then explicitly dispose of that pending generation outside the
 runtime before publishing a new, fully attributed review disposition.

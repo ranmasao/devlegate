@@ -235,8 +235,7 @@ def _prompt_review(control, report, workflow, value, sections) -> str:
                                  (True, resolve_amended_rework_review)):
         try:
             binding = resolver(
-                control, admission, publication, prior, todo_path=workflow["todo"],
-                review_path=workflow["review"], backlog_path=workflow["backlog"],
+                control, admission, publication, prior, workflow_paths=workflow,
                 runner=observe_git,
             )
         except _FAILURES:

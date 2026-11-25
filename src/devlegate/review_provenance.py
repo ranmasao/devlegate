@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -101,7 +101,10 @@ def restore_review_binding(
     publication = value["publication"]
     digest = value["sha256"]
     transition = value["transition"]
-    if not isinstance(transition, list) or not (1 <= len(transition) <= 3):
+    if (
+        not isinstance(transition, list) or not transition
+        or (disposition == "accept" and len(transition) > 3)
+    ):
         raise ReviewProvenanceError("persisted curator review provenance is invalid")
     if not all(
         isinstance(item, str) and re.fullmatch(r"[0-9a-f]{40}", item)
@@ -118,6 +121,10 @@ def restore_review_binding(
         raise ReviewProvenanceError("persisted curator review integrity check failed")
     if not re.fullmatch(r"[0-9a-f]{40}", publication):
         raise ReviewProvenanceError("persisted curator review publication is invalid")
+    if disposition == "rework" and (
+        transition[0] != publication or len(set(transition)) != len(transition)
+    ):
+        raise ReviewProvenanceError("persisted curator review transition is invalid")
     match = _HEADER.match(content)
     if match is None:
         if not content.startswith(f"# {disposition.upper()}\n"):
@@ -149,21 +156,24 @@ def _transition(
     lifecycle: str,
     ticket_id: str,
     *,
-    todo_path: str,
-    review_path: str,
-    backlog_path: str,
+    workflow_paths: Mapping[str, str],
     artifact_path: str,
     runner: Runner,
 ) -> tuple[tuple[str, ...], str | None]:
-    review = f"{review_path}/{ticket_id}.md"
-    todo = f"{todo_path}/{ticket_id}.md"
-    backlog = f"{backlog_path}/{ticket_id}.md"
+    paths = {state: f"{path}/{ticket_id}.md" for state, path in workflow_paths.items()}
+    review, todo, backlog = paths["review"], paths["todo"], paths["backlog"]
+    canonical_paths = set(paths.values())
     try:
+        if any(
+            path_object(repo, lifecycle, path, runner=runner) is not None
+            for path in canonical_paths - {review}
+        ):
+            raise ReviewProvenanceError("review disposition history is conflicting")
         commits = commit_range(
             repo, f"{lifecycle}..{head}", reverse=True, runner=runner
         )
-        direct: tuple[str, ...] | None = None
-        deferred: str | None = None
+        transitions: list[str] = []
+        deferred = False
         artifact_commit: str | None = None
         parent = lifecycle
         for commit in commits:
@@ -180,7 +190,11 @@ def _transition(
                         "review artifact publication is ambiguous"
                     )
                 artifact_commit = commit
-            workflow = {item for item in changes if item.endswith(f"/{ticket_id}.md")}
+            workflow = {
+                item for item in changes if item.partition("\t")[2] in canonical_paths
+            }
+            # Only the initial review disposition must occupy its own commit.
+            # Later scheduling moves are checked against the target's paths.
             allowed_extra = (
                 {f"A\t{artifact_path}"} if artifact_commit == commit else set()
             )
@@ -188,7 +202,7 @@ def _transition(
                 workflow == {f"D\t{review}", f"A\t{todo}"}
                 and changes == workflow | allowed_extra
             ):
-                if direct is not None or deferred is not None:
+                if transitions:
                     raise ReviewProvenanceError(
                         "review disposition history is conflicting"
                     )
@@ -196,12 +210,12 @@ def _transition(
                     raise ReviewProvenanceError(
                         "ticket specification changed during rework disposition"
                     )
-                direct = (commit,)
+                transitions.append(commit)
             elif (
                 workflow == {f"D\t{review}", f"A\t{backlog}"}
                 and changes == workflow | allowed_extra
             ):
-                if direct is not None or deferred is not None:
+                if transitions:
                     raise ReviewProvenanceError(
                         "review disposition history is conflicting"
                     )
@@ -209,17 +223,19 @@ def _transition(
                     raise ReviewProvenanceError(
                         "ticket specification changed during rework deferral"
                     )
-                deferred = commit
-            elif workflow == {f"D\t{todo}", f"A\t{backlog}"} and changes == workflow:
-                if direct is None or len(direct) != 1 or deferred is not None:
+                transitions.append(commit)
+                deferred = True
+            elif workflow == {f"D\t{todo}", f"A\t{backlog}"}:
+                if not transitions or deferred:
                     raise ReviewProvenanceError("review deferral history is malformed")
-                if not _same_blob(repo, lifecycle, review, commit, backlog, runner):
+                if not _same_blob(repo, previous, todo, commit, backlog, runner):
                     raise ReviewProvenanceError(
                         "ticket specification changed during rework deferral"
                     )
-                deferred = commit
-            elif workflow == {f"D\t{backlog}", f"A\t{todo}"} and changes == workflow:
-                if deferred is None or (direct is not None and len(direct) != 1):
+                transitions.append(commit)
+                deferred = True
+            elif workflow == {f"D\t{backlog}", f"A\t{todo}"}:
+                if not deferred:
                     raise ReviewProvenanceError(
                         "review backlog disposition is malformed"
                     )
@@ -227,19 +243,19 @@ def _transition(
                     raise ReviewProvenanceError(
                         "ticket specification changed after rework deferral"
                     )
-                direct = (*direct, deferred, commit) if direct else (deferred, commit)
-                deferred = None
-            elif workflow == {f"M\t{backlog}"} and deferred is not None:
+                transitions.append(commit)
+                deferred = False
+            elif workflow == {f"M\t{backlog}"} and deferred:
                 # A deferred ticket may be amended in backlog, independently
                 # of the unchanged-blob review and scheduling moves.
                 continue
             elif workflow:
                 raise ReviewProvenanceError("review disposition history is conflicting")
-        if direct is None or deferred is not None:
+        if not transitions or deferred:
             raise ReviewProvenanceError(
                 "reviewed execution has no proven rework transition"
             )
-        return direct, artifact_commit
+        return tuple(transitions), artifact_commit
     except (GitObservationError, GitAncestryError) as error:
         raise ReviewProvenanceError(
             "cannot inspect curator review disposition history"
@@ -252,32 +268,30 @@ def resolve_rework_review(
     lifecycle: str,
     report: ExecutionReport,
     *,
-    todo_path: str,
-    review_path: str,
-    backlog_path: str,
+    workflow_paths: Mapping[str, str],
     runner: Runner,
 ) -> ReviewBinding:
     """Resolve the immutable review bound to one rejected execution."""
     return _resolve_rework_review(
-        repo, head, lifecycle, report, todo_path=todo_path, review_path=review_path,
-        backlog_path=backlog_path, runner=runner, amended=False,
+        repo, head, lifecycle, report, workflow_paths=workflow_paths,
+        runner=runner, amended=False,
     )
 
 
 def resolve_amended_rework_review(
     repo: Path, head: str, lifecycle: str, report: ExecutionReport, *,
-    todo_path: str, review_path: str, backlog_path: str, runner: Runner,
+    workflow_paths: Mapping[str, str], runner: Runner,
 ) -> ReviewBinding:
     """Resolve historical feedback for a separately deferred amendment."""
     return _resolve_rework_review(
-        repo, head, lifecycle, report, todo_path=todo_path, review_path=review_path,
-        backlog_path=backlog_path, runner=runner, amended=True,
+        repo, head, lifecycle, report, workflow_paths=workflow_paths,
+        runner=runner, amended=True,
     )
 
 
 def _resolve_rework_review(
     repo: Path, head: str, lifecycle: str, report: ExecutionReport, *,
-    todo_path: str, review_path: str, backlog_path: str, runner: Runner,
+    workflow_paths: Mapping[str, str], runner: Runner,
     amended: bool,
 ) -> ReviewBinding:
     if report.result.transport_error is not None or not report.result.egress_ok:
@@ -290,9 +304,7 @@ def _resolve_rework_review(
         head,
         lifecycle,
         report.ticket_id,
-        todo_path=todo_path,
-        review_path=review_path,
-        backlog_path=backlog_path,
+        workflow_paths=workflow_paths,
         artifact_path=artifact,
         runner=runner,
     )
@@ -303,8 +315,8 @@ def _resolve_rework_review(
     # owner, do not admit it as ordinary rework.
     try:
         same_specification = _same_blob(
-            repo, lifecycle, f"{review_path}/{report.ticket_id}.md",
-            head, f"{todo_path}/{report.ticket_id}.md", runner,
+            repo, lifecycle, f"{workflow_paths['review']}/{report.ticket_id}.md",
+            head, f"{workflow_paths['todo']}/{report.ticket_id}.md", runner,
         )
     except GitObservationError as error:
         raise ReviewProvenanceError(
@@ -360,9 +372,9 @@ def _resolve_rework_review(
         )
     if publication_changes - {
         f"A\t{artifact}",
-        f"D\t{review_path}/{report.ticket_id}.md",
-        f"A\t{todo_path}/{report.ticket_id}.md",
-        f"A\t{backlog_path}/{report.ticket_id}.md",
+        f"D\t{workflow_paths['review']}/{report.ticket_id}.md",
+        f"A\t{workflow_paths['todo']}/{report.ticket_id}.md",
+        f"A\t{workflow_paths['backlog']}/{report.ticket_id}.md",
     }:
         raise ReviewProvenanceError(
             "curator review publication contains unrelated changes"

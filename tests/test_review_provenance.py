@@ -21,6 +21,10 @@ from devlegate.review_provenance import (
 )
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 
+WORKFLOW = {state: state for state in (
+    "review", "todo", "backlog", "accepted", "done", "abandoned",
+)}
+
 
 def _binding():
     ticket_id = "TASK-088"
@@ -41,7 +45,7 @@ def _binding():
         "content": content,
         "path": f"reviews/{ticket_id}/{execution_id}.md",
         "publication": "d" * 40,
-        "transition": ["e" * 40],
+        "transition": ["d" * 40],
         "sha256": hashlib.sha256(content.encode()).hexdigest(),
     }, ticket_id, execution_id, checkpoint, control
 
@@ -122,7 +126,7 @@ def test_real_git_rework_transitions(tmp_path, route):
         source = target
     transition, publication = _transition(
         tmp_path, git("rev-parse", "HEAD"), lifecycle, "TASK-1",
-        todo_path="todo", review_path="review", backlog_path="backlog",
+        workflow_paths=WORKFLOW,
         artifact_path="reviews/TASK-1/review.md", runner=run_git,
     )
     assert transition == tuple(commits)
@@ -157,8 +161,7 @@ def test_real_git_deferred_rework_allows_separate_backlog_amendment(tmp_path):
     scheduled = git("rev-parse", "HEAD")
 
     transition, publication = _transition(
-        tmp_path, scheduled, lifecycle, "TASK-1", todo_path="todo",
-        review_path="review", backlog_path="backlog",
+        tmp_path, scheduled, lifecycle, "TASK-1", workflow_paths=WORKFLOW,
         artifact_path="reviews/TASK-1/review.md", runner=run_git,
     )
     assert transition == (deferral, scheduled)
@@ -206,7 +209,7 @@ def test_real_git_amended_rework_does_not_rebind_historical_review(tmp_path):
     with pytest.raises(ReviewProvenanceError, match="current-spec review binding"):
         resolve_rework_review(
             tmp_path, git("rev-parse", "HEAD"), lifecycle, report,
-            todo_path="todo", review_path="review", backlog_path="backlog",
+            workflow_paths=WORKFLOW,
             runner=run_git,
         )
     assert artifact.read_text().endswith("Review of B0.\n")
@@ -241,7 +244,7 @@ def test_review_resolver_rejects_failed_generation(
     with pytest.raises(ReviewProvenanceError, match="failed worker execution"):
         resolve_rework_review(
             tmp_path, "head", "lifecycle", report,
-            todo_path="todo", review_path="review", backlog_path="backlog",
+            workflow_paths=WORKFLOW,
             runner=run_git,
         )
 
@@ -319,7 +322,7 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         assert failed.result.egress_ok and failed.result.transport_error is not None
         binding = resolve_rework_review(
             tmp_path, head, lifecycle, reviewed,
-            todo_path="todo", review_path="review", backlog_path="backlog",
+            workflow_paths=WORKFLOW,
             runner=run_git,
         )
         assert binding.content == feedback
@@ -329,7 +332,7 @@ def test_real_git_failed_attempt_preserves_prior_review_on_restart(tmp_path):
         with pytest.raises(ReviewProvenanceError, match="failed worker execution"):
             resolve_rework_review(
                 tmp_path, head, lifecycle, failed,
-                todo_path="todo", review_path="review", backlog_path="backlog",
+                workflow_paths=WORKFLOW,
                 runner=run_git,
             )
         engine = SimpleNamespace(
@@ -368,8 +371,18 @@ def test_failed_execution_does_not_fall_back_to_older_review(monkeypatch, tmp_pa
         runtime.ServiceEngine._latest_reviewed_rework_report(engine, (failed, older))
 
 
-@pytest.mark.parametrize("damage", ["deleted", "modified", "ticket", "out_of_order"])
-def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
+@pytest.mark.parametrize(("damage", "reason"), [
+    ("deleted", "missing or deleted"),
+    ("modified", "not published with its review disposition"),
+    ("ticket", "changed during rework deferral"),
+    ("reschedule_edit", "changed after rework deferral"),
+    ("out_of_order", "review disposition history is conflicting"),
+    ("duplicate", "review disposition history is conflicting"),
+    ("preexisting_duplicate", "review disposition history is conflicting"),
+    ("attribution", "attribution does not match"),
+    ("non_atomic", "review disposition history is conflicting"),
+])
+def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage, reason):
     def git(*args):
         return subprocess.run(
             ["git", *args], cwd=tmp_path, check=True, text=True, capture_output=True
@@ -378,9 +391,12 @@ def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
     git("init", "-q")
     git("config", "user.email", "test@example.com")
     git("config", "user.name", "Test")
-    for name in ("review", "todo", "backlog", "reviews/TASK-1"):
+    for name in (*WORKFLOW, "reviews/TASK-1"):
         (tmp_path / name).mkdir(parents=True, exist_ok=True)
     (tmp_path / "review/TASK-1.md").write_text("original ticket\n")
+    (tmp_path / "backlog/TASK-2.md").write_text("independent ticket\n")
+    if damage == "preexisting_duplicate":
+        (tmp_path / "done/TASK-1.md").write_text("duplicate ticket\n")
     git("add", ".")
     git("commit", "-qm", "lifecycle")
     lifecycle = git("rev-parse", "HEAD")
@@ -398,6 +414,10 @@ def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
         f"control: {report.control_head}\n"
         "disposition: rework\n-->\nOriginal feedback.\n"
     )
+    if damage == "attribution":
+        artifact.write_text(artifact.read_text().replace(report.execution_id, "f" * 32))
+    if damage == "non_atomic":
+        git("mv", "backlog/TASK-2.md", "todo/TASK-2.md")
     git("mv", "review/TASK-1.md", "todo/TASK-1.md")
     git("add", ".")
     git("commit", "-qm", "publish review")
@@ -406,18 +426,27 @@ def test_real_git_rework_rejects_damaged_evidence(tmp_path, damage):
     elif damage == "modified":
         artifact.write_text(artifact.read_text() + "Changed feedback.\n")
         git("add", ".")
-    elif damage == "ticket":
-        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+    git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
+    if damage != "non_atomic":
+        git("mv", "backlog/TASK-2.md", "todo/TASK-2.md")
+    if damage == "ticket":
         (tmp_path / "backlog/TASK-1.md").write_text("changed ticket\n")
-        git("add", ".")
-    else:
-        git("mv", "todo/TASK-1.md", "backlog/TASK-1.md")
-        git("commit", "-qm", "defer")
-        git("mv", "backlog/TASK-1.md", "review/TASK-1.md")
-    git("commit", "-qm", "damage evidence")
-    with pytest.raises(ReviewProvenanceError):
+    if damage == "duplicate":
+        (tmp_path / "accepted/TASK-1.md").write_text("duplicate ticket\n")
+    git("add", ".")
+    git("commit", "-qm", "defer")
+    if damage == "duplicate":
+        # Even a transient conflicting path must block a clean final tree.
+        git("rm", "accepted/TASK-1.md")
+    destination = "review" if damage == "out_of_order" else "todo"
+    git("mv", "backlog/TASK-1.md", f"{destination}/TASK-1.md")
+    if damage == "reschedule_edit":
+        (tmp_path / "todo/TASK-1.md").write_text("changed ticket\n")
+    git("add", ".")
+    git("commit", "-qm", "reschedule")
+    with pytest.raises(ReviewProvenanceError, match=reason):
         resolve_rework_review(
             tmp_path, git("rev-parse", "HEAD"), lifecycle, report,
-            todo_path="todo", review_path="review", backlog_path="backlog",
+            workflow_paths=WORKFLOW,
             runner=run_git,
         )

@@ -199,7 +199,9 @@ def test_running_amendment_publishes_and_reviews_current_spec(
     assert len(ExecutionReportStore(control).list("T-1")) == 2
 
 
-@pytest.mark.parametrize("scenario", ["valid", "missing", "invalid", "race"])
+@pytest.mark.parametrize(
+    "scenario", ["valid", "missing", "invalid", "race", "dependency"],
+)
 def test_owner_admits_amended_continuation_with_historical_review(
     tmp_path, monkeypatch, scenario,
 ):
@@ -236,11 +238,38 @@ def test_owner_admits_amended_continuation_with_historical_review(
     git(control, "commit", "-m", "defer reviewed ticket")
     ticket = control / "kanban/backlog/T-1.md"
     ticket.write_text(ticket.read_text() + "\nAmended requirements.\n")
-    git(control, "add", str(ticket.relative_to(control)))
+    if scenario == "dependency":
+        ticket.write_text(ticket.read_text().replace(
+            "\n---\n", '\n"depends_on":\n  - "D-1"\n---\n', 1,
+        ))
+        (control / "kanban/backlog/D-1.md").write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Dependency"\n---\nwork\n'
+        )
+    git(control, "add", "kanban/backlog")
     git(control, "commit", "-m", "amend ticket")
-    git(control, "mv", "kanban/backlog/T-1.md", "kanban/todo/T-1.md")
-    git(control, "commit", "-m", "schedule amendment")
+    for ticket_id in ("T-2", "T-3", "T-4"):
+        (control / f"kanban/backlog/{ticket_id}.md").write_text(
+            '---\n"type": "devlegate.ticket"\n"title": "Other work"\n'
+            '"depends_on":\n  - "T-1"\n---\nwork\n'
+        )
+    git(control, "add", "kanban/backlog")
+    git(control, "commit", "-m", "add independently scheduled tickets")
+    for source, target, other in (
+        ("backlog", "todo", "T-2"), ("todo", "backlog", "T-3"),
+        ("backlog", "todo", "T-4"),
+    ):
+        git(control, "mv", f"kanban/{source}/T-1.md", f"kanban/{target}/T-1.md")
+        git(control, "mv", f"kanban/backlog/{other}.md", "kanban/todo/")
+        git(control, "commit", "-m", f"move amended ticket to {target}")
     git(control, "push", "origin", "devlegate/control")
+
+    if scenario == "dependency":
+        monkeypatch.setattr(
+            owner._workers, "run", lambda *_a, **_k: pytest.fail("unmet dependency"),
+        )
+        assert run_test_iteration(owner) == 0
+        assert len(ExecutionReportStore(control).list("T-1")) == 1
+        return
 
     if scenario in {"missing", "invalid"}:
         monkeypatch.setattr(

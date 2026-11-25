@@ -4808,9 +4808,7 @@ class ServiceEngine:
                             control_head,
                             lifecycle_commit,
                             previous,
-                            todo_path=self.todo_path,
-                            review_path=self.review_path,
-                            backlog_path=self.backlog_path,
+                            workflow_paths=self._workflow_paths(),
                             runner=self._git_runtime,
                         )
                     except (ReviewProvenanceError, GitObservationError) as error:
