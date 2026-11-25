@@ -551,6 +551,7 @@ class OperatorCommand:
     resolution_class: str | None = None
     plan_digest: str | None = None
     generation: str | None = None
+    include_prompt: bool = False
     reset_intent: dict[str, object] | None = None
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
@@ -1279,18 +1280,20 @@ class ServiceEngine:
 
     def submit_inspect(
         self, object_type: str, object_id: str | None, *, request_id: str,
+        include_prompt: bool = False,
     ) -> dict:
         """Queue a read-only owner observation, without a durable admission."""
         from devlegate.inspection import validate_identity
 
-        validate_identity(object_type, object_id)
+        validate_identity(object_type, object_id, include_prompt=include_prompt)
         return self._submit_operator_command(
             method="inspect", ticket_id=object_id or "__service__",
             onto=object_type, request_id=request_id,
             fingerprint=_mutation_fingerprint(
-                "inspect", {"object_type": object_type, "object_id": object_id or ""},
+                "inspect", {"object_type": object_type, "object_id": object_id or "",
+                            "include_prompt": "1" if include_prompt else "0"},
             ),
-            mutable=False,
+            mutable=False, include_prompt=include_prompt,
         )
 
     def submit_clean_apply(
@@ -1361,6 +1364,7 @@ class ServiceEngine:
         mutable: bool = True,
         plan_digest: str | None = None,
         generation: str | None = None,
+        include_prompt: bool = False,
     ) -> dict[str, object]:
         new_command = False
         with self._operator_command_lock:
@@ -1445,6 +1449,7 @@ class ServiceEngine:
                     mutable=mutable,
                     plan_digest=plan_digest,
                     generation=generation,
+                    include_prompt=include_prompt,
                 )
                 self._operator_command = command
                 new_command = True
@@ -2789,6 +2794,7 @@ class ServiceEngine:
                         command.admission_result = inspect_object(
                             self, command.onto,
                             None if command.onto == "service" else command.ticket_id,
+                            include_prompt=command.include_prompt,
                         )
                     except (
                         ValueError, RuntimeError, OSError, subprocess.SubprocessError,
@@ -5113,6 +5119,7 @@ class ServiceEngine:
                 reviewed_checkpoint if isinstance(reviewed_checkpoint, str) else None
             ),
             admitted_control_head=str(self._state["execution_control_head"]),
+            project_key=self._state_key,
         )
         _log(
             f"worker prompt persisted: execution={execution_id} sha256={prompt_digest}"

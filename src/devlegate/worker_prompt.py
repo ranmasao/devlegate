@@ -74,6 +74,36 @@ def _fenced_content(value: str) -> str:
     return f"{fence}text\n{value}\n{fence}"
 
 
+def project_prompt_component(
+    project: WorkerProjectContext | None,
+) -> tuple[str | None, dict | None]:
+    documents = project.documents if project else ()
+    body = "\n\n".join(_fenced_content(doc.text) for doc in documents) or None
+    source = {
+        "commit": project.commit,
+        "manifest_path": ".devlegate/project.md",
+        "manifest_blob": project.manifest_blob,
+        "documents": [
+            {"path": doc.path, "blob": doc.blob,
+             "sha256": worker_prompt_sha256(doc.text)}
+            for doc in documents
+        ],
+    } if project else None
+    return body, source
+
+
+def review_prompt_component(
+    feedback: str, source: str, historical: bool,
+) -> tuple[str, str]:
+    title = "Historical Review Feedback" if historical else "Current Review Feedback"
+    context = (
+        "This feedback reviews the prior specification and checkpoint only; "
+        "it is not a review of the current assigned work.\n\n"
+        if historical else ""
+    )
+    return title, _fenced_content(f"Source: {source}\n\n{context}{feedback}")
+
+
 def build_worker_prompt(prompt_input: WorkerPromptInput) -> str:
     return render_worker_prompt(prompt_input).text
 
@@ -118,22 +148,8 @@ def render_worker_prompt(prompt_input: WorkerPromptInput) -> RenderedWorkerPromp
 
     add("protocol", "Core Worker Contract", _CORE_CONTRACT, "core_contract.txt")
     add("engineering", "Engineering Principles", _ENGINEERING, "engineering.txt")
-    project = prompt_input.project
-    documents = project.documents if project else ()
-    add("project", "Project Worker Instructions", "\n\n".join(
-        _fenced_content(doc.text) for doc in documents
-    ) if documents else None, {
-        "commit": project.commit,
-        "manifest_path": ".devlegate/project.md",
-        "manifest_blob": project.manifest_blob,
-        "documents": [
-            {
-                "path": doc.path, "blob": doc.blob,
-                "sha256": worker_prompt_sha256(doc.text),
-            }
-            for doc in documents
-        ],
-    } if project else None)
+    body, source = project_prompt_component(prompt_input.project)
+    add("project", "Project Worker Instructions", body, source)
     add("change_explorer", "Change Explorer", _CHANGE_EXPLORER
         if prompt_input.change_explorer_available else None, "change_explorer.txt")
     add("blackboard", "Blackboard", _BLACKBOARD_GUIDANCE
@@ -150,17 +166,12 @@ def render_worker_prompt(prompt_input: WorkerPromptInput) -> RenderedWorkerPromp
         if not _content(feedback):
             raise ValueError("review feedback must not be empty")
         source = _content(prompt_input.review_source or "verified curator review")
-        title = "Historical Review Feedback" if prompt_input.historical_review else (
-            "Current Review Feedback"
-        )
-        context = (
-            "This feedback reviews the prior specification and checkpoint only; "
-            "it is not a review of the current assigned work.\n\n"
-            if prompt_input.historical_review else ""
+        title, body = review_prompt_component(
+            feedback, source, prompt_input.historical_review,
         )
         add(
             "review", title,
-            _fenced_content(f"Source: {source}\n\n{context}{feedback}"),
+            body,
             "verified historical review" if prompt_input.historical_review
             else "verified review",
         )
@@ -178,6 +189,12 @@ def worker_prompt_sha256(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
+def worker_prompt_artifact_path(state_dir: Path, execution_id: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", execution_id):
+        raise ValueError("invalid worker prompt execution identity")
+    return state_dir / "prompts" / f"{execution_id}.json"
+
+
 def write_worker_prompt_artifact(
     state_dir: Path,
     execution_id: str,
@@ -191,16 +208,17 @@ def write_worker_prompt_artifact(
     reviewed_execution_id: str | None = None,
     reviewed_checkpoint: str | None = None,
     admitted_control_head: str | None = None,
+    project_key: str | None = None,
 ) -> Path:
     """Atomically retain a private, exact prompt diagnostic for operators."""
-    root = state_dir / "prompts"
+    path = worker_prompt_artifact_path(state_dir, execution_id)
+    root = path.parent
     if root.is_symlink():
         raise ValueError(f"worker prompt diagnostic directory is symlinked: {root}")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if not root.is_dir():
         raise ValueError(f"worker prompt diagnostic path is not a directory: {root}")
     os.chmod(root, 0o700)
-    path = root / f"{execution_id}.json"
     payload = {
         "admitted_control_head": admitted_control_head,
         "directive": directive.value,
@@ -216,6 +234,8 @@ def write_worker_prompt_artifact(
         "reviewed_execution_id": reviewed_execution_id,
         "ticket_id": ticket_id,
     }
+    if project_key is not None:
+        payload["project_key"] = project_key
     temporary_name = None
     try:
         with tempfile.NamedTemporaryFile(

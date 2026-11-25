@@ -4,6 +4,7 @@
 """Universal inspection uses exact immutable evidence and existing owner IO."""
 
 import json
+import os
 import sys
 import threading
 import unicodedata
@@ -22,7 +23,17 @@ from devlegate.inspection import (
 )
 from devlegate.ipc_protocol import IPCProtocolError, IPCRequest
 from devlegate.ipc_server import dispatch_request
+from devlegate.operational_log import execution_log_path
 from devlegate.runtime import OperatorCommand
+from devlegate.worker_prompt import (
+    WorkDirective,
+    WorkerPromptInput,
+    mark_worker_prompt_sent,
+    render_worker_prompt,
+    worker_prompt_artifact_path,
+    worker_prompt_sha256,
+    write_worker_prompt_artifact,
+)
 
 
 @pytest.fixture
@@ -108,10 +119,102 @@ def test_cli_read_only_ipc(owner, monkeypatch, capsys, kind):
     {"object_type": "prune", "object_id": "T-1"},
     {"object_type": "workspace", "object_id": "T-1", "apply": True},
     {"object_type": [], "object_id": "T-1"},
+    {"object_type": "ticket", "object_id": "T-1", "include_prompt": True},
+    {"object_type": "execution", "object_id": "exact", "include_prompt": 1},
 ])
 def test_ipc_strict_validation(payload):
     with pytest.raises(IPCProtocolError, match="inspection"):
         dispatch_request(object(), IPCRequest(1, "invalid", "inspect", payload))
+
+
+@pytest.fixture
+def journal(owner):
+    identifier = owner._state["execution_id"]
+    return identifier, worker_prompt_artifact_path(owner.state_dir, identifier)
+
+
+@pytest.mark.parametrize(("change", "status", "reason"), [
+    ("missing", "missing", ""),
+    ("legacy", "present", ""),
+    ("digest", "unavailable", "SHA-256"),
+    ("manifest", "unavailable", "manifest"),
+    ("project-source", "unavailable", "component provenance"),
+    ("execution", "unavailable", "mismatch"),
+    ("ticket", "unavailable", "mismatch"),
+    ("control", "unavailable", "admission"),
+    ("project", "unavailable", "foreign"),
+    ("file-link", "unavailable", "linked"),
+    ("directory-link", "unavailable", "safely read"),
+    ("fifo", "unavailable", "non-regular"),
+    ("oversized", "unavailable", "IPC limit"),
+    ("malformed", "unavailable", "Malformed"),
+])
+def test_prompt_journal_evidence_gaps(owner, journal, change, status, reason):
+    from devlegate.ipc_protocol import MAX_PAYLOAD_BYTES
+
+    identifier, path = journal
+    payload = json.loads(path.read_text())
+    exact = payload["prompt"]
+    path.unlink()
+    if change == "missing":
+        pass
+    elif change == "file-link":
+        alternate = path.with_suffix(".alternate")
+        alternate.write_text(json.dumps(payload))
+        path.symlink_to(alternate)
+    elif change == "directory-link":
+        alternate = path.parent.with_name("alternate")
+        path.parent.rename(alternate)
+        (alternate / path.name).write_text(json.dumps(payload))
+        path.parent.symlink_to(alternate)
+    elif change == "fifo":
+        os.mkfifo(path)
+    elif change == "oversized":
+        with path.open("wb") as stream:
+            stream.truncate(MAX_PAYLOAD_BYTES + 1)
+    elif change == "malformed":
+        path.write_bytes(b"\xff")
+    else:
+        if change == "legacy":
+            del payload["components"], payload["project_key"]
+        elif change == "manifest":
+            payload["components"][0]["offset"] = 1
+        elif change == "project-source":
+            payload["components"][2]["source"]["documents"] = [{"path": "PRIVATE"}]
+        else:
+            fields = {"digest": "prompt_sha256", "execution": "execution_id",
+                      "ticket": "ticket_id", "control": "admitted_control_head",
+                      "project": "project_key"}
+            payload[fields[change]] = "PRIVATE-FOREIGN-VALUE"
+        path.write_text(json.dumps(payload))
+        path.chmod(0o600)
+
+    observation = inspect_object(
+        owner, "execution", identifier, include_prompt=True,
+    )["observation"]
+    assert observation["provenance_state"] == "proved"
+    assert observation["report"]["execution_id"] == identifier
+    prompt = observation["worker_prompt"]
+    assert prompt["status"] == status
+    assert reason in prompt.get("reason", "")
+    assert "PRIVATE" not in json.dumps(prompt)
+    if change == "legacy":
+        assert prompt["manifest"] == "absent"
+        assert prompt["project_binding"] == "local generation"
+        assert prompt["text"] == exact and prompt["delivery"] == "constructed"
+    else:
+        assert "text" not in prompt
+
+
+@pytest.mark.parametrize("kind", ["ticket", "workspace", "service"])
+def test_cli_rejects_prompt_for_other_objects(monkeypatch, kind):
+    from devlegate.cli import main
+
+    args = ["T-1"] if kind != "service" else []
+    monkeypatch.setattr(sys, "argv", ["devlegate", "inspect", kind, *args, "--prompt"])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
 
 
 @pytest.mark.parametrize("identifier", ["missing", "T-1", "HEAD", "main"])
@@ -605,9 +708,129 @@ def test_execution_render_proved_review(owner):
     git(control, "commit", "-m", "review fixture")
     view = inspect_object(owner, "execution", identifier)
     assert view["observation"]["review"]["state"] == "proved"
+    log = execution_log_path(owner.state_dir, owner._state_key, identifier)
+    log.unlink(missing_ok=True)
+    worker_prompt_artifact_path(owner.state_dir, identifier).unlink()
+    absent = inspect_object(owner, "execution", identifier, include_prompt=True)
+    assert absent["observation"]["review"] == view["observation"]["review"]
+    assert absent["observation"]["local_log"] == {"path": str(log), "status": "missing"}
+    assert absent["observation"]["worker_prompt"] == {"status": "missing"}
+    log.mkdir(parents=True)
+    unavailable = inspect_object(owner, "execution", identifier)["observation"]
+    assert unavailable["local_log"]["status"] == "unavailable"
+    assert unavailable["local_log"]["path"] == str(log)
+    assert unavailable["review"] == view["observation"]["review"]
     text = _render_execution_inspection(view)
     assert "Review state: proved" in text and "Decision: rework" in text
     assert "First finding\nSecond finding" in text
+
+
+@pytest.mark.parametrize("output", ["--json", "--yaml", None, "oversized-response"])
+def test_execution_prompt_cli_over_real_owner_socket(
+    owner, journal, short_state_dir, monkeypatch, capsys, output,
+):
+    import devlegate.cli as cli
+    from devlegate._vendor import nanoyaml
+    from devlegate.ipc_client import request
+    from devlegate.ipc_protocol import MAX_PAYLOAD_BYTES
+    from devlegate.ipc_server import UnixIPCServer
+    from devlegate.project_context import load_worker_project_context
+
+    identifier, path = journal
+    original = json.loads(path.read_text())
+    assignment = "JOURNAL-ONLY: café 界 🙂\nunsafe:\x1b[2J\x00\r\x85\u202e\n"
+    project_commit = original["components"][2]["source"]["commit"]
+    context = load_worker_project_context(owner.repo, project_commit)
+
+    def save(assignment):
+        rendered = render_worker_prompt(WorkerPromptInput(
+            assignment, WorkDirective.FRESH, project=context,
+        ))
+        write_worker_prompt_artifact(
+            owner.state_dir, identifier, rendered, ticket_id="T-1",
+            directive=WorkDirective.FRESH, review_path=None, review_sha256=None,
+            admitted_control_head=original["admitted_control_head"],
+            project_key=owner._state_key,
+        )
+        mark_worker_prompt_sent(path)
+        return rendered.text
+
+    exact = save(assignment)
+    owner._state.pop("worker_prompt_sha256", None)
+    if output == "oversized-response":
+        # The journal remains readable, but the whole response will not fit.
+        exact = save("x" * (MAX_PAYLOAD_BYTES - path.stat().st_size + 25))
+        assert path.stat().st_size <= MAX_PAYLOAD_BYTES
+        assert (inspect_object(owner, "execution", identifier, include_prompt=True)
+                ["observation"]["worker_prompt"]["text"]) == exact
+    log = execution_log_path(owner.state_dir, owner._state_key, identifier)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("PRIVATE LOG BODY\n")
+    owner.status_view()
+    socket = short_state_dir / "prompt-inspect.sock"
+    server = UnixIPCServer(owner, socket)
+    monkeypatch.setattr(cli, "request", lambda _, *args: request(socket, *args))
+    owner.begin_hosted_owner()
+    server.start()
+    state = owner._runtime_store.observe()
+    before = snapshot(owner.repo.parent)
+
+    def cli_request(flags, include_prompt):
+        monkeypatch.setattr(sys, "argv", [
+            "devlegate", "inspect", "execution", identifier, *flags,
+        ])
+        results = []
+        thread = threading.Thread(target=lambda: results.append(cli.main()))
+        thread.start()
+        assert owner._service_wake.wait(2)
+        owner._service_wake.clear()
+        command, _ = owner._claim_owner_work(True)
+        assert command is not None and not command.mutable
+        assert command.include_prompt is include_prompt
+        owner._admit_operator_command(command)
+        owner._release_operator_command()
+        thread.join(5)
+        assert results == [0]
+        captured = capsys.readouterr()
+        assert not captured.err
+        assert "PRIVATE LOG BODY" not in captured.out
+        return captured.out
+
+    try:
+        default = cli_request(["--json"], False)
+        observation = json.loads(default)["observation"]
+        assert observation["local_log"] == {"path": str(log), "status": "present"}
+        prompt = observation["worker_prompt"]
+        assert observation["id"] == identifier == observation["report"]["execution_id"]
+        assert prompt["manifest"] == "validated"
+        assert "assignment" in prompt["components"]
+        assert prompt["directive"] == "fresh" and prompt["delivery"] == "sent"
+        assert prompt["sha256"] == worker_prompt_sha256(exact)
+        assert "text" not in prompt and "JOURNAL-ONLY" not in default
+        assert project_commit not in json.dumps(prompt)
+        fmt = "--json" if output == "oversized-response" else output
+        explicit = cli_request(["--prompt", *([fmt] if fmt else [])], True)
+        if fmt:
+            parse = json.loads if fmt == "--json" else nanoyaml.loads
+            parsed = parse(explicit)
+            observed = parsed["observation"]["worker_prompt"]
+            assert observed["sha256"] == prompt["sha256"]
+            if output == "oversized-response":
+                assert observed["text_status"] == "unavailable"
+                assert "omit --prompt" in observed["text_reason"]
+                assert "text" not in observed
+                assert parsed["observation"]["report"] == observation["report"]
+            else:
+                assert observed["text"].encode() == exact.encode()
+                assert observed["delivery"] == "sent"
+        else:
+            assert "JOURNAL-ONLY: café 界 🙂" in explicit and "\\u001b[2J" in explicit
+            assert not set(explicit).intersection("\x1b\x00\r\x85\u202e")
+        assert snapshot(owner.repo.parent) == before
+        assert owner._runtime_store.observe() == state
+    finally:
+        server.stop()
+        owner.end_hosted_owner()
 
 
 @pytest.mark.parametrize("kind", ["ticket", "execution", "workspace", "service"])

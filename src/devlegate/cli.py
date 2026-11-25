@@ -556,6 +556,30 @@ def _render_execution_inspection(result: dict) -> str:
                        ("Checkpoint matches current", "checkpoint_matches_current")):
         field(label, generation.get(key))
 
+    local_log = mapping(observation.get("local_log"))
+    prompt = mapping(observation.get("worker_prompt"))
+    section("Local diagnostics (not committed history or remote availability)")
+    for label, value in (("Log state", local_log.get("status")),
+                         ("Log path", local_log.get("path")),
+                         ("Log detail", local_log.get("reason")),
+                         ("Prompt state", prompt.get("status")),
+                         ("Prompt detail", prompt.get("reason")),
+                         ("Prompt SHA-256", prompt.get("sha256")),
+                         ("Directive", prompt.get("directive")),
+                         ("Local delivery", prompt.get("delivery")),
+                         ("Project binding", prompt.get("project_binding")),
+                         ("Project component", prompt.get("project_component")),
+                         ("Review binding", prompt.get("review_binding")),
+                         ("Component manifest", prompt.get("manifest")),
+                         ("Prompt text", prompt.get("text_status")),
+                         ("Prompt text detail", prompt.get("text_reason"))):
+        if value is not None:
+            field(label, value)
+    if "components" in prompt:
+        items("Included component", prompt["components"])
+    if "text" in prompt:
+        block("Saved worker prompt (terminal controls escaped)", prompt["text"])
+
     section("Blockers")
     items("Blocker", result.get("blockers"))
     if artifact.get("text") is not None:
@@ -785,10 +809,13 @@ def _render_service_inspection(result: dict) -> str:
 def _inspect_daemon(env_file: Path, args) -> int:
     try:
         locator = RuntimeLocator.from_env(env_file)
-        result = request(locator.socket_path, "inspect", {
+        payload = {
             "object_type": args.object_type,
             "object_id": getattr(args, "object_id", None),
-        })
+        }
+        if getattr(args, "prompt", False):
+            payload["include_prompt"] = True
+        result = request(locator.socket_path, "inspect", payload)
     except (RuntimeLocatorError, IPCClientError) as error:
         raise DevlegateError(str(error)) from error
     if args.object_type == "service":
@@ -3263,6 +3290,11 @@ def build_parser() -> argparse.ArgumentParser:
         object_parser = inspect_commands.add_parser(object_type)
         if object_type != "service":
             object_parser.add_argument("object_id")
+        if object_type == "execution":
+            object_parser.add_argument(
+                "--prompt", action="store_true",
+                help="show the exact retained worker prompt",
+            )
         add_output_arguments(object_parser)
     recover_parser = commands.add_parser(
         "recover",

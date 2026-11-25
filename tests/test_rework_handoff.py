@@ -298,6 +298,31 @@ def test_owner_admits_amended_continuation_with_historical_review(
     )
     assert artifact.read_text().endswith("Review of original specification.\n")
 
+    import json
+
+    from devlegate.inspection import inspect_object
+    from devlegate.worker_prompt import worker_prompt_artifact_path
+
+    journal = worker_prompt_artifact_path(owner.state_dir, new_report.execution_id)
+    payload = json.loads(journal.read_text())
+    view = inspect_object(
+        owner, "execution", new_report.execution_id, include_prompt=True,
+    )
+    prompt = view["observation"]["worker_prompt"]
+    assert prompt["status"] == "present", prompt
+    assert prompt["review_binding"] == "historical"
+    assert prompt["text"] == payload["prompt"]
+
+    payload["review_publication"] = new_report.control_head
+    journal.write_text(json.dumps(payload))
+    rejected = inspect_object(
+        owner, "execution", new_report.execution_id, include_prompt=True,
+    )
+    assert rejected["observation"]["report"] == view["observation"]["report"]
+    prompt = rejected["observation"]["worker_prompt"]
+    assert prompt["status"] == "unavailable" and "review binding" in prompt["reason"]
+    assert "text" not in prompt
+
 
 @pytest.fixture
 def interrupted_rework(tmp_path, monkeypatch):
