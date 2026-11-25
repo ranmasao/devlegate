@@ -1,0 +1,34 @@
+{
+  "code_base_head": "fd7acdb74aec725e8e2bd322c219fa7d7652d97f",
+  "conclusion": "incomplete",
+  "control_head": "0312b04e9db8b8656cbe313aa1cba7ceaf1c1d4b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-182",
+  "execution_id": "abab311eafae498ead7e557e42fc2f62",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-182",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete release proof on the final clean checkpoint: run the normal standalone A/B build and prove commands, assemble and validate standalone, Arch, and Debian artifacts with real dpkg-deb, then require exact-SHA hosted CI and independent review."
+  ],
+  "report_artifact": "executions/TASK-182/abab311eafae498ead7e557e42fc2f62.md",
+  "report_sha256": "66256583152e4b9b13de75e0d40477b729932eced7b9bea0db8a3c09f8939c7d",
+  "resource_generation": "d222e52d2af0dea95e129cf1b3538f7a3138869aa8fce9ddb3a819c67929ad00",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-182",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete release proof on the final clean checkpoint: run the normal standalone A/B build and prove commands, assemble and validate standalone, Arch, and Debian artifacts with real dpkg-deb, then require exact-SHA hosted CI and independent review."
+    ],
+    "report": "The focused packaging suite passed (154 tests), including tests using real dpkg-deb; Ruff and git diff --check passed. Independently reconciled the verified PBS archive and wheel against the manifest. Two local wheel/scie builds agreed, and the resulting executable passed real split-payload validation and isolated Git-backed service smoke with CPython 3.12.16. These lab builds used production build primitives from the editable workspace; they are not final clean-checkpoint package evidence. The normal release build requires the Devlegate-owned clean checkpoint, which cannot be created by this worker.",
+    "summary": "Pinned bundled CPython 3.12.16 to the verified PBS 20261124 Linux GNU asset and updated the independent Science fixtures and distribution references. Added exact CPython, pip 26.3, and vendored legal snapshots and made standalone and native validation compare them against the split PBS payload and embedded wheel."
+  },
+  "workspace_head": "3b9b6d6fe7b1d8514f8b06cb732b534c2f15397b"
+}
