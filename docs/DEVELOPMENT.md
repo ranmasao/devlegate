@@ -118,6 +118,63 @@ after the branch's checks succeed.
 
 Runs the CLI installed in the repository `.venv`.
 
+## Committed workflow observations
+
+Consumers in TASK-196 should keep one `WorkflowProjectionCache(control_repo,
+workflow_paths)` per configured project/owner and call `observe(control_head)`
+on the serialized read path. Pass the full local control commit ID already
+resolved by the caller. The returned `WorkflowProjection.control_head` always
+names that exact commit, even when `graph` is the same immutable object returned
+for a different commit. `graph.by_id` retains all canonical claims, including
+duplicates. Each claim records its repository-relative path, state, object
+identity, and exact UTF-8 text and parsed ticket when available. Parsed ticket
+bodies use the same newline normalization as the working-tree store.
+
+The graph cache key is the ordered set of configured state/path pairs and their
+committed tree IDs, including absent paths and the mode/object ID of wrong-kind
+entries. Changes outside those trees, even within their common parent, do not
+invalidate the graph. Reads use one commit verification and one configured-tree
+lookup. A miss lists each distinct state tree and reads uncached regular ticket
+blobs in one Git batch. Blob entries cache intrinsic content or parse failures;
+the graph binds each entry to its current path and validates self-references
+again. The two process-local LRU caches default to four graphs and 2,048 parsed
+blobs. A new owner or an evicted entry can reconstruct from local Git objects.
+
+Absent/wrong-kind state directories, malformed tickets and invalid dependencies
+or reservations are diagnostics; an invalid graph has no `TicketStore`, no
+runnable tickets and no selection. A present empty directory is valid. Git
+failures or invalid object responses raise `GitObservationError` without
+publishing a partial graph or falling back to another revision. Reads disable
+replacement objects and lazy fetch. Already materialized objects may be reused
+without rechecking their availability; the result records committed facts, not
+object retention, local or remote ref continuity, workspace or runtime identity,
+review provenance, or permission to mutate anything.
+
+### Representative read-path measurement
+
+Run `./dev test -q -s tests/test_workflow_projection.py::test_representative_packed_history`.
+The disposable SHA-1 repository contains 210 tickets across six states and six
+commits, with dependency edges. `git gc --prune=now` packs the initial history;
+the unrelated and workflow update commits add loose objects. The baseline
+replicates inspection's graph read (one recursive listing, one read and parse per
+ticket); it excludes selected-ticket rereads, history and provenance queries.
+Timings below are from one local Linux run with Git 2.56.1 and Python 3.14.10;
+"cold" means an empty process cache, not a flushed filesystem cache. Timings
+exclude fixture setup and are illustrative; the regression asserts counts and
+reuse, not elapsed-time limits.
+
+| Observation | Elapsed | Git subprocesses | Ticket content parses |
+| --- | ---: | ---: | ---: |
+| Per-ticket inspection reads | 574.34 ms | 211 | 210 |
+| Cold projection | 48.88 ms | 9 | 210 |
+| Warm same commit | 5.51 ms | 2 | 0 |
+| Unrelated commit | 5.06 ms | 2 | 0 |
+| Two edited blobs and one move | 26.48 ms | 9 | 2 |
+
+The two warm observations share the same graph and make no blob reads. The
+update rebuilds the graph, reuses 208 parsed contents (including the moved
+ticket), and reads the two edited blobs in one batch.
+
 ## Packaging
 
 `./dev package` is the canonical source-tree interface for building validated

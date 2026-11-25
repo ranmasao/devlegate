@@ -43,7 +43,7 @@ def canonical_digest(identity: dict) -> str:
 
 def observe_git(
     repo: Path, *args: str, check: bool = True,
-    input_text: str | None = None, **kwargs,
+    input_text: str | None = None, binary: bool = False, **kwargs,
 ):
     """No index refresh, lazy fetch, hooks, fsmonitor, or ambient Git injection."""
     _safe_path(repo)
@@ -57,11 +57,14 @@ def observe_git(
         "LC_ALL": "C", "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
         "GIT_TERMINAL_PROMPT": "0",
     })
+    payload = input_text
+    if binary and input_text is not None:
+        payload = input_text.encode("ascii")
     return subprocess.run(
         ["git", "--no-optional-locks", "--no-replace-objects", "--no-pager",
          "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
          "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
-        input=input_text, text=True, capture_output=True, check=check,
+        input=payload, text=not binary, capture_output=True, check=check,
         env=environment, timeout=30,
         **kwargs,
     )
