@@ -1,0 +1,30 @@
+{
+  "code_base_head": "2e84d4bd6d3a5c7a037f48a0261c1f388739898e",
+  "conclusion": "completed",
+  "control_head": "03e4df16bf8f9cbe285f80b2623a3eb85ae07d4c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-193",
+  "execution_id": "27a8864e4af74dfb91926b075696907c",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-193",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-193/27a8864e4af74dfb91926b075696907c.md",
+  "report_sha256": "d2101355b5b56e4054ca91e2abdd216e2ca8771f955d4a64eaf0068f1df747f5",
+  "resource_generation": "c51de7a8a0e247779e592f1fb3ba199d2535d86bf2260e84a7a396bca7e452a1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-193",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Final focused runs passed 89 cases covering real Git history, owner admission, persisted restart and handoff, inspection, and real-service IPC. ./dev lint and git diff --check passed. A broader inspection run hit the local timeout; the relevant inspection nodes passed separately. Hosted exact-checkpoint CI remains the independent integration gate.",
+    "summary": "REWORK provenance follows exact canonical ticket paths through repeated shared deferral and rescheduling commits while retaining the original review artifact and publication. Persisted bindings support the longer transition history, and prompt inspection uses the same resolver."
+  },
+  "workspace_head": "fd7acdb74aec725e8e2bd322c219fa7d7652d97f"
+}
