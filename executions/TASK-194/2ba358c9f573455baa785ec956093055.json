@@ -1,0 +1,30 @@
+{
+  "code_base_head": "4338f6d4721c01a96893e916241193f74afd80dd",
+  "conclusion": "completed",
+  "control_head": "adcd0896378d1d9d9495f4409d6c379a116389f0",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-194",
+  "execution_id": "2ba358c9f573455baa785ec956093055",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-194",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-194/2ba358c9f573455baa785ec956093055.md",
+  "report_sha256": "ad351db3955ca006c61684aa7214db20f10100cea1fce89743992de1cfb521f0",
+  "resource_generation": "cffc5747581cf662ee086eda368eb9f0a5a9cd64801ba34499bd2eaf036b5dc1",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-194",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "98 focused tests passed, plus ./dev lint and git diff --check (including the cumulative diff from 4338f6d). Two broader local selections hit the tool time limit; the final focused selections completed. All 30 repeated real IPC observations in the final live run completed within the unchanged 750 ms supervision budget; warm ticket reads took about 162\u2013170 ms with 23 Git launches (2 graph lookup, 1 path history, 20 identity; no blob reads). Exact-checkpoint hosted CI remains the independent integration gate.",
+    "summary": "Preserved owner-serialized live inspection on the shared committed workflow projection. Extended the real CLI/IPC regression to a 212-ticket control history during ordinary execution and admitted retry, and documented the measured Git and latency costs."
+  },
+  "workspace_head": "ab7f318589cb98fb2379a458b15701fb8b4751c7"
+}
