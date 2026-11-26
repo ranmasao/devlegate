@@ -185,9 +185,11 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     dry_counts = Counter(x[0] for x in trace[:boundary])
     applied = trace[boundary:]
     apply_counts = Counter(x[0] for x in applied)
-    assert len(trace[:boundary]) == 26 and dry_counts["fetch"] == 1
+    # Workflow reuse resolves a fresh HEAD; immutable object reads use the
+    # separate observation runner (which deliberately strips GIT_TRACE2_EVENT).
+    assert len(trace[:boundary]) == 27 and dry_counts["fetch"] == 1
     assert dry_counts["ls-remote"] == 3
-    assert len(applied) == 104
+    assert len(applied) == 109
     assert (
         apply_counts["fetch"], apply_counts["ls-remote"],
         apply_counts["update-ref"], apply_counts["push"],

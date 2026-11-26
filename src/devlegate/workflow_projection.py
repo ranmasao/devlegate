@@ -60,6 +60,9 @@ class CommittedWorkflowGraph:
     by_id: Mapping[str, tuple[CommittedTicket, ...]]
     diagnostics: tuple[str, ...]
     store: TicketStore | None
+    inspection_blockers: tuple[str, ...]
+    inspection_invalid_path: str | None
+    working_fingerprint: str
 
     @property
     def runnable(self) -> tuple[Ticket, ...]:
@@ -80,6 +83,36 @@ class _ParsedBlob:
     text: str | None
     content: TicketContent | None
     error: str | None
+    digest: str
+
+
+def _fingerprint(entries: list[str]) -> str:
+    return hashlib.sha256("".join(entries).encode()).hexdigest()
+
+
+def working_workflow_fingerprint(repo: Path, paths: Mapping[str, str]) -> str:
+    """Read fresh canonical names, kinds and bytes, including ignored entries."""
+    entries = []
+    for state in WORKFLOW_STATES:
+        directory = repo / paths[state]
+        if directory.is_symlink():
+            entries.append(f"{state}\0symlink\n")
+        elif directory.is_dir():
+            entries.append(f"{state}\0dir\n")
+            for path in sorted(directory.iterdir(), key=lambda item: item.name):
+                if not is_canonical_ticket_name(path.name):
+                    continue
+                if path.is_symlink():
+                    kind, digest = "symlink", ""
+                elif path.is_file():
+                    kind, digest = "file", hashlib.sha256(path.read_bytes()).hexdigest()
+                else:
+                    kind, digest = "other", ""
+                entries.append(f"{state}/{path.name}\0{kind}\0{digest}\n")
+        else:
+            kind = "non-directory" if directory.exists() else "missing"
+            entries.append(f"{state}\0{kind}\n")
+    return _fingerprint(entries)
 
 
 def _remember(cache: OrderedDict, key, value, capacity: int) -> None:
@@ -146,9 +179,12 @@ class WorkflowProjectionCache:
             raise GitObservationError(message) from error
         return result.stdout
 
-    def _tree(self, oid: str, *paths: str) -> dict[str, tuple[str, str]]:
+    def _tree(
+        self, oid: str, *paths: str, recursive: bool = False,
+    ) -> dict[str, tuple[str, str]]:
         raw = self._git(
-            "--literal-pathspecs", "ls-tree", "--full-tree", "-zt", oid, "--", *paths,
+            "--literal-pathspecs", "ls-tree", "--full-tree", "-zt",
+            *(('-r',) if recursive else ()), oid, "--", *paths,
         )
         rows = raw.split(b"\0")
         entries = {}
@@ -200,19 +236,22 @@ class WorkflowProjectionCache:
             if raw[offset:offset + 1] != b"\n" or digest.hexdigest() != oid:
                 raise GitObservationError(f"inconsistent workflow blob content: {oid}")
             offset += 1
+            fingerprint = hashlib.sha256(payload).hexdigest()
             try:
                 text = payload.decode("utf-8")
             except UnicodeDecodeError:
-                blobs[oid] = _ParsedBlob(None, None, "ticket text is not UTF-8")
+                blobs[oid] = _ParsedBlob(
+                    None, None, "ticket text is not UTF-8", fingerprint,
+                )
                 continue
             try:
                 content = parse_ticket_content(
                     text.replace("\r\n", "\n").replace("\r", "\n")
                 )
             except TicketError as error:
-                blobs[oid] = _ParsedBlob(text, None, str(error))
+                blobs[oid] = _ParsedBlob(text, None, str(error), fingerprint)
             else:
-                blobs[oid] = _ParsedBlob(text, content, None)
+                blobs[oid] = _ParsedBlob(text, content, None, fingerprint)
         if offset != len(raw):
             raise GitObservationError("trailing data in workflow blob batch response")
         return blobs
@@ -221,6 +260,7 @@ class WorkflowProjectionCache:
         self, directories: tuple[WorkflowDirectory, ...],
     ) -> CommittedWorkflowGraph:
         diagnostics = []
+        nonregular_evidence = []
         listing = {}
         claims = []
         for directory in directories:
@@ -228,12 +268,16 @@ class WorkflowProjectionCache:
                 diagnostics.append(
                     f"managed workflow directory is unavailable: {directory.path}"
                 )
+                if directory.mode not in {None, "100644"}:
+                    nonregular_evidence.append(directory.path)
                 continue
             oid = directory.object_id
             if oid not in listing:
-                listing[oid] = self._tree(oid)
+                listing[oid] = self._tree(oid, recursive=True)
             for name, (mode, obj) in sorted(listing[oid].items()):
-                if is_canonical_ticket_name(name):
+                if mode not in {"040000", "100644"}:
+                    nonregular_evidence.append(f"{directory.path}/{name}")
+                if "/" not in name and is_canonical_ticket_name(name):
                     claims.append((directory, name, mode, obj))
 
         regular = {"100644", "100755"}
@@ -244,6 +288,7 @@ class WorkflowProjectionCache:
         by_id = defaultdict(list)
         entries = []
         tickets = []
+        signatures: dict[str, list[str]] = defaultdict(list)
         for directory, name, mode, obj in claims:
             relative = f"{directory.path}/{name}"
             path = self._repo / relative
@@ -252,9 +297,11 @@ class WorkflowProjectionCache:
             ticket = text = diagnostic = blob = None
             if mode not in regular:
                 diagnostic = f"invalid managed ticket entry: {path}"
+                kind, digest = ("symlink" if mode == "120000" else "other"), ""
             else:
                 blob = obj
                 parsed = blobs[obj]
+                kind, digest = "file", parsed.digest
                 text = parsed.text
                 if parsed.content is None:
                     diagnostic = f"invalid ticket {path}: {parsed.error}"
@@ -265,6 +312,7 @@ class WorkflowProjectionCache:
                         )
                     except TicketError as error:
                         diagnostic = str(error)
+            signatures[directory.state].append(f"{directory.state}/{name}\0{kind}\0{digest}\n")
             entry = CommittedTicket(
                 ticket_id, directory.state, relative, mode, obj,
                 blob, text, ticket, diagnostic,
@@ -275,13 +323,27 @@ class WorkflowProjectionCache:
                 diagnostics.append(diagnostic)
             if ticket is not None:
                 tickets.append(ticket)
-        diagnostics.extend(map(str, ticket_graph_errors(tickets, locations)))
+        graph_errors = tuple(ticket_graph_errors(tickets, locations))
+        diagnostics.extend(map(str, graph_errors))
+        inspection_blockers = tuple(
+            error.inspection_blocker for error in graph_errors
+            if error.inspection_blocker is not None
+        )
+        working_entries = []
+        for directory in directories:
+            kind = {"040000": "dir", "120000": "symlink", None: "missing"}.get(
+                directory.mode, "non-directory",
+            )
+            working_entries.append(f"{directory.state}\0{kind}\n")
+            working_entries.extend(signatures[directory.state])
         index = MappingProxyType({k: tuple(v) for k, v in by_id.items()})
         store = None if diagnostics else TicketStore(
             tuple(sorted(tickets, key=lambda ticket: ticket.id))
         )
         graph = CommittedWorkflowGraph(
             directories, tuple(entries), index, tuple(diagnostics), store,
+            inspection_blockers, min(nonregular_evidence, default=None),
+            _fingerprint(working_entries),
         )
         for oid in oids:
             _remember(self._blobs, oid, blobs[oid], self._blob_capacity)

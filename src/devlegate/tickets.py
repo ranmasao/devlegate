@@ -17,6 +17,10 @@ from ._vendor.nanoyaml import NanoYAMLError, loads
 class TicketError(ValueError):
     """Raised when managed ticket storage or its graph is invalid."""
 
+    def __init__(self, message: str, *, inspection_blocker: str | None = None):
+        super().__init__(message)
+        self.inspection_blocker = inspection_blocker
+
 
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 WORKFLOW_STATES = ("backlog", "todo", "review", "accepted", "done", "abandoned")
@@ -255,7 +259,8 @@ def _validate_cycles(tickets: Mapping[str, Ticket]) -> None:
         if ticket_id in visiting:
             start = stack.index(ticket_id)
             cycle = stack[start:] + [ticket_id]
-            raise TicketError(f"dependency cycle: {' -> '.join(cycle)}")
+            message = f"dependency cycle: {' -> '.join(cycle)}"
+            raise TicketError(message, inspection_blocker=message)
         visiting.add(ticket_id)
         stack.append(ticket_id)
         for dependency in sorted(tickets[ticket_id].depends_on):
@@ -300,15 +305,20 @@ def ticket_graph_errors(
     for ticket_id, paths in sorted(locations.items()):
         if len(paths) > 1:
             formatted = "\n".join(f"  {path}" for path in paths)
-            yield TicketError(f"duplicate ticket ID {ticket_id}:\n{formatted}")
+            yield TicketError(
+                f"duplicate ticket ID {ticket_id}:\n{formatted}",
+                inspection_blocker=f"ambiguous dependency graph ticket: {ticket_id}",
+            )
             ambiguous = True
     by_id = {ticket.id: ticket for ticket in tickets}
     missing = False
     for ticket in sorted(tickets, key=lambda item: item.id):
         for dependency in ticket.depends_on:
             if dependency not in locations:
+                blocker = f"missing dependency: {ticket.id} -> {dependency}"
                 yield TicketError(
-                    f"missing dependency: {ticket.id} depends on {dependency}"
+                    f"missing dependency: {ticket.id} depends on {dependency}",
+                    inspection_blocker=blocker,
                 )
             if dependency not in by_id:
                 missing = True

@@ -228,6 +228,11 @@ from devlegate.worker_supervisor import (
     WorkerSupervisor,
     observe_worker_identity,
 )
+from devlegate.workflow_projection import (
+    WorkflowProjection,
+    WorkflowProjectionCache,
+    working_workflow_fingerprint,
+)
 
 
 class WorkflowBlockedError(DevlegateError):
@@ -634,34 +639,6 @@ def _control_reconcile_request_fingerprint(from_head: str, to_head: str) -> str:
     )
 
 
-def _workflow_fingerprint(repo: Path, workflow_paths: dict[str, str]) -> str:
-    entries: list[str] = []
-    for state in WORKFLOW_STATES:
-        directory = repo / workflow_paths.get(state, f"kanban/{state}")
-        if directory.is_dir():
-            entries.append(f"{state}\0dir\n")
-        elif directory.exists():
-            entries.append(f"{state}\0non-directory\n")
-        else:
-            entries.append(f"{state}\0missing\n")
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.iterdir(), key=lambda item: item.name):
-            if not is_canonical_ticket_name(path.name):
-                continue
-            if path.is_symlink():
-                kind = "symlink"
-                digest = ""
-            elif path.is_file():
-                kind = "file"
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            else:
-                kind = "other"
-                digest = ""
-            entries.append(f"{state}/{path.name}\0{kind}\0{digest}\n")
-    return hashlib.sha256("".join(entries).encode()).hexdigest()
-
-
 def _read_env(path: Path) -> dict[str, str]:
     try:
         return read_env(path)
@@ -826,6 +803,7 @@ class ServiceEngine:
         self.control_worktree = (
             self.state_dir / "worktrees" / self._state_key / "control"
         )
+        self._workflow_cache: WorkflowProjectionCache | None = None
         self.execution_worktree_root = self.state_dir / "worktrees" / self._state_key
         self._state: dict[str, object] = {"phase": "idle"}
         self._dirty_fingerprint: str | None = None
@@ -1579,7 +1557,7 @@ class ServiceEngine:
             raise DevlegateError(
                 "control history diverged; use explicit control reconciliation"
             )
-        ticket_store = self._ticket_store()
+        ticket_store = self._ticket_store(head=current_head, require_clean=True)
         ticket = ticket_store.by_id.get(ticket_id)
         if (
             ticket is None
@@ -3378,11 +3356,24 @@ class ServiceEngine:
         """Return whether a new mutable operation must not be committed."""
         return self._stop_requested() or self._lifecycle_drain_pending()
 
-    def _ticket_store(self) -> TicketStore:
+    def _committed_workflow(self, head: str) -> WorkflowProjection:
         self._assert_repository_owner()
+        if self._workflow_cache is None:
+            self._workflow_cache = WorkflowProjectionCache(
+                self.control_worktree, self._workflow_paths(),
+            )
+        return self._workflow_cache.observe(head)
+
+    def _ticket_store(
+        self, *, head: str | None = None, require_clean: bool = False,
+        working_fingerprint: str | None = None,
+    ) -> TicketStore:
+        """Reuse the committed graph only when fresh working evidence agrees."""
+        self._assert_repository_owner()
+        paths = self._workflow_paths()
         product_workflow = [
             self.repo / configured_path
-            for configured_path in self._workflow_paths().values()
+            for configured_path in paths.values()
         ]
         if any(path.exists() for path in product_workflow):
             raise WorkflowBlockedError(
@@ -3391,17 +3382,54 @@ class ServiceEngine:
                 "the conflicting project path explicitly"
             )
         self._validate_control_worktree()
-        for state, configured_path in self._workflow_paths().items():
+        for state, configured_path in paths.items():
             directory = self.control_worktree / configured_path
             if not directory.is_dir():
                 raise WorkflowBlockedError(
                     f"managed workflow directory is unavailable: {directory} ({state})"
                 )
         try:
-            store = load_ticket_store(self.control_worktree, self._workflow_paths())
+            control = self.control_worktree
+            if head is None:
+                head = self._resolve_commit_runtime(control, "HEAD")
+                if head is None:
+                    raise WorkflowBlockedError("control HEAD could not be resolved")
+            graph = self._committed_workflow(head).graph
+            fingerprint = working_fingerprint
+            if require_clean or fingerprint is None:
+                fingerprint = working_workflow_fingerprint(control, paths)
+            if require_clean and self._status_runtime(control):
+                raise WorkflowBlockedError("control working tree is dirty")
+            if fingerprint == graph.working_fingerprint:
+                if graph.store is None:
+                    raise WorkflowBlockedError(graph.diagnostics[0])
+                store = graph.store
+            else:
+                # Diagnostics and recovery can deliberately observe a staged or
+                # working transition. Never substitute a cached valid graph.
+                store = load_ticket_store(control, paths)
+                if require_clean and store != graph.store:
+                    raise WorkflowBlockedError(
+                        "working ticket graph differs from committed control"
+                    )
+                # A clean checkout can have Git newline conversion. If it was
+                # freshly validated and is semantically identical, use the graph.
+                if require_clean:
+                    assert graph.store is not None
+                    store = graph.store
+            if require_clean and (
+                self._branch_runtime(control) != self.control_branch
+                or resolve_ref_commit(
+                    self.repo, f"refs/heads/{self.control_branch}",
+                    runner=self._git_runtime,
+                ) != head
+            ):
+                raise WorkflowBlockedError(
+                    "canonical control changed during workflow observation"
+                )
             self._workflow_validation_succeeded = True
             return store
-        except TicketError as error:
+        except (TicketError, GitObservationError) as error:
             raise WorkflowBlockedError(str(error)) from error
         except FileNotFoundError as error:
             raise WorkflowBlockedError(
@@ -4232,7 +4260,7 @@ class ServiceEngine:
                 return 1
         if self._stop_before_admission():
             return 0
-        ticket_store = self._ticket_store()
+        ticket_store = self._ticket_store(head=control_head, require_clean=True)
         publication = self._state.get("abandonment_publication")
         if isinstance(publication, dict) and publication.get("terminal") is not None:
             self._finish_abandonment()
@@ -4380,14 +4408,14 @@ class ServiceEngine:
             if not isinstance(accepted_integration, dict):
                 raise DevlegateError("invalid accepted integration state")
             pending_ticket = accepted_integration.get("ticket_id")
-            if pending_ticket not in self._ticket_store().by_id:
+            pending_state = ticket_store.by_id.get(pending_ticket)
+            if pending_state is None:
                 raise WorkflowBlockedError(
                     "accepted integration ticket is no longer observable"
                 )
             pending_control_head = accepted_integration.get("control_head")
             if not isinstance(pending_control_head, str):
                 raise DevlegateError("invalid accepted integration control identity")
-            pending_state = self._ticket_store().by_id[str(pending_ticket)]
             if pending_state.state == "done":
                 checkpoint = accepted_integration.get("checkpoint")
             else:
@@ -4868,6 +4896,7 @@ class ServiceEngine:
                         "predecessor_execution": predecessor.intent["execution_id"],
                         "predecessor_generation": predecessor.intent["generation"],
                     })
+            self._ticket_store(head=control_head, require_clean=True)
             self._save_state(
                 "agent_pending",
                 clear_execution=not pending_agent_execution,
@@ -6550,13 +6579,14 @@ class ServiceEngine:
         )
 
     def _control_descendant_adoption_error(
-        self, candidate: str, ticket_id: str
+        self, candidate: str, ticket_id: str, ticket_store: TicketStore | None = None,
     ) -> str | None:
         """Return the ticket-level proof failure for a control observation."""
-        try:
-            ticket_store = self._ticket_store()
-        except TicketError:
-            return "updated control revision cannot be validated for this execution"
+        if ticket_store is None:
+            try:
+                ticket_store = self._ticket_store(head=candidate, require_clean=True)
+            except WorkflowBlockedError:
+                return "updated control revision cannot be validated for this execution"
         ticket = ticket_store.by_id.get(ticket_id)
         selected_body = self._state.get("selected_ticket_body")
         selected_title = self._state.get("selected_ticket_title")
@@ -7217,7 +7247,8 @@ class ServiceEngine:
         if not code.working_tree_clean or not control.working_tree_clean:
             raise WorkflowBlockedError("product or control working tree is dirty")
         pending = self._state.get("accepted_integration")
-        ticket = self._ticket_store().by_id.get(ticket_id)
+        store = self._ticket_store(head=control.local_head, require_clean=True)
+        ticket = store.by_id.get(ticket_id)
         if isinstance(pending, dict) and ticket is not None and ticket.state == "done":
             report = self._published_accepted_execution_report(ticket_id, pending)
         else:
@@ -8586,7 +8617,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control identity is invalid"
             )
-        store = load_ticket_store(self.control_worktree, self._workflow_paths())
+        store = self._ticket_store(head=current, require_clean=True)
         ticket = store.by_id.get(ticket_id)
         if ticket is None:
             raise WorkflowBlockedError("accepted ticket disappeared during integration")
@@ -8793,7 +8824,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control ancestry could not be observed"
             ) from error
-        store = load_ticket_store(self.control_worktree, self._workflow_paths())
+        store = self._ticket_store(head=current_head, require_clean=True)
         ticket = store.by_id.get(ticket_id)
         if (
             ticket is None
@@ -9952,9 +9983,10 @@ class ServiceEngine:
         )
 
     def _apply_lifecycle_once(
-        self, report: ExecutionReport, *, apply_conclusion: bool = True
+        self, report: ExecutionReport, *, head: str | None = None,
+        apply_conclusion: bool = True,
     ) -> str:
-        ticket_store = self._ticket_store()
+        ticket_store = self._ticket_store(head=head, require_clean=True)
         ticket = ticket_store.by_id.get(report.ticket_id)
         if ticket is None or ticket.state != "todo":
             raise WorkflowBlockedError(
@@ -10152,7 +10184,7 @@ class ServiceEngine:
             else:
                 self._prove_control_descendant(report.control_head, report)
             lifecycle_head = self._apply_lifecycle_once(
-                report, apply_conclusion=apply_conclusion
+                report, head=remote_head, apply_conclusion=apply_conclusion,
             )
             pushed = push_refs(
                 self.control_worktree,
@@ -10868,7 +10900,7 @@ class ServiceEngine:
             raise DevlegateError(f"cannot observe Git checkout: {error}") from error
         self._status_snapshot_hook("after-git-before")
         try:
-            workflow_token_before = _workflow_fingerprint(
+            workflow_token_before = working_workflow_fingerprint(
                 self.control_worktree, self._workflow_paths()
             )
         except FileNotFoundError as error:
@@ -10880,7 +10912,11 @@ class ServiceEngine:
         ticket_error: DevlegateError | None = None
         ticket_store = None
         try:
-            ticket_store = self._ticket_store()
+            control = git_before["control"]
+            ticket_store = self._ticket_store(
+                head=control.local_head if control is not None else None,
+                working_fingerprint=workflow_token_before,
+            )
         except DevlegateError as error:
             ticket_error = error
         except FileNotFoundError as error:
@@ -10890,7 +10926,7 @@ class ServiceEngine:
 
         self._status_snapshot_hook("before-verify")
         try:
-            workflow_token_after = _workflow_fingerprint(
+            workflow_token_after = working_workflow_fingerprint(
                 self.control_worktree, self._workflow_paths()
             )
         except FileNotFoundError as error:
@@ -12201,7 +12237,7 @@ class ServiceEngine:
                     else:
                         adoption_error = (
                             self._control_descendant_adoption_error(
-                                control.local_head, ticket.id
+                                control.local_head, ticket.id, ticket_store,
                             )
                             if descendant
                             else "control history diverged from the execution "
@@ -12944,7 +12980,8 @@ class ServiceEngine:
             )
             if control_head != recorded_control:
                 raise DevlegateError("control revision changed during reconciliation")
-            ticket = self._ticket_store().by_id.get(ticket_id)
+            store = self._ticket_store(head=control_head, require_clean=True)
+            ticket = store.by_id.get(ticket_id)
             if ticket is None or ticket.state not in {"todo", "review"}:
                 raise DevlegateError("reconciliation ticket is no longer compatible")
             manager = ExecutionWorkspaceManager(
@@ -13241,7 +13278,7 @@ class ServiceEngine:
                 raise DevlegateError(
                     "cannot fast-forward compatible control descendant"
                 )
-        ticket_store = self._ticket_store()
+        ticket_store = self._ticket_store(head=control_head, require_clean=True)
         ticket = ticket_store.by_id.get(str(state["execution_ticket_id"]))
         if (
             ticket is None
