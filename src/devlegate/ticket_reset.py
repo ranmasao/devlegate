@@ -55,7 +55,6 @@ def log_blocked(owner, intent, reason, previous):
         "retiring-old-generation": "resource retirement could not be proven",
         "requeue": "requeue publication or activation could not be proven",
         "queued": "fresh worker launch or retirement could not be proven",
-        "started": "worker retirement could not be proven",
     }
     log_progress(intent, f"blocked reason={descriptions[intent['status']]}")
 
@@ -154,11 +153,12 @@ def _control(owner, head):
 
 
 def response(intent):
+    blocker = intent["blocker"] if intent["status"] != "started" else None
     return {
         "accepted": True, "ticket_id": intent["ticket_id"],
         "operation_id": intent["operation_id"],
-        "status": "blocked" if intent["blocker"] else intent["status"],
-        "stage": intent["status"], "reason": intent["blocker"],
+        "status": "blocked" if blocker else intent["status"],
+        "stage": intent["status"], "reason": blocker,
         "fresh_execution_id": intent["fresh_execution_id"],
     }
 
@@ -168,9 +168,100 @@ def active(owner):
     return isinstance(intent, dict) and intent["status"] not in {"queued", "started"}
 
 
+def _owns_execution(state, ticket_id, execution_id, generation):
+    binding = state.get("execution_resource_binding")
+    return (
+        isinstance(execution_id, str)
+        and state.get("execution_id") == execution_id
+        and state.get("execution_ticket_id") == ticket_id
+        and (binding is None and generation is None or (
+            isinstance(binding, dict) and isinstance(generation, str)
+            and binding.get("generation") == generation
+            and binding.get("execution_id") == execution_id
+            and binding.get("ticket_id") == ticket_id
+        ))
+    )
+
+
+def owns_fresh(state, intent, ticket_id, execution_id):
+    return (
+        intent["ticket_id"] == ticket_id
+        and intent["fresh_execution_id"] == execution_id
+        and intent["fresh_generation"] is not None
+        and _owns_execution(state, ticket_id, execution_id, intent["fresh_generation"])
+    )
+
+
+def queued_for_worker(state, admission, ticket_id, execution_id):
+    intent = state.get("ticket_reset")
+    if admission is not None and isinstance(intent, dict) and (
+        intent["status"] == "queued"
+        and intent["operation_id"] == admission["operation_id"]
+        and intent["fresh_generation"] == admission["fresh_generation"]
+        and owns_fresh(state, intent, ticket_id, execution_id)
+    ):
+        return intent
+    return None
+
+
+def cancelling(owner, ticket_id, execution_id):
+    intent = owner._state.get("ticket_reset")
+    return (
+        isinstance(intent, dict) and intent["status"] == "stopping-worker"
+        and intent["ticket_id"] == ticket_id and intent["prior_execution"] is not None
+        and intent["prior_execution"].get("execution_id") == execution_id
+        and _owns_prior(owner, intent)
+    )
+
+
+def _owns_prior(owner, intent):
+    prior = intent["prior_execution"]
+    if prior is None:
+        return owner._state.get("execution_ticket_id") != intent["ticket_id"]
+    binding = prior.get("execution_resource_binding")
+    return _owns_execution(
+        owner._state, intent["ticket_id"], prior.get("execution_id"),
+        binding["generation"] if binding is not None else None,
+    )
+
+
+def bind_fresh(owner, intent, binding, *, pending):
+    """Bind only at admission, including replay of the pre-preparation boundary."""
+    if intent["fresh_execution_id"] is not None or intent["status"] != "queued":
+        raise ValueError("reset fresh admission is already bound or no longer queued")
+    resource = binding.intent
+    if (
+        resource["ticket_id"] != intent["ticket_id"]
+        or resource["ticket_blob"] != intent["blob"]
+        or resource.get("predecessor_execution") is not None
+        or not is_ancestor(
+            owner.control_worktree, intent["transaction"]["commit"],
+            resource["control"],
+            runner=owner._git_runtime,
+        )
+    ):
+        raise ValueError("reset fresh admission does not match the queued requeue")
+    if pending:
+        from devlegate.recovery import validate_execution_binding
+
+        validate_execution_binding(owner._state, require_pre_worker=True)
+        if (
+            owner._state.get("execution_stage") is not None
+            or resource["control"] != owner._state.get("execution_control_head")
+            or not binding.intent_pending()
+            or not _namespace_absent(owner, binding.manager)
+        ):
+            raise ValueError("cannot prove unbound reset admission is pre-launch")
+    return {
+        **intent, "fresh_execution_id": resource["execution_id"],
+        "fresh_generation": resource["generation"],
+        "fresh_configuration": owner.reset_worker_configuration(),
+    }
+
+
 def _save(owner, intent, **fields):
     persisted, revision = owner._runtime_store.observe()
-    if persisted != owner._state:
+    if persisted != owner._state or persisted.get("ticket_reset") != intent:
         raise ValueError("reset runtime authority changed; restart required")
     owner._save_state(
         str(owner._state["phase"]), ticket_reset={**intent, **fields},
@@ -191,7 +282,9 @@ def admit(owner, ticket_id):
         if previous["status"] != "started":
             return response(previous)
         if owner._state.get("phase") == "agent_running" and (
-            owner._state.get("execution_id") == previous["fresh_execution_id"]
+            owns_fresh(
+                owner._state, previous, ticket_id, owner._state.get("execution_id"),
+            )
             and owner.reset_worker_configuration() == previous["fresh_configuration"]
         ):
             # A lost acknowledgement must not cancel the fresh worker that this
@@ -315,8 +408,8 @@ def poll_worker(owner):
 class ResetStop:
     """Compose the service stop policy with the admitted ticket cancellation."""
 
-    def __init__(self, owner, ticket_id):
-        self.owner, self.ticket_id = owner, ticket_id
+    def __init__(self, owner, ticket_id, execution_id):
+        self.owner, self.ticket_id, self.execution_id = owner, ticket_id, execution_id
 
     def __getattr__(self, name):
         return getattr(self.owner._stop_event, name)
@@ -325,8 +418,7 @@ class ResetStop:
     def kind(self):
         if self.owner._state_write_uncertain:
             return "ticket_reset"
-        intent = self.owner._state.get("ticket_reset")
-        if active(self.owner) and intent["ticket_id"] == self.ticket_id:
+        if cancelling(self.owner, self.ticket_id, self.execution_id):
             return "ticket_reset"
         return getattr(self.owner._stop_event, "kind", None)
 
@@ -383,8 +475,12 @@ def advance(owner):
     from devlegate.runtime_state_validation import DevlegateError
 
     owner._assert_repository_owner()
+    if not active(owner):
+        return
     intent = owner._state["ticket_reset"]
     try:
+        if not _owns_prior(owner, intent):
+            raise ValueError("reset prior execution or generation no longer matches")
         if intent["status"] == "stopping-worker":
             prior = intent["prior_execution"]
             if prior is not None:
@@ -530,7 +626,7 @@ def advance(owner):
                     intent["ticket_id"]
                 ):
                     fields[key] = None
-            current = owner._state.get("execution_ticket_id") == intent["ticket_id"]
+            current = intent["prior_execution"] is not None
             if current:
                 fields["rework_provenance"] = None
                 fields["automatic_retry"] = None
@@ -557,13 +653,13 @@ def advance(owner):
             owner.wake()
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError,
             ExecutionWorkspaceError, WorkerSupervisionError, DevlegateError) as error:
-        intent = owner._state["ticket_reset"]
-        previous = intent["blocker"]
-        try:
-            if not owner._state_write_uncertain:
-                _save(owner, intent, blocker=str(error))
-        finally:
-            log_blocked(owner, intent, str(error), previous)
+        current = owner._state["ticket_reset"]
+        if active(owner) and current["operation_id"] == intent["operation_id"]:
+            try:
+                if not owner._state_write_uncertain:
+                    _save(owner, current, blocker=str(error))
+            finally:
+                log_blocked(owner, current, str(error), current["blocker"])
         raise
 
 
@@ -577,9 +673,13 @@ def report_is_discarded(owner, report):
     )
 
 
-def require_control(owner):
+def require_control(owner, binding):
     """Reobserve exact admission lineage before each resource effect."""
     intent = owner._state["ticket_reset"]
+    if intent["status"] != "retiring-old-generation" or (
+        intent["binding"] != binding.intent or not _owns_prior(owner, intent)
+    ):
+        raise ValueError("reset does not own this generation retirement")
     head = owner._resolve_commit_runtime(owner.control_worktree, "HEAD")
     if head != intent["control"]["head"] or _control(owner, head) != (
         intent["control"]["resource"]

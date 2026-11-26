@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,15 @@ from test_clean_preview import owner as owner  # noqa: F401
 
 from devlegate.blackboard_store import BlackboardStore
 from devlegate.execution_containment import DurableDeterministicContainmentProvider
+from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
+from devlegate.inspection import inspect_object
 from devlegate.ipc_server import UnixIPCServer
+from devlegate.resource_binding import UnprovenResource
 from devlegate.runtime import DevlegateError, WorkflowBlockedError
 from devlegate.ticket_reset import admit, advance, validate
 from devlegate.tickets import TicketError
-from devlegate.worker_egress import WorkerRunResult
+from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import (
     _capture_worker_identity,
     _linux_boot_id,
@@ -309,6 +313,7 @@ def test_live_reset_cancels_before_checkpoint_and_restarts_fresh(
     if not retirement_proved:
         assert errors and "retirement is unproven" in str(errors[0])
         restored = Devlegate(config)
+        assert admit(restored, "T-1")["reason"] == "worker retirement is unproven"
         path = restored.recovery_workspace_manager("T-1").path
         with pytest.raises(WorkflowBlockedError, match="retirement cannot be proved"):
             run_test_iteration(restored)
@@ -577,7 +582,6 @@ def test_reset_launch_failure_retries_pending_fresh_admission(owner, monkeypatch
     monkeypatch.setattr(reset, "service_log", entries.append)
     admit(owner, "T-1")
     advance(owner)
-    original = owner._workers.run
     monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: WorkerRunResult(
         -1, "launch failed", None, None, process_started=False,
     ))
@@ -587,12 +591,278 @@ def test_reset_launch_failure_retries_pending_fresh_admission(owner, monkeypatch
     assert any("stage=queued blocked" in line for line in entries)
     assert not any("stage=started" in line for line in entries)
     pending_id = owner._state["execution_id"]
-    monkeypatch.setattr(owner._workers, "run", original)
-    assert run_test_iteration(owner) == 0
-    assert owner._state["execution_id"] == pending_id
-    assert owner._state["ticket_reset"]["status"] == "started"
-    assert owner._state["ticket_reset"]["blocker"] is None
+    pending = copy.deepcopy(owner._state["ticket_reset"])
+    owner.env_file.write_text(owner.env_file.read_text() + "\nOPENCODE_MODEL=changed\n")
+    restored = Devlegate(owner.env_file)
+    assert admit(restored, "T-1") == admit(owner, "T-1")
+
+    def fast_exit(workspace, _prompt, **kwargs):
+        assert kwargs["execution_id"] == pending_id
+        assert restored._state["ticket_reset"] == pending
+        assert restored._workers.opencode_model == pending["fresh_configuration"][
+            "opencode_model"
+        ]
+        (workspace.path / "fast-exit").write_text("new contribution\n")
+        # A started-and-retired lifetime, with no identity callback.
+        return WorkerRunResult(0, None, WorkerClaim("completed", "fast", (), ()), None)
+
+    monkeypatch.setattr(restored._workers, "run", fast_exit)
+    assert run_test_iteration(restored) == 0
+    assert restored._state["ticket_reset"] == {
+        **pending, "status": "started", "blocker": None,
+    }
     assert sum("stage=started" in line for line in entries) == 1
+
+
+@pytest.mark.parametrize("field", ["fresh_execution_id", "fresh_generation"])
+def test_bound_queue_refuses_mismatched_pending_admission(owner, monkeypatch, field):
+    admit(owner, "T-1")
+    advance(owner)
+    monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: WorkerRunResult(
+        -1, "launch failed", None, None, process_started=False,
+    ))
+    assert run_test_iteration(owner) == 0
+    queued = owner._state["ticket_reset"]
+    mismatch = {**queued, field: "f" * len(queued[field])}
+    owner._save_state("agent_pending", ticket_reset=mismatch)
+    restored = Devlegate(owner.env_file)
+    monkeypatch.setattr(
+        restored._workers, "run", lambda *_a, **_k: pytest.fail("launch"),
+    )
+    before = restored._runtime_store.observe()
+    with pytest.raises(WorkflowBlockedError, match="execution or generation no longer"):
+        run_test_iteration(restored)
+    assert restored._runtime_store.observe() == before
+
+
+def test_unbound_queue_resumes_proven_preparation_boundary(owner, monkeypatch):
+    ack = admit(owner, "T-1")
+    advance(owner)
+    queued = copy.deepcopy(owner._state["ticket_reset"])
+    save = owner._save_state
+
+    class OwnerLost(Exception):
+        pass
+
+    def lose_owner(phase, **fields):
+        if phase == "agent_pending" and "ticket_reset" in fields:
+            # Model interruption with the pending execution saved separately
+            # from the reset binding, before any workspace preparation.
+            fields.pop("ticket_reset")
+            save(phase, **fields)
+            raise OwnerLost
+        save(phase, **fields)
+
+    monkeypatch.setattr(owner, "_save_state", lose_owner)
+    with pytest.raises(OwnerLost):
+        run_test_iteration(owner)
+    restored = Devlegate(owner.env_file)
+    assert restored._state["ticket_reset"] == queued
+    pending_id = restored._state["execution_id"]
+    generation = restored._state["execution_resource_binding"]["generation"]
+    monkeypatch.setattr(restored._workers, "run", owner._workers.run)
+    assert run_test_iteration(restored) == 0
+    completed = restored._state["ticket_reset"]
+    assert completed["status"] == "started"
+    assert completed["operation_id"] == ack["operation_id"]
+    assert completed["fresh_execution_id"] == pending_id
+    assert completed["fresh_generation"] == generation
+
+
+@pytest.mark.parametrize("retired", [False, True])
+@pytest.mark.parametrize("field", ["fresh_execution_id", "fresh_generation"])
+def test_mismatched_queue_cannot_record_worker_progress(
+    owner, monkeypatch, field, retired,
+):
+    import devlegate.ticket_reset as reset
+
+    entries = []
+    monkeypatch.setattr(reset, "service_log", entries.append)
+    admit(owner, "T-1")
+    advance(owner)
+    observed = []
+
+    def worker(_workspace, prompt, **kwargs):
+        queued = owner._state["ticket_reset"]
+        mismatch = {**queued, field: "f" * len(queued[field])}
+        owner._save_state("agent_running", ticket_reset=mismatch)
+        observed.append(mismatch)
+        if not retired:
+            run = _run_opencode(
+                [sys.executable, "-c", "import sys; sys.stdin.read()"], prompt,
+                execution_id=kwargs["execution_id"],
+                worker_identity_handler=kwargs["identity_handler"],
+            )
+            assert owner._state["worker_identity"] is not None
+            return replace(run, worker_group_retired=False)
+        return WorkerRunResult(0, None, None, None)
+
+    monkeypatch.setattr(owner._workers, "run", worker)
+    message = "cannot advance" if retired else "retirement is unproven"
+    with pytest.raises(DevlegateError, match=message):
+        run_test_iteration(owner)
+    assert owner._runtime_store.observe()[0]["ticket_reset"] == observed[0]
+    assert not any("blocked" in line or "stage=started" in line for line in entries)
+
+
+def test_queued_uncertain_launch_holds_same_operation_after_restart(owner, monkeypatch):
+    ack = admit(owner, "T-1")
+    advance(owner)
+    assert owner._state["ticket_reset"]["fresh_execution_id"] is None
+    monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: WorkerRunResult(
+        -1, "launch outcome unknown", None, None,
+        worker_group_retired=False, process_started=False,
+    ))
+    with pytest.raises(DevlegateError, match="retirement is unproven"):
+        run_test_iteration(owner)
+    restored = Devlegate(owner.env_file)
+    before = copy.deepcopy(restored._state["ticket_reset"])
+    assert before["fresh_execution_id"] == restored._state["execution_id"]
+    assert before["fresh_generation"] == (
+        restored._state["execution_resource_binding"]["generation"]
+    )
+    blocked = admit(restored, "T-1")
+    assert blocked["operation_id"] == ack["operation_id"]
+    assert blocked["stage"] == "queued" and blocked["status"] == "blocked"
+    assert blocked["reason"] == "worker retirement is unproven"
+    monkeypatch.setattr(
+        restored._workers, "run", lambda *_a, **_k: pytest.fail("launch"),
+    )
+    with pytest.raises(DevlegateError):
+        run_test_iteration(restored)
+    assert restored._state["ticket_reset"] == before
+    assert restored._state["execution_stage"] == "worker-launch"
+
+
+def test_stale_started_blocker_is_read_only_history(owner):
+    store = ExecutionReportStore(owner.control_worktree)
+    [discarded] = store.list("T-1")
+    admit(owner, "T-1")
+    advance(owner)
+    assert run_test_iteration(owner) == 0
+    completed = owner._state["ticket_reset"]
+    stale = {**completed, "blocker": "worker retirement is unproven"}
+    owner._save_state(owner._state["phase"], ticket_reset=stale)
+    restored = Devlegate(owner.env_file)
+    before = restored._runtime_store.observe()
+    with restored._lock():
+        status = restored.status_view()
+        for kind, ticket in (("ticket", "T-1"), ("service", None)):
+            view = inspect_object(restored, kind, ticket)["observation"]["reset"]
+            assert view["status"] == "started" and view["reason"] is None
+            assert view["fresh_execution_id"] == completed["fresh_execution_id"]
+    assert "reset" not in status.plan.reason
+    assert restored._state["reset_boundaries"]["T-1"] == [discarded.execution_id]
+    assert restored._latest_reviewed_rework_report([discarded]) is None
+    assert restored._runtime_store.observe() == before
+
+
+@pytest.mark.parametrize("scenario", ["ordinary", "same-ticket", "different-ticket"])
+def test_worker_retirement_refusal_is_independent_of_reset_history(
+    tmp_path, monkeypatch, scenario,
+):
+    import devlegate.ticket_reset as reset
+
+    repo, config, _state = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    engine = Devlegate(config)
+    provider = DurableDeterministicContainmentProvider(tmp_path / "lifetimes")
+    entries, completed, runs = [], [], []
+    monkeypatch.setattr(reset, "service_log", entries.append)
+
+    if scenario != "ordinary":
+        source = engine.control_worktree / engine.todo_path / "T-1.md"
+        target = engine.control_worktree / engine.backlog_path / source.name
+        target.parent.mkdir(exist_ok=True)
+        git(engine.control_worktree, "mv", str(source), str(target))
+        git(engine.control_worktree, "commit", "-m", "backlog fixture")
+        git(engine.control_worktree, "push", "origin", engine.control_branch)
+        admit(engine, "T-1")
+        advance(engine)
+
+    def install_failure(owner):
+        owner._workers.containment_provider = provider
+
+        def worker(workspace, prompt, **kwargs):
+            execution_id = kwargs["execution_id"]
+
+            def record_identity(identity):
+                kwargs["identity_handler"](identity)
+                record = owner._state.get("ticket_reset")
+                if record is not None and not completed:
+                    assert record["status"] == "started"
+                    assert admit(owner, workspace.ticket_id)["operation_id"] == (
+                        record["operation_id"]
+                    )
+                    completed.append(copy.deepcopy(record))
+
+            runs.append(execution_id)
+            result = _run_opencode(
+                [sys.executable, "-c", "import sys; sys.stdin.read()"], prompt,
+                execution_id=execution_id,
+                worker_identity_handler=record_identity,
+                containment=provider.create(execution_id),
+            )
+            assert result.worker_group_retired
+            # Lose the supervisor's proof. Restart can independently observe
+            # absence later, but this owner must retain its exact worker binding.
+            return replace(result, worker_group_retired=False)
+
+        monkeypatch.setattr(owner._workers, "run", worker)
+
+    def assert_refusal(owner, ticket_id):
+        install_failure(owner)
+        with pytest.raises(DevlegateError, match="worker retirement is unproven"):
+            run_test_iteration(owner)
+        state = owner._runtime_store.observe()[0]
+        assert state["execution_ticket_id"] == ticket_id
+        assert state["execution_id"] == runs[-1]
+        assert state["execution_stage"] == "worker-running"
+        identity = state["worker_identity"]
+        binding = owner._execution_generation_binding()
+        assert identity == binding.operation_receipt("worker")["identity"]
+        assert identity["containment_id"] == f"deterministic:{runs[-1]}"
+        with pytest.raises(UnprovenResource):
+            binding.require_worker_retirement()
+        assert binding.manager.path.exists()
+        assert not ExecutionReportStore(owner.control_worktree).list(ticket_id)
+        assert state.get("ticket_reset") == (completed[0] if completed else None)
+        assert not any("blocked" in message for message in entries)
+
+    if scenario == "different-ticket":
+        def successful_fresh(workspace, _prompt, **_kwargs):
+            (workspace.path / "implementation").write_text("fresh source\n")
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "fresh implementation", (), ()), None,
+            )
+
+        monkeypatch.setattr(engine._workers, "run", successful_fresh)
+        assert run_test_iteration(engine) == 0
+        completed.append(copy.deepcopy(engine._state["ticket_reset"]))
+        assert completed[0]["status"] == "started"
+        control = engine.control_worktree
+        (control / engine.todo_path / "T-2.md").write_text(
+            (control / engine.review_path / "T-1.md").read_text(),
+        )
+        backlog = control / engine.backlog_path
+        backlog.mkdir(exist_ok=True)
+        git(control, "mv", str(control / engine.review_path / "T-1.md"), str(backlog))
+        git(control, "add", ".")
+        git(control, "commit", "-m", "next ticket")
+        git(control, "push", "origin", engine.control_branch)
+        restored = Devlegate(config)
+        assert_refusal(restored, "T-2")
+    else:
+        assert_refusal(engine, "T-1")
+        restored = Devlegate(config)
+        assert_refusal(restored, "T-1")
+        assert runs[0] != runs[1]
+    if completed:
+        assert restored._state["execution_id"] != completed[0]["fresh_execution_id"]
+        assert restored._state["execution_resource_binding"]["generation"] != (
+            completed[0]["fresh_generation"]
+        )
 
 
 def test_reset_requeue_preserves_raw_ticket_blob(tmp_path, monkeypatch):

@@ -454,7 +454,7 @@ def retire_ticket_generation(owner, binding):
 
     while True:
         owner._assert_repository_owner()
-        require_control(owner)
+        require_control(owner, binding)
         intent = owner._state["ticket_reset"]
         journal = intent["retirement"]
         binding._validate_intent()
