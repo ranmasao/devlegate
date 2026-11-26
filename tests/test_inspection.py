@@ -10,6 +10,7 @@ import shutil
 import sys
 import threading
 import unicodedata
+from time import perf_counter
 
 import pytest
 from _cli_support import _long_worker_script, _worker_body_started
@@ -26,6 +27,7 @@ from devlegate.inspection import (
     TicketObservation,
     inspect_object,
 )
+from devlegate.ipc_client import request
 from devlegate.ipc_protocol import IPCProtocolError, IPCRequest
 from devlegate.ipc_server import dispatch_request
 from devlegate.operational_log import execution_log_path
@@ -1071,12 +1073,27 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
     (control / owner.todo_path / "T-2.md").write_text(original)
     git(control, "add", ".")
     git(control, "commit", "-m", "Add current worker fixture")
+    # Build distinct blobs and real path history without adding runnable work.
+    for batch in range(5):
+        for index in range(batch * 42, (batch + 1) * 42):
+            ticket = f"S-{index:03}"
+            dependency = f'"depends_on": ["S-{index - 1:03}"]\n' if index else ""
+            (control / owner.backlog_path / f"{ticket}.md").write_text(
+                f'---\n"title": "Scale fixture {ticket}"\n"type": "devlegate.ticket"\n'
+                f"{dependency}"
+                f"---\nHistorical workflow ticket {ticket}.\n",
+            )
+        git(control, "add", ".")
+        git(control, "commit", "-m", f"Populate workflow batch {batch}")
+    scale_publication = git(control, "rev-parse", "HEAD").stdout.strip()
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    git(control, "gc", "--prune=now")
     if retry:
         monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: WorkerRunResult(
             1, None, None, None,
         ))
         assert run_test_iteration(owner) == 1
+    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
 
     worker, pid, attempts = (tmp_path / name for name in ("worker", "pid", "attempts"))
     _long_worker_script(worker)
@@ -1091,6 +1108,7 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
     real_git = shutil.which("git")
     gate, observed = tmp_path / "delay", tmp_path / "observing"
     release = tmp_path / "release-observation"
+    trace = tmp_path / "owner-git.jsonl"
     wrapper = tmp_path / "git"
     wrapper.write_text(
         "#!/bin/sh\n"
@@ -1101,12 +1119,19 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         f"      if [ -f {shlex.quote(str(release))} ]; then exec sleep 60; fi\n"
         f"      while [ -f {shlex.quote(str(gate))} ]; do sleep .01; done;;\n"
         "  esac\nfi\n"
+        # The observation runners strip ambient GIT_* variables. Restore Trace2
+        # only in this fixture and only for the service process tree.
+        'if [ -n "$DEVLEGATE_TEST_OWNER_TRACE" ]; then\n'
+        '  export GIT_TRACE2_EVENT="$DEVLEGATE_TEST_OWNER_TRACE"\n'
+        "fi\n"
         f'exec {shlex.quote(real_git)} "$@"\n'
     )
     wrapper.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
 
-    service = LiveService(repo, config).start()
+    with monkeypatch.context() as service_env:
+        service_env.setenv("DEVLEGATE_TEST_OWNER_TRACE", str(trace))
+        service = LiveService(repo, config).start()
     try:
         service.wait_ready()
         if retry:
@@ -1152,9 +1177,8 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         assert (current["id"], current["state"]) == ("T-2", "todo")
         other = inspect("ticket", "T-1")["observation"]
         assert (other["id"], other["state"]) == ("T-1", "backlog")
-        assert current["provenance"]["control_head"] == (
-            other["provenance"]["control_head"]
-        )
+        assert current["provenance"]["control_head"] == control_head
+        assert other["provenance"]["control_head"] == control_head
         execution = inspect("execution", historical)["observation"]
         assert execution["report"]["execution_id"] == historical
         assert execution["provenance_state"] == "proved"
@@ -1169,6 +1193,52 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         assert not workspace["snapshot_complete"] and workspace["digest"] is None
         assert any("worker ownership" in blocker for blocker in workspace["blockers"])
 
+        # Repeat over real IPC without CLI startup time. The held worker does
+        # not launch Git; no other owner work is requested during each sample.
+        def measured(kind, identifier=None, *, prompt=False):
+            payload = {"object_type": kind, "object_id": identifier}
+            if prompt:
+                payload["include_prompt"] = True
+            with trace.open("rb") as events:
+                events.seek(0, os.SEEK_END)
+                start = perf_counter()
+                view = request(service.locator.socket_path, "inspect", payload)
+                elapsed = (perf_counter() - start) * 1000
+                rows = [json.loads(line) for line in events]
+            commands = [row["argv"] for row in rows if row["event"] == "start"]
+            assert not any(row["event"] == "child_start" for row in rows)
+            blobs = sum("cat-file" in argv for argv in commands)
+            logs = sum("log" in argv for argv in commands)
+            mode = "retry" if retry else "scheduled"
+            label = f"{kind} {identifier or ''}{' --prompt' if prompt else ''}".strip()
+            print(f"{mode} {label}: {elapsed:.2f} ms IPC, {len(commands)} Git, "
+                  f"{blobs} cat-file, {logs} log")
+            assert view["informational"] and not view["mutation_authorized"]
+            if kind == "service":
+                assert not commands
+            if kind == "ticket":
+                assert not blobs and logs == 1
+                assert sum("ls-tree" in argv and "-zt" in argv
+                           for argv in commands) == 1
+                assert sum("rev-parse" in argv and f"{control_head}^{{commit}}" in argv
+                           for argv in commands) == 1
+            return view
+
+        for _ in range(3):
+            assert measured("service")["observation"]["diagnostic_snapshot"][
+                "execution"
+            ]["execution_id"] == active
+            graph_ticket = measured("ticket", "S-209")["observation"]
+            assert graph_ticket["provenance"]["control_head"] == control_head
+            assert graph_ticket["provenance"]["history"] == [scale_publication]
+            assert len(graph_ticket["dependency_graph"]) == 212
+            assert graph_ticket["depends_on"] == ["S-208"]
+            assert measured("execution", historical)["observation"] == execution
+            assert measured("execution", historical, prompt=True)["observation"][
+                "worker_prompt"
+            ]["text"] == exact_prompt
+            assert measured("workspace", "T-2")["digest"] is None
+
         for args, message in (
             (("inspect", "execution", active), "no unique canonical committed report"),
             (("inspect", "ticket", "../T-2"), "canonical object ID"),
@@ -1180,6 +1250,7 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
             failed = service.cli(*args)
             assert failed.returncode != 0 and message in failed.stderr, failed.stderr
         assert worker_running()
+        os.kill(state["worker_identity"]["pid"], 0)
         assert owner._runtime_store.observe() == before_state
         assert [snapshot(path) for path in trees] == before_files
         assert not (tmp_path / "filter-ran").exists()
@@ -1220,6 +1291,8 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         try:
             service.wait_for(observed.exists)
             assert pending.poll() is None
+            status = request(service.locator.socket_path, "status")
+            assert status["execution"]["execution_id"] == active
             if retry:
                 # Stop while the read is in flight; it must not steal retry's
                 # owner slot or stage any replacement execution.
@@ -1230,6 +1303,8 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
             if retry:
                 service.wait_exited()
                 assert owner._runtime_store.observe()[0]["worker_identity"] is None
+                with pytest.raises(ProcessLookupError):
+                    os.kill(state["worker_identity"]["pid"], 0)
             else:
                 assert "time budget expired" in stderr
                 assert worker_running()
