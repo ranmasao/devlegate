@@ -1,0 +1,35 @@
+---
+"type": "devlegate.ticket"
+"title": "Build and install the currently installed native package with graceful service restoration"
+---
+
+## Milestone
+
+Devlegate 0.5.8 — streamline local dogfooding updates.
+
+## Goal
+
+Provide the source-development command `./dev package native-install` which detects the installed native Devlegate package, records running service instances, initiates their graceful stops without waiting serially, builds the matching validated package while they drain, waits for complete shutdown, reinstalls/upgrades that package, and restarts exactly the previously running instances.
+
+## Context
+
+`dev package` delegates to tools/build_distribution.py, which already builds and validates deb and arch targets with the shared wheel/standalone dependency graph. The installed product has a per-user project registry, RuntimeLocator, service health/ownership observations and established graceful stop/start semantics. SystemdSupervisor.stop already uses --no-block; the public stop command may return while a worker is still draining. The host installation record describes supervision, not package ownership. Do not build a second service supervisor or package builder.
+
+## Required behavior
+
+- Before stopping anything, identify the actual installed executable and native package ownership using the package manager's authoritative database (Debian/dpkg or Arch/pacman), not distribution name, PATH shadowing, host supervision record or version alone. Support reinstalling the same version with a changed payload. Refuse absent/ambiguous ownership, pip/editable/venv and standalone-only installations. Validate source/build prerequisites and installer availability before effects. Use the explicit installed executable, not the developer venv's CLI, for lifecycle operations. Keep all existing build-only targets unchanged; native-install is an explicit opt-in, never part of all or release/CI builds. Refuse --ticket as an install source; no implicit installation of unreviewed worktree artifacts.
+- Discover every registered project of the invoking user and determine its actual running service and supervision identity through existing read-only registry/locator/service mechanisms. Record the exact restart set (canonical project/instance identity and existing hosting mode) before effects. Do not start previously stopped projects or infer a live service from unit/config existence alone. An unavailable or ambiguous potentially active instance is a blocker, not inactive. Scope automatic restoration to the invoking user's supported managed persistent instances; do not stop other users' services or silently turn foreground/once processes into detached services. Detect/report active unsupported hosting and other affected users when observable, and refuse before mutation if safe update/restoration cannot be established. Do not claim global inventory guarantees not provided by the current interfaces.
+- Initiate ordinary graceful stop for all recorded active instances independently, allowing stop/drain and package build to overlap. No forced worker interruption, kill, or serial wait for each worker before building. Reuse the existing owner/supervisor contract, including proof of actual completion/authority release; a stop acknowledgement is not proof that it is safe to replace the executable. After the existing matching native target has built and validated the exact artifact, wait for all affected service stops to complete and recheck for a newly started/changed owner before invoking the package manager. Do not install after failed or uncertain stop/build/identity checks. Avoid a new global lock or recovery FSM unless a concrete existing boundary cannot provide the necessary coordination; document the practical scope of concurrent operator starts.
+- Install only the exact validated artifact from this invocation (not a wildcard or previously built package), using the matching native manager and normal privilege elevation for the package operation only. Keep builder, project discovery, lifecycle and restart under the invoking user. Do not run the complete helper as root or bypass package-manager failure/confirmation policy. Verify installed package identity/payload, including same-version updates, before restart. Start the exact previously running supported set through existing launch policy and verify readiness, reporting individual outcomes. No project config, registry, Git, ticket, worker or runtime database surgery.
+- Keep a small invocation-scoped restart inventory and diagnostic record sufficient to recover an interrupted update without guessing. On build/stop failure before installation, restore successfully stopped members using the unchanged installed package when safe; do not restart an instance still draining or of uncertain ownership. On failed/partial install, observe actual package state; restore service only if a known-good installed executable can be established, otherwise retain the inventory and precise next action. Attempt other eligible restarts if one fails; return nonzero for incomplete restoration. No automatic package rollback, new runtime schema, migration, persistent generic transaction framework or cross-user service administration.
+
+## Acceptance criteria
+
+One source-only command performs the seven-step workflow, selects exactly the installed native package format, overlaps build with graceful stops, never invokes installation before validated artifact and proven shutdown, restores only the previously running managed instances, and makes failure/uncertainty explicit. Existing packaging commands and installed Devlegate CLI remain unaffected except for a narrowly justified reuse of existing lifecycle observation if required. The real host must not be updated by the worker or CI.
+
+## Required regressions
+
+1. Disposable/mocked native manager boundary for deb and arch, same-version reinstall, both managers present but only one owns the executable, ambiguous/no/native-unsupported ownership, missing prerequisites; assert no service effects on refused preflight and exact validated artifact passed to installer.
+2. Multiple registered projects with two running and one stopped: delayed graceful stop overlaps actual build invocation, all stop requests issued before waiting, no install until both stop proofs hold, only the two prior active projects restart under original supported supervision. Exercise no-running case and observed unsupported/uncertain owner.
+3. Build failure, stop refusal/delay, lost acknowledgement with provable completion, new/changed owner before install, package install failure or uncertain partial update, one restart failure, interruption: assert no unsafe install/force kill/duplicate launch, safe restoration where possible, retained inventory and honest exit status.
+4. Test existing command parser/help and build-only target behavior, reuse existing service/package regressions rather than duplicate them. Disposable test boundaries only; focused tests, lint, diff check and exact-checkpoint hosted CI.
