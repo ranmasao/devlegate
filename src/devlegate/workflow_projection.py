@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+from .change_explorer import observation_timeout
 from .clean_preview import observe_git
 from .git import GitObservationError
 from .tickets import (
@@ -94,6 +95,7 @@ def working_workflow_fingerprint(repo: Path, paths: Mapping[str, str]) -> str:
     """Read fresh canonical names, kinds and bytes, including ignored entries."""
     entries = []
     for state in WORKFLOW_STATES:
+        observation_timeout()
         directory = repo / paths[state]
         if directory.is_symlink():
             entries.append(f"{state}\0symlink\n")
@@ -102,6 +104,7 @@ def working_workflow_fingerprint(repo: Path, paths: Mapping[str, str]) -> str:
             for path in sorted(directory.iterdir(), key=lambda item: item.name):
                 if not is_canonical_ticket_name(path.name):
                     continue
+                observation_timeout()
                 if path.is_symlink():
                     kind, digest = "symlink", ""
                 elif path.is_file():
@@ -192,6 +195,7 @@ class WorkflowProjectionCache:
             if rows.pop():
                 raise ValueError("unterminated tree output")
             for row in rows:
+                observation_timeout()
                 info, path_bytes = row.split(b"\t", 1)
                 mode, kind, obj = info.decode("ascii").split(" ")
                 path = os.fsdecode(path_bytes)
@@ -216,6 +220,7 @@ class WorkflowProjectionCache:
         blobs = {}
         offset = 0
         for oid in oids:
+            observation_timeout()
             end = raw.find(b"\n", offset)
             header = raw[offset:end].split(b" ") if end >= 0 else []
             expected = oid.encode("ascii")
@@ -275,6 +280,7 @@ class WorkflowProjectionCache:
             if oid not in listing:
                 listing[oid] = self._tree(oid, recursive=True)
             for name, (mode, obj) in sorted(listing[oid].items()):
+                observation_timeout()
                 if mode not in {"040000", "100644"}:
                     nonregular_evidence.append(f"{directory.path}/{name}")
                 if "/" not in name and is_canonical_ticket_name(name):
@@ -290,6 +296,7 @@ class WorkflowProjectionCache:
         tickets = []
         signatures: dict[str, list[str]] = defaultdict(list)
         for directory, name, mode, obj in claims:
+            observation_timeout()
             relative = f"{directory.path}/{name}"
             path = self._repo / relative
             ticket_id = name[:-3]
@@ -345,6 +352,7 @@ class WorkflowProjectionCache:
             inspection_blockers, min(nonregular_evidence, default=None),
             _fingerprint(working_entries),
         )
+        observation_timeout()
         for oid in oids:
             _remember(self._blobs, oid, blobs[oid], self._blob_capacity)
         return graph

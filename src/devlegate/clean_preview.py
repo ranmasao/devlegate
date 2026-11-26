@@ -20,6 +20,7 @@ from devlegate.abandonment_evidence import (
     _review_disposition,
 )
 from devlegate.abandonment_publication import proposal_files, verify_terminal
+from devlegate.change_explorer import observation_timeout
 from devlegate.execution_provenance import lifecycle_commit_is_exact
 from devlegate.execution_result import ExecutionReport
 from devlegate.execution_workspace import (
@@ -65,7 +66,7 @@ def observe_git(
          "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
          "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
         input=payload, text=not binary, capture_output=True, check=check,
-        env=environment, timeout=30,
+        env=environment, timeout=observation_timeout(),
         **kwargs,
     )
 
@@ -145,7 +146,7 @@ def _working_evidence_blockers(control: Path, tree: dict[str, str]) -> list[str]
     return blockers
 
 
-def _control_identity(owner, control: Path, head: str) -> dict:
+def _control_identity(owner, control: Path, head: str, *, committed_only=False) -> dict:
     """A matching HEAD alone cannot identify the configured control checkout."""
     manager = ExecutionWorkspaceManager(
         owner.repo, owner.execution_worktree_root, "inspection", runner=observe_git,
@@ -169,7 +170,8 @@ def _control_identity(owner, control: Path, head: str) -> dict:
     ):
         raise EvidenceError("control checkout has foreign or conflicting registration")
     admin = Path(observe_git(control, "rev-parse", "--absolute-git-dir").stdout.strip())
-    for root in (admin, Path(common)):
+    _safe_path(admin)
+    for root in () if committed_only else (admin, Path(common)):
         _safe_path(root)
         if any(root.glob("*.lock")) or any((root / name).exists() for name in (
             "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge",
@@ -220,7 +222,10 @@ def _abandoned_disposition(owner, head: str, ticket_id: str) -> dict:
     return result
 
 
-def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dict:
+def inspect_clean(
+    owner, ticket_id: str, *, _evidence_only: bool = False,
+    supervising_worker: bool = False,
+) -> dict:
     """Observe one exact canonical ticket under the existing service owner.
 
     Internal evidence-only snapshots support the reset journal after resource
@@ -239,7 +244,9 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
     )
     if branch_head != head:
         raise EvidenceError("control registration HEAD differs from canonical branch")
-    control_identity = _control_identity(owner, control, head)
+    control_identity = _control_identity(
+        owner, control, head, committed_only=supervising_worker,
+    )
     chain = observe_git(
         control, "rev-list", "--parents", "--first-parent", head,
     ).stdout.splitlines()
@@ -269,28 +276,40 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         "authority": authority_identity(_authority(owner)),
         "executions": [],
     }
-    index = observe_git(
-        control, "diff-index", "--cached", "--quiet", "--no-ext-diff",
-        "--no-textconv", head, "--", check=False,
-    )
-    if index.returncode:
-        blockers.append("control index differs or cannot be observed")
-    untracked = observe_git(control, "ls-files", "--others", "--exclude-standard", "-z")
-    if untracked.stdout:
-        blockers.append("control worktree contains untracked evidence")
     identity["ticket_history"] = observe_git(
         control, "log", "--format=%H", "--name-status", "--no-renames", head,
         "--", *(f"{p}/{ticket_id}.md" for p in workflow.values()),
     ).stdout
     # Observe working control bytes with no Git conversion. Never follow links.
-    blockers.extend(_working_evidence_blockers(control, tree))
-    try:
-        load_ticket_store(control, workflow)
-    except (ValueError, OSError) as error:
-        blockers.append(f"working ticket graph unavailable: {error}")
+    if supervising_worker:
+        blockers.append(
+            "workspace cleanliness, current generation and upstream continuity "
+            "are not proved during worker supervision"
+        )
+    else:
+        index = observe_git(
+            control, "diff-index", "--cached", "--quiet", "--no-ext-diff",
+            "--no-textconv", head, "--", check=False,
+        )
+        if index.returncode:
+            blockers.append("control index differs or cannot be observed")
+        untracked = observe_git(
+            control, "ls-files", "--others", "--exclude-standard", "-z",
+        )
+        if untracked.stdout:
+            blockers.append("control worktree contains untracked evidence")
+        blockers.extend(_working_evidence_blockers(control, tree))
+        try:
+            load_ticket_store(control, workflow)
+        except (ValueError, OSError) as error:
+            blockers.append(f"working ticket graph unavailable: {error}")
     runtime = _authority(owner)["runtime"]
     if state == "abandoned":
-        disposition = _abandoned_disposition(owner, head, ticket_id)
+        disposition = (
+            {"artifacts": _tree(control, head, f"abandonments/{ticket_id}"),
+             "state": "unsupported", "reason": "local evidence not inspected"}
+            if supervising_worker else _abandoned_disposition(owner, head, ticket_id)
+        )
         identity["abandoned_disposition"] = disposition
         if disposition["state"] != "proved":
             blockers.append(f"abandoned disposition unproven: {disposition['reason']}")
@@ -327,7 +346,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         "upstream_observed": None,
     }
     identity["resources"] = inventory
-    try:
+    def observe_inventory() -> None:
         if manager.path.is_symlink():
             inventory["path_state"] = "symlink"
         _safe_path(manager.path)
@@ -376,25 +395,31 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
             inventory["administrative_state"] = conflicts
             if conflicts:
                 blockers.append("finish conflicting Git administrative state")
-    except (
-        ValueError, RuntimeError, OSError, subprocess.SubprocessError,
-        ExecutionWorkspaceError,
-    ) as error:
-        blockers.append(f"local inventory unavailable: {error}")
-    try:
-        observed = remote_ref(
-            owner.repo, owner.remote_name, f"refs/heads/{manager.branch}",
-            runner=observe_git,
-        )
-        inventory.update(upstream_observed=observed,
-                         upstream_state="absent" if observed is None else "observed")
-    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
-        blockers.append(f"upstream observation unavailable: {error}")
+    if not supervising_worker:
+        try:
+            observe_inventory()
+        except (
+            ValueError, RuntimeError, OSError, subprocess.SubprocessError,
+            ExecutionWorkspaceError,
+        ) as error:
+            blockers.append(f"local inventory unavailable: {error}")
+        try:
+            observed = remote_ref(
+                owner.repo, owner.remote_name, f"refs/heads/{manager.branch}",
+                runner=observe_git,
+            )
+            inventory.update(
+                upstream_observed=observed,
+                upstream_state="absent" if observed is None else "observed",
+            )
+        except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+            blockers.append(f"upstream observation unavailable: {error}")
 
     reports = _tree(control, head, f"executions/{ticket_id}")
     artifacts = _tree(control, head, f"executions/{ticket_id}", f"reviews/{ticket_id}")
     identity["artifacts"] = artifacts
-    blockers.extend(_working_evidence_blockers(control, artifacts))
+    if not supervising_worker:
+        blockers.extend(_working_evidence_blockers(control, artifacts))
     historical_paths = observe_git(
         control, "log", "--format=", "--name-only", head, "--",
         f"executions/{ticket_id}", f"reviews/{ticket_id}",
@@ -443,6 +468,8 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
                                        "decision": decision, "binding": binding}
                 else:
                     entry["review"] = {"state": "absent"}
+                if supervising_worker:
+                    continue
                 binding = ResourceBinding.for_execution(manager, report.execution_id)
                 if binding.intent["generation"] != report.resource_generation or (
                     binding.intent["control"] != report.control_head
@@ -528,7 +555,7 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
     # selecting disposal scope is a separate future owner-authorized operation.
     proved = [entry for entry in identity["executions"]
               if entry.get("proof", {}).get("local_state") == "proved"]
-    if not _evidence_only and len(proved) != 1:
+    if not (_evidence_only or supervising_worker) and len(proved) != 1:
         blockers.append("current resource has no unique proved report generation")
     if state in {"accepted", "done"} and not any(
         entry.get("review", {}).get("decision") == "accepted"
@@ -543,7 +570,9 @@ def inspect_clean(owner, ticket_id: str, *, _evidence_only: bool = False) -> dic
         ) != head
     ) or authority_identity(_authority(owner)) != identity["authority"]:
         raise EvidenceError("control or owner authority changed during preview")
-    if _control_identity(owner, control, head) != control_identity:
+    if _control_identity(
+        owner, control, head, committed_only=supervising_worker,
+    ) != control_identity:
         raise EvidenceError("control registration changed during preview")
     complete = not blockers
     blockers.append("upstream continuity is unknown (plain Git remote ABA limitation)")

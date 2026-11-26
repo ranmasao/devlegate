@@ -15,7 +15,9 @@ import stat
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from devlegate.change_revisions import RevisionNamespace, RevisionUnavailable
@@ -38,11 +40,31 @@ class ObservationError(Exception):
     """A bounded observation cannot be completed safely."""
 
 
+class ObservationExpired(Exception):
+    """End the entire owner observation rather than degrading a single proof."""
+
+
+observation_budget: ContextVar[tuple[float, Callable[[], bool]] | None] = ContextVar(
+    "observation_budget", default=None,
+)
+
+
+def observation_timeout(ceiling: float = 30) -> float:
+    budget = observation_budget.get()
+    if budget is None:
+        return ceiling
+    deadline, cancelled = budget
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or cancelled():
+        raise ObservationExpired("read-only observation time budget expired")
+    return min(remaining, ceiling)
+
+
 def _git(repo: Path, *args: str, limit: int, deadline: float | None = None,
          accepted: tuple[int, ...] = (0,), git_dir: Path | None = None,
          common_dir: Path | None = None, isolated: bool = False,
          require_output: tuple[int, ...] = (), policy_config: bool = False) -> bytes:
-    ceiling = time.monotonic() + _OBSERVATION_SECONDS
+    ceiling = time.monotonic() + observation_timeout(_OBSERVATION_SECONDS)
     deadline = min(deadline, ceiling) if deadline is not None else ceiling
     if time.monotonic() >= deadline:
         raise ObservationError("TOO_EXPENSIVE")
