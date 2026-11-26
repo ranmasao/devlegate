@@ -1,0 +1,30 @@
+{
+  "code_base_head": "99ffee4638b1af43617b49b74bd76abd6e6c3e6e",
+  "conclusion": "completed",
+  "control_head": "808807ecc3db335e9d94294bab4acd8dac2c3b4e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-204",
+  "execution_id": "975e20ec509a47d58a3b3e14e3472cde",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-204",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": null,
+  "report_sha256": null,
+  "resource_generation": "c8da7d3ec56a7b7825e8570c2c42bcb736074cef9d1f739c69448c4079da1086",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-204",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": null,
+    "summary": "Added the source-only `native-install` command for Debian and Arch. It overlaps package builds with graceful service drains, verifies the exact installed payload, and restores only the previously running persistent services. It requires operator consent for exceptional instances and records recovery details in a per-invocation inventory."
+  },
+  "workspace_head": "01d6dccac12fb0063dc78cc65ab6cb5d6daf9282"
+}
