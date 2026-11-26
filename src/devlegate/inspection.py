@@ -48,11 +48,7 @@ from devlegate.review_provenance import (
     resolve_amended_rework_review,
     resolve_rework_review,
 )
-from devlegate.tickets import (
-    _validate_cycles,
-    is_canonical_ticket_name,
-    parse_ticket_text,
-)
+from devlegate.tickets import TicketError, parse_ticket_text
 from devlegate.worker_prompt import (
     assignment_prompt_component,
     project_prompt_component,
@@ -149,54 +145,36 @@ def _head(owner) -> tuple[str, dict]:
 def _ticket(owner, head: str, object_id: str) -> tuple[TicketObservation, list[str]]:
     control = owner.control_worktree
     workflow = owner._workflow_paths()
-    tree = _tree(control, head, *workflow.values())
-    matches = [(state, f"{path}/{object_id}.md")
-               for state, path in workflow.items()
-               if f"{path}/{object_id}.md" in tree]
+    graph = owner._committed_workflow(head).graph
+    if graph.inspection_invalid_path is not None:
+        raise EvidenceError(
+            f"non-regular canonical evidence: {graph.inspection_invalid_path}"
+        )
+    matches = graph.by_id.get(object_id, ())
     if len(matches) != 1:
         raise EvidenceError("ticket has no unique canonical committed state")
-    state, path = matches[0]
-    text = _blob(control, tree[path])
-    ticket = parse_ticket_text(control / path, state, text)
+    entry = matches[0]
     nodes: dict[str, list[dict]] = {}
-    parsed = {}
-    for relative, oid in sorted(tree.items()):
-        if not is_canonical_ticket_name(Path(relative).name):
-            continue
-        for node_state, directory in workflow.items():
-            if Path(relative).parent.as_posix() != directory:
-                continue
-            node = parse_ticket_text(
-                control / relative, node_state, _blob(control, oid),
-            )
-            parsed[node.id] = node
-            nodes.setdefault(node.id, []).append({
-                "state": node_state, "path": relative, "blob": oid,
-                "depends_on": list(node.depends_on),
-            })
-    blockers = []
-    for node_id, entries in nodes.items():
-        if len(entries) != 1:
-            blockers.append(f"ambiguous dependency graph ticket: {node_id}")
-        for entry in entries:
-            for dependency in entry["depends_on"]:
-                if dependency not in nodes:
-                    blockers.append(f"missing dependency: {node_id} -> {dependency}")
-    if not blockers:
-        try:
-            _validate_cycles(parsed)
-        except ValueError as error:
-            blockers.append(str(error))
+    for node in sorted(graph.entries, key=lambda item: item.path):
+        if node.ticket is None:
+            raise TicketError(node.diagnostic or "invalid committed ticket")
+        nodes.setdefault(node.id, []).append({
+            "state": node.state, "path": node.path, "blob": node.blob,
+            "depends_on": list(node.ticket.depends_on),
+        })
+    ticket = entry.ticket
+    assert ticket is not None and entry.blob is not None and entry.text is not None
     history = observe_git(
         control, "log", "--format=%H", "--no-renames", head, "--",
         *(f"{p}/{object_id}.md" for p in workflow.values()),
     ).stdout.splitlines()
     return {
-        "id": object_id, "state": state, "type": ticket.type,
-        "title": ticket.title, "path": path, "blob": tree[path], "text": text,
+        "id": object_id, "state": entry.state, "type": ticket.type,
+        "title": ticket.title, "path": entry.path, "blob": entry.blob,
+        "text": entry.text,
         "depends_on": list(ticket.depends_on), "dependency_graph": nodes,
         "provenance": {"control_head": head, "history": history},
-    }, blockers
+    }, list(graph.inspection_blockers)
 
 
 def _prompt_review(control, report, workflow, value, sections) -> str:

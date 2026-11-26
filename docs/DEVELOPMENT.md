@@ -120,10 +120,10 @@ Runs the CLI installed in the repository `.venv`.
 
 ## Committed workflow observations
 
-Consumers in TASK-196 should keep one `WorkflowProjectionCache(control_repo,
-workflow_paths)` per configured project/owner and call `observe(control_head)`
-on the serialized read path. Pass the full local control commit ID already
-resolved by the caller. The returned `WorkflowProjection.control_head` always
+`ServiceEngine` owns one lazy `WorkflowProjectionCache(control_repo,
+workflow_paths)` on its serialized repository path. Consumers pass the full
+local control commit ID already resolved by the caller. The returned
+`WorkflowProjection.control_head` always
 names that exact commit, even when `graph` is the same immutable object returned
 for a different commit. `graph.by_id` retains all canonical claims, including
 duplicates. Each claim records its repository-relative path, state, object
@@ -137,7 +137,9 @@ invalidate the graph. Reads use one commit verification and one configured-tree
 lookup. A miss lists each distinct state tree and reads uncached regular ticket
 blobs in one Git batch. Blob entries cache intrinsic content or parse failures;
 the graph binds each entry to its current path and validates self-references
-again. The two process-local LRU caches default to four graphs and 2,048 parsed
+again. Tree listings also retain the prior ticket-inspection refusal of
+non-regular evidence under workflow directories. Only direct canonical ticket
+entries are parsed. The two process-local LRU caches default to four graphs and 2,048 parsed
 blobs. A new owner or an evicted entry can reconstruct from local Git objects.
 
 Absent/wrong-kind state directories, malformed tickets and invalid dependencies
@@ -150,7 +152,64 @@ without rechecking their availability; the result records committed facts, not
 object retention, local or remote ref continuity, workspace or runtime identity,
 review provenance, or permission to mutate anything.
 
-### Representative read-path measurement
+### Consumer map and observation boundaries
+
+| Consumer | Observation and source |
+| --- | --- |
+| `_run_iteration_body`, selection, serial review/accepted barriers, dependency and abandonment eligibility | The graph at the exact synchronized control commit. Normal iteration first materializes it after control sync and before planning; it publishes counts, runnable order and queues from this store. Fresh registered-checkout, cleanliness and branch checks and a comparison against working ticket names, kinds and bytes establish that the graph applies. Worker admission repeats the proof before recording the pending execution. |
+| `_collect_status_attempt`, `_make_status_snapshot`, `_make_execution_plan`, `check_result`, retry/interrupt candidate views, `status_projection` | Use the same store where working workflow agrees with the sampled commit. Dirty or staged workflow can still be described using a fresh working store. Status retains its before/after Git, runtime and working-file observation and retry protocol. Published status reads only the owner's immutable snapshot. Status-specific dependency explanations derive from the store and runtime state. |
+| Forced retry, control descendant adoption, interrupted recovery, reconciliation resume, lifecycle input and accepted predecessor/completion | Use the projection of the applicable current control commit with fresh working-state proof at graph-dependent mutation boundaries. Ancestry, report identity, admitted dependency blobs, CAS, checkout and workspace ownership remain independently verified. |
+| Recovery reload/title, historical-report retry handling, workspace retirement and cleanup candidates | Fresh working evidence, including invalid evidence, remains observable. If it matches committed storage these use the same projection; otherwise they validate working ticket files. Resource and durable state proofs are re-observed separately where required. |
+| `inspection._ticket` | Committed at the requested revision, independent of checkout/index changes. Uses shared entries and validation diagnostics. Each request still reads ticket history and checks control identity. A historical revision uses its own graph; response data and local runtime annotations are not cached. |
+| Lifecycle output validation, `clean_preview.inspect_clean` working evidence, control bootstrap index/files | Intentional transient working/index observations. The lifecycle validates the resulting graph after moving the ticket and before staging. Clean preview independently hashes working evidence and validates the working graph for its blockers. Bootstrap verifies the exact staged layout. |
+| `clean_preview` committed tree, `ticket_reset.admit` | The recursive path/object inventory and selected-ticket read bind the workspace reset digest and verify evidence modes, including non-ticket files. Ticket reset uses the selected exact blob with its own lineage and authority checks. These are object proofs, not independent DAG validation or selection. |
+| `abandonment_admission`, `abandonment_evidence`, `execution_provenance`, `review_provenance`, inspection execution/prompt, `_prove_bound_ticket_descendant`, `_failed_ticket_history`, execution/log/package-source evidence | Single-ticket, artifact, historical transition and live ownership proofs. Exact object reads, strict modes, history, bounded prompt reads, generation and local evidence checks remain separate. Abandonment admission consumes the scheduler store for runnable eligibility, then freshly proves request/target blobs and resources. `_todo_fingerprint` and reconciliation index/file checks remain separate mutable generation checks. |
+
+The committed store is never proof of cleanliness. The working comparison
+includes ignored canonical filenames and bypasses Git stat shortcuts. A clean
+checkout with newline conversion can use the committed store after fresh
+validation proves the parsed stores equal. A different working graph cannot
+authorize use of a committed one. No graph is saved to runtime storage.
+
+### Representative owner read-path measurement
+
+Run `./dev test -q -s tests/test_workflow_consumers.py::test_real_size_owner_read_paths`.
+The disposable linked control worktree has 211 tickets with a dependency chain,
+five populated workflow commits, packed initial history, and an independent
+publisher. Cold means an empty owner cache, not a cold filesystem. Legacy
+inspection reproduces the old blob reads and parsing (including the selected
+ticket reread), history, and identity checks. Legacy status and idle iteration
+use the old working-tree graph load in the same harness; non-graph startup
+work is primed before timing the idle loop.
+
+One Linux run with Git 2.56.1 / Python 3.14.10, counting Git commands launched
+by the owner (not internal Git children):
+
+| Observation | Elapsed | Git | `cat-file` | Ticket parses |
+| --- | ---: | ---: | ---: | ---: |
+| Legacy ticket inspection | 677.70 ms | 234 | 212 | 212 |
+| Cold ticket inspection | 97.87 ms | 26 | 1 | 211 |
+| Warm ticket inspection | 69.76 ms | 23 | 0 | 0 |
+| Legacy status | 174.36 ms | 33 | 0 | 211 |
+| Warm status | 128.18 ms | 35 | 0 | 0 |
+| Legacy idle iteration | 317.27 ms | 57 | 0 | 422 |
+| Warm idle iteration | 286.68 ms | 66 | 0 | 0 |
+| Independent control sync | 68.39 ms | 17 | 0 | 0 |
+| Unrelated commit inspection | 56.90 ms | 23 | 0 | 0 |
+| Moved and amended ticket inspection | 73.61 ms | 27 | 1 | 1 |
+| Warm status after amendment | 113.48 ms | 35 | 0 | 0 |
+
+Warm inspection uses two graph lookup commands; the other 21 observe control
+identity and ticket history. Execution report/review/prompt and workspace
+observations are not included. Compared with the old filesystem graph loader,
+warm status adds two immutable lookups; idle iteration also checks live control
+state, so its total Git count rises in exchange for eliminating repeated
+ticket parsing and proving the committed graph applies. An unrelated control
+commit shares the graph with distinct attribution; a changed workflow tree
+binds new ticket paths and reparses only the edited blob. The test asserts
+counts and reuse, not latency thresholds.
+
+### Projection-only measurement
 
 Run `./dev test -q -s tests/test_workflow_projection.py::test_representative_packed_history`.
 The disposable SHA-1 repository contains 210 tickets across six states and six
