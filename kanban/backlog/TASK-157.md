@@ -104,21 +104,7 @@ TASK-156 already fixed the previous interactive-TTY silent `exit 1` and added fa
 - **Regression:** Real status CLI/owner IPC during proven current-service active execution must not imply startup reconciliation is blocked; after restart with surviving/indeterminate persisted ownership and no proven current ownership, report actual recovery uncertainty/blocker. Also cover idle genuine workflow blocker, stop/restart and finalization. Preserve structured evidence and all mutation/admission safeguards; distinguish projections without changing scheduling policy.
 - **Scope:** UX register only; semantic projection correction may require a bounded runtime change at implementation time, not just text formatting. Do not extend active TASK-193.
 
-### UX-006 — Native install refuses an ordinary packaged systemd service
-
-- **Status:** Confirmed functional defect, reserved for reopening TASK-204 after TASK-205. Not an instruction to implement this register.
-- **Observed 2026-11-26:** Arch native package, product bfa9cfebb2baeb35bb5ef50aa097d9e527f5e3df. `./dev package native-install` refuses `@devlegate: cannot verify native service and hosting for PID 899052`; manual Arch build, same-version pacman reinstall and graceful restart succeed, but native-install repeats the refusal for PID 979005.
-- **Observed process layout:** /proc/PID/exe and argv[0] identify cached bundled CPython 3.12; argv[1] is the cached unzipped PEX directory; remaining arguments are `--env <project-env> foreground`. The filtered /proc/PID/environ contains `DEVLEGATE_HOST_MODE=external`, `DEVLEGATE_REQUIRE_NOTIFY=1`, `SCIE=/usr/bin/devlegate`, but no PEX entry. Registered project has a managed systemd unit.
-- **Verified cause:** tools/native_install.py process_host accepts only outer executable argv[0], Python with outer executable argv[1], or both PEX and SCIE in initial process environment equal to the native executable. All three are false for the observed real packaged daemon. Initial /proc environment is not equivalent to Python's live os.environ. The prior live test uses a shell shim and injected PEX/SCIE, not this actual process layout.
-- **Desired:** Use sufficient existing managed-unit/loaded launch identity, MainPID, IPC instance and runtime authority for registered systemd services; do not additionally require a specific PEX bootstrap representation. Preserve wrong-owner/foreign-unit and stop-completion refusals. Handle observed SCIE-only process layouts appropriately for other hosting modes and best-effort exceptional discovery without treating arbitrary SCIE environment alone as proof of service ownership. Verify realistic process-layout regression and actual native artifact behavior where practical. No additional runtime proof protocol or receipts.
-- **Disposition:** Amend TASK-204 on its future explicit reopen; preserve historical done specification, execution reports and review artifacts now.
-
-### UX-007 — Native Arch installation displayed as unknown
-
-- **Status:** Confirmed separate runtime identity defect, reserved for the same TASK-204 reopen.
-- **Observed 2026-11-26** after successful pacman same-version reinstall and restart: `/usr/bin/devlegate version` reports `Distribution: standalone`, `Installation: unknown`, CPython 3.12.16 on Arch.
-- **Verified cause:** src/devlegate/runtime_identity.py identity() only recognizes the Debian payload-bound provenance marker. The Arch native builder also writes its own distribution marker. Unknown is the expected result of the existing incomplete classifier, not proof of failed installation.
-- **Desired/regression:** Recognize Arch provenance consistently with Debian using the actual matching executable digest and valid package/distribution marker; report Arch for genuine Arch native payload, preserve Debian recognition, unknown for standalone/missing/malformed/stale/mismatching markers and existing Python package identity. Check human and structured version output. No distribution-family guess or migration.
+Former entries UX-006 and UX-007 were reclassified as functional defects and transferred to the reopened TASK-204, with their diagnostic evidence preserved there and in control history. They are not outstanding UX issues; numbering is not reused.
 
 ## Acceptance criteria
 
