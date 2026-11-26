@@ -4,18 +4,23 @@
 
 import json
 import os
+import socket
 import subprocess
 import sys
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
+from shlex import quote
 from types import SimpleNamespace
 
 import pytest
+import service_harness
 from service_harness import LiveService
 
+from devlegate.launcher import LaunchCommand
 from devlegate.project_registry import ProjectTarget
 from devlegate.runtime_locator import RuntimeLocator
-from devlegate.systemd_supervisor import SystemdSupervisor
+from devlegate.systemd_supervisor import SystemdSupervisor, render_unit, unit_path
 from tools import build_distribution as graph
 from tools import native_install as update
 
@@ -63,6 +68,7 @@ def host(tmp_path, monkeypatch):
         on_install=None,
         on_poll=None,
     )
+    observe_service = update.observe
     monkeypatch.setattr(update, "ROOT", root)
     monkeypatch.setattr(update, "PROC", proc)
     monkeypatch.setattr(update, "_tool_exists", lambda _tool: True)
@@ -136,9 +142,11 @@ def host(tmp_path, monkeypatch):
             return update.Service(target, unit)
         return service
 
+    state.observe_fixture = observe
+
     def projects(binary):
         return {
-            key: observe(service.target, binary)
+            key: update.observe(service.target, binary)
             for key, service in state.projects.items()
         }
 
@@ -224,6 +232,7 @@ def host(tmp_path, monkeypatch):
         ),
     )
     state.add = add
+    state.observe_service = observe_service
     state.project = graph.Source(tmp_path, "reviewed-source", "0.5.8", sys.executable)
     state.output = tmp_path / "out"
 
@@ -311,14 +320,68 @@ def test_preflight_refusals_are_effect_free(host, monkeypatch, reason):
     assert host.events == []
 
 
-def test_all_graceful_stops_overlap_build_and_wait_for_each_completion(host, capsys):
-    write_payload(host.root, "deb", b"old payload")
+def cached_services(host, binary, monkeypatch):
+    """Use production host selection with simulated workflow observations."""
+    monkeypatch.setattr(update, "observe", host.observe_service)
+    bootstrap = host.proc.parent / "unzipped_pexes" / "hash"
+    bootstrap.mkdir(parents=True)
+    envs = {}
+    for service in host.projects.values():
+        envs[service.target.env_file] = service.target
+        if service.host is None:
+            continue
+        mode = service.host.mode
+        env = [f"SCIE={binary}"]
+        if mode in {"external", "internal"}:
+            env.append(f"DEVLEGATE_HOST_MODE={mode}")
+        if mode == "external":
+            env.append("DEVLEGATE_REQUIRE_NOTIFY=1")
+        command = "once" if mode == "once" else "foreground"
+        proc_process(
+            host.proc,
+            service.host.identity.pid,
+            ["/cache/nce/cpython/bin/python3.12", bootstrap,
+             "--env", service.target.env_file, command],
+            env,
+        )
+
+    def health(env):
+        service = host.observe_fixture(envs[env], binary)
+        if service.host is None:
+            return None
+        return {
+            "pid": service.host.identity.pid, "instance_id": service.instance,
+            "ready": True, "lifecycle": {"intent": "none"},
+        }
+
+    monkeypatch.setattr(update, "_healthy_service", health)
+
+    def unit(target, _binary):
+        return host.observe_fixture(target, binary).unit
+
+    monkeypatch.setattr(update, "observe_unit", unit)
+    real_identity = update.process_identity
+
+    def identity(path):
+        info = real_identity(path)
+        return replace(info, uid=1234) if info else None
+
+    monkeypatch.setattr(update, "process_identity", identity)
+
+
+def test_all_graceful_stops_overlap_build_and_wait_for_each_completion(
+    host, capsys, monkeypatch,
+):
+    host.kind = "arch"
+    host.owners = {"arch": "devlegate"}
+    binary = write_payload(host.root, "arch", b"old payload")
     host.add("one", "external")
     host.add("two", "internal")
     host.add("stopped")
+    cached_services(host, binary, monkeypatch)
 
     def progress():
-        assert ("build", "deb") in host.events
+        assert ("build", "arch") in host.events
         host.clients["one"].code = 1  # Lost acknowledgement; proof still required.
         host.stopped.add("one")
         if host.events.count(("proof", "two")) >= 2:
@@ -326,7 +389,7 @@ def test_all_graceful_stops_overlap_build_and_wait_for_each_completion(host, cap
 
     host.on_poll = progress
     assert host.invoke() == 0
-    assert host.events[:3] == [("stop", "one"), ("stop", "two"), ("build", "deb")]
+    assert host.events[:3] == [("stop", "one"), ("stop", "two"), ("build", "arch")]
     assert [event for event in host.events if event[0] == "restart"] == [
         ("restart", "one", "systemd"),
         ("restart", "two", "internal"),
@@ -336,6 +399,23 @@ def test_all_graceful_stops_overlap_build_and_wait_for_each_completion(host, cap
         i for i, event in enumerate(events) if event == "stopped"
     )
     assert "stop client exited 1; graceful completion proved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reason", ["wrong pid", "wrong user"])
+def test_cached_systemd_identity_mismatch_is_effect_free(host, monkeypatch, reason):
+    binary = write_payload(host.root, "deb", b"old payload")
+    service = host.add("one", "external")
+    cached_services(host, binary, monkeypatch)
+    if reason == "wrong pid":
+        host.projects["one"] = replace(service, unit=replace(service.unit, pid=999))
+        message = "supervisor disagree"
+    else:
+        monkeypatch.setattr(update.os, "getuid", lambda: 2345)
+        monkeypatch.setattr(update.os, "geteuid", lambda: 2345)
+        message = "cannot be attributed to this user"
+    with pytest.raises(update.UpdateError, match=message):
+        host.invoke()
+    assert host.events == []
 
 
 @pytest.mark.parametrize(
@@ -408,7 +488,9 @@ def test_exceptions_require_affirmative_acknowledgement(
 ):
     write_payload(host.root, "deb", b"old payload")
     host.add("attached", "foreground")
-    host.stopped.add("attached")
+    host.add("once", "once")
+    cached_services(host, host.root / update.LAYOUT.executable, monkeypatch)
+    host.stopped.update(("attached", "once"))
     exceptional = update.ProcessHost(
         update.ProcessIdentity(888, "1", 4567), "once", "/other"
     )
@@ -424,6 +506,9 @@ def test_exceptions_require_affirmative_acknowledgement(
     monkeypatch.setattr("builtins.input", answer)
     if response == "yes":
         assert host.invoke() == 0
+        assert [event for event in host.events if event[0] == "stop"] == [
+            ("stop", "attached"), ("stop", "once"),
+        ]
         assert not any(event[0] == "restart" for event in host.events)
     else:
         with pytest.raises(update.UpdateError, match="did not acknowledge"):
@@ -459,30 +544,36 @@ def test_changed_exception_requires_fresh_consent(host, monkeypatch, answer):
     assert host.events[-1] == ("restart", "one", "internal")
 
 
+def proc_process(proc, pid, args, env=(), *, lock=False):
+    path = proc / str(pid)
+    path.mkdir()
+    (path / "stat").write_text(f"{pid} (arbitrary title) S " + "0 " * 18 + "123")
+    (path / "cmdline").write_bytes(b"\0".join(os.fsencode(arg) for arg in args))
+    (path / "environ").write_bytes(b"\0".join(os.fsencode(arg) for arg in env))
+    (path / "cwd").symlink_to("/sample-project")
+    (path / "fd").mkdir()
+    if lock:
+        (path / "fd" / "3").symlink_to(f"/state/locks/{'f' * 64}.lock")
+        (path / "fdinfo").mkdir()
+        (path / "fdinfo" / "3").write_text("lock: 1: FLOCK  ADVISORY  WRITE ...")
+
+
 def test_process_inventory_uses_package_process_identity(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(update, "PROC", tmp_path)
     binary = Path("/usr/bin/devlegate")
 
-    def process(pid, args, env=(), *, lock=False):
-        path = tmp_path / str(pid)
-        path.mkdir()
-        (path / "stat").write_text(f"{pid} (arbitrary title) S " + "0 " * 18 + "123")
-        (path / "cmdline").write_bytes(b"\0".join(os.fsencode(arg) for arg in args))
-        (path / "environ").write_bytes(b"\0".join(os.fsencode(arg) for arg in env))
-        (path / "cwd").symlink_to("/sample-project")
-        (path / "fd").mkdir()
-        if lock:
-            (path / "fd" / "3").symlink_to(f"/state/locks/{'f' * 64}.lock")
-            (path / "fdinfo").mkdir()
-            (path / "fdinfo" / "3").write_text("lock: 1: FLOCK  ADVISORY  WRITE ...")
-        return path
+    def process(*args, **kwargs):
+        proc_process(tmp_path, *args, **kwargs)
 
     process(11, [binary, "--env", "/registered/.env", "foreground"])
     process(12, [binary, "@other", "once"], lock=True)
-    env = [f"PEX={binary}", f"SCIE={binary}", "DEVLEGATE_HOST_MODE=internal"]
+    env = [f"SCIE={binary}", "DEVLEGATE_HOST_MODE=internal"]
+    bootstrap = tmp_path / "unzipped_pexes" / "hash"
+    bootstrap.mkdir(parents=True)
+    cached = ["/cache/nce/cpython/bin/python3.12", bootstrap]
     process(
         13,
-        ["/cache/python", binary, "--env", "/unregistered/.env", "foreground"],
+        [*cached, "--env", "/unregistered/.env", "foreground"],
         env,
         lock=True,
     )
@@ -492,6 +583,10 @@ def test_process_inventory_uses_package_process_identity(tmp_path, monkeypatch, 
     process(17, ["/cache/python", binary, "@restricted", "foreground"])
     process(18, ["unrelated"])
     process(19, [binary, "foreground"])
+    process(20, [*cached, "@other", "status", "foreground"], env)
+    process(21, [*cached, "_worker", "foreground"], env)
+    process(22, [*cached, "@other", "foreground"], env)  # no runtime lock
+    process(23, [*cached, "@other", "once"], ["SCIE=/opt/other/devlegate"], lock=True)
     real_items = update._items
     real_identity = update.process_identity
 
@@ -520,6 +615,9 @@ def test_process_inventory_uses_package_process_identity(tmp_path, monkeypatch, 
         (13, "internal", "/unregistered/.env"),
         (17, "foreground (supervision unverified)", "@restricted"),
     }
+    for pid in (15, 20, 21, 23):
+        info = identity(tmp_path / str(pid))
+        assert update.process_host(info, binary, registered=True) == (None, False)
     assert "2 processes with incomplete metadata" in capsys.readouterr().out
 
 
@@ -539,23 +637,111 @@ def test_parser_native_install_is_explicit_and_refuses_ticket(monkeypatch, capsy
     assert "native-install does not accept --ticket" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("systemd", [False, True], ids=["attached", "systemd"])
 def test_real_stop_receipt_requires_exit_and_released_authority(
     git_fixture,
     tmp_path,
     monkeypatch,
+    systemd,
 ):
-    from shlex import quote
-
     binary = tmp_path / "native-launcher"
+    # The stand-in outer launcher is only used by the stop client. The daemon
+    # itself starts with the cached interpreter/directory argv shape.
     binary.write_text(f'#!/bin/sh\nexec {quote(sys.executable)} -m devlegate "$@"\n')
     binary.chmod(0o755)
-    monkeypatch.setenv("PEX", str(binary))
+    monkeypatch.delenv("PEX", raising=False)
     monkeypatch.setenv("SCIE", str(binary))
-    live = LiveService(git_fixture["working"], git_fixture["config"])
+    cache = tmp_path / "cache"
+    interpreter = cache / "nce" / "cpython" / "bin" / "python3.12"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(sys.executable)
+    pex = cache / "unzipped_pexes" / "hash"
+    pex.mkdir(parents=True)
+    bootstrap = Path(service_harness.__file__).with_name("service_bootstrap.py")
+    (pex / "__main__.py").write_text(
+        "import os, runpy, sys\n"
+        "root = os.path.join(os.environ['XDG_CONFIG_HOME'], 'containment')\n"
+        "sys.argv[1:1] = ['--containment-root', root, "
+        "'--', sys.executable, '-m', 'devlegate']\n"
+        f"runpy.run_path({str(bootstrap)!r}, run_name='__main__')\n"
+    )
+
+    monkeypatch.setattr(
+        service_harness,
+        "compose_test_service_command",
+        lambda command, _: list(command),
+    )
+    config = git_fixture["config"]
+    live = LiveService(
+        git_fixture["working"], config,
+        (str(interpreter), str(pex), "--env", str(config), "foreground"),
+    )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(live.registry_home))
-    with live:
+    if systemd:
+        monkeypatch.setenv("DEVLEGATE_HOST_MODE", "external")
+        monkeypatch.setenv("DEVLEGATE_REQUIRE_NOTIFY", "1")
+        notify = f"@devlegate-native-test-{os.getpid()}"
+        # A disposable datagram receiver stands in for the user manager's
+        # notification socket. No unit is installed or host systemctl invoked.
+        receiver = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        receiver.bind("\0" + notify[1:])
+        monkeypatch.setenv("NOTIFY_SOCKET", notify)
+        unit_dir = tmp_path / "units"
+        unit_dir.mkdir()
+        unit = unit_path(live.locator, unit_dir)
+        launcher = LaunchCommand.executable(binary)
+        unit.write_text(render_unit(live.locator, config, launcher=launcher))
+        overrides = {}
+
+        def run(command, **_kwargs):
+            if command == ["systemctl", "--user", "show-environment"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            assert command[:3] == ["systemctl", "--user", "show"]
+            assert command[-1] == unit.name
+            pid = live.process.pid if live.process.poll() is None else 0
+            values = {
+                "LoadState": "loaded", "ActiveState": "active" if pid else "inactive",
+                "MainPID": str(pid), "Job": "0", "FragmentPath": str(unit),
+                "DropInPaths": "", "NeedDaemonReload": "no",
+                "ExecStart": f"{{ path={binary} ; argv[]={binary} ... }}",
+                "KillMode": "mixed", "KillSignal": "15", "TimeoutStopUSec": "infinity",
+                "Restart": "no", **overrides,
+            }
+            output = "\n".join(f"{key}={value}" for key, value in values.items())
+            return subprocess.CompletedProcess(command, 0, output, "")
+
+        def supervisor(**kwargs):
+            return SystemdSupervisor(unit_directory=unit_dir, runner=run, **kwargs)
+
+        monkeypatch.setattr(update, "SystemdSupervisor", supervisor)
+    else:
+        receiver = nullcontext()
+    with receiver, live:
+        proc = update.PROC / str(live.process.pid)
+        assert update._items(proc / "cmdline") == list(live.command)
+        env = update._items(proc / "environ")
+        assert f"SCIE={binary}" in env
+        assert not any(item.startswith("PEX=") for item in env)
+        if systemd:
+            for key, value, message in (
+                ("MainPID", str(live.process.pid + 1), "supervisor disagree"),
+                ("NeedDaemonReload", "yes", "uncertain identity"),
+                ("ExecStart", "{ path=/opt/other ; }", "does not match native"),
+            ):
+                overrides[key] = value
+                with pytest.raises(update.UpdateError, match=message):
+                    update.inventory(binary)
+                del overrides[key]
+            with monkeypatch.context() as restricted:
+                def unavailable(_path):
+                    raise PermissionError("unobservable bootstrap metadata")
+
+                restricted.setattr(update, "_items", unavailable)
+                assert next(iter(update.inventory(binary).values())).mode == "systemd"
+
         (service,) = update.inventory(binary).values()
-        assert service.mode == "foreground"
+        assert service.mode == ("systemd" if systemd else "foreground")
+        assert service.restorable is systemd
         assert service.host.identity.pid == live.process.pid
         assert {h.identity for h in update.exceptions(binary, set())} == {
             service.host.identity,

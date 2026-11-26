@@ -36,30 +36,29 @@ def _standalone_executable() -> Path | None:
     return candidate.resolve()
 
 
-def _debian_marker(executable: Path) -> bool:
+def _native_installation(executable: Path) -> str:
     marker = executable.parent.parent / "share" / "doc" / "devlegate" / (
         "INSTALLATION-PROVENANCE.json"
     )
     try:
         value = json.loads(marker.read_text(encoding="ascii"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
+        return "unknown"
     if not isinstance(value, dict):
-        return False
-    if value.get("distribution") != "debian" or value.get("package") != (
-        "devlegate"
-    ):
-        return False
+        return "unknown"
+    distribution = value.get("distribution")
+    if distribution not in ("debian", "arch") or value.get("package") != "devlegate":
+        return "unknown"
     digest = value.get("payload_sha256")
     if not isinstance(digest, str) or len(digest) != 64:
-        return False
+        return "unknown"
     if any(character not in "0123456789abcdef" for character in digest):
-        return False
+        return "unknown"
     try:
         observed = hashlib.sha256(executable.read_bytes()).hexdigest()
     except OSError:
-        return False
-    return observed == digest
+        return "unknown"
+    return distribution if observed == digest else "unknown"
 
 
 def _metadata_matches_package(distribution: metadata.Distribution) -> bool:
@@ -152,10 +151,9 @@ def identity() -> dict[str, Any]:
     """Return facts that do not require project or service state."""
     executable = _standalone_executable()
     if executable is not None:
-        installation = "debian" if _debian_marker(executable) else "unknown"
         distribution = {
             "form": "standalone",
-            "installer": installation,
+            "installer": _native_installation(executable),
             "editable": "no",
             "direct_url": "unknown",
         }

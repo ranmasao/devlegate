@@ -257,6 +257,7 @@ def process_host(
             ) from None
         limited = True
     outer = str(executable)
+    cached_bootstrap = False
     if args and args[0] == outer:
         product_args = args[1:]
     elif len(args) > 1 and args[1] == outer and Path(args[0]).name.startswith("python"):
@@ -266,9 +267,27 @@ def process_host(
         # or a cached bootstrap script rather than the original executable.
         index = next((i for i, value in enumerate(args[1:], 1) if value == outer), None)
         product_args = args[(index + 1) if index is not None else 1 :]
+    elif (
+        environment.get("SCIE") == outer
+        and "PEX" not in environment
+        and len(args) > 2
+        and Path(args[0]).name.startswith("python")
+        and (bootstrap := Path(args[1])).is_absolute()
+    ):
+        # /proc/environ is the initial environment, before the PEX bootstrap
+        # sets PEX in Python. The interpreter receives the unzipped PEX directory.
+        try:
+            if not stat.S_ISDIR(bootstrap.stat().st_mode):
+                return None, limited
+        except FileNotFoundError:
+            return None, limited
+        cached_bootstrap = True
+        product_args = args[2:]
     else:
         return None, limited
     command, project = _invocation(product_args)
+    if cached_bootstrap and command not in {"foreground", "once"}:
+        return None, limited
     if not registered:
         try:
             if not _runtime_lock(path):
@@ -434,6 +453,15 @@ def observe(target: ProjectTarget, executable: Path) -> Service:
         raise UpdateError(
             f"@{target.alias}: service PID {pid} cannot be attributed to this user"
         )
+    if unit is not None and not unit.idle:
+        if unit.pid != pid:
+            raise UpdateError(
+                f"@{target.alias}: IPC service and managed supervisor disagree"
+            )
+        # The verified loaded launcher and MainPID agree with the runtime
+        # authority. The bootstrap's argv and initial environment add no proof.
+        host = ProcessHost(identity, "external", str(target.env_file))
+        return Service(target, unit, host, instance)
     host, _ = process_host(identity, executable, registered=True)
     if host is None or host.mode not in {"foreground", "once", "internal", "external"}:
         raise UpdateError(
@@ -443,9 +471,7 @@ def observe(target: ProjectTarget, executable: Path) -> Service:
         # An attached host is allowed to run while its persistent unit is idle.
         if host.mode in {"foreground", "once"}:
             return Service(target, unit, host, instance)
-    if (unit is not None and (unit.pid != pid or host.mode != "external")) or (
-        unit is None and host.mode == "external"
-    ):
+    if unit is not None or host.mode == "external":
         raise UpdateError(
             f"@{target.alias}: IPC service and managed supervisor disagree"
         )

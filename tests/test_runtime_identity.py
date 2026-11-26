@@ -8,47 +8,91 @@ import platform
 from pathlib import Path
 from types import SimpleNamespace
 
-from devlegate import runtime_identity
+import pytest
+
+from devlegate import cli, runtime_identity
 
 
-def make_debian_layout(tmp_path: Path, marker: object) -> Path:
+@pytest.fixture
+def native_layout(tmp_path, monkeypatch):
     executable = tmp_path / "usr/bin/devlegate"
     executable.parent.mkdir(parents=True)
-    executable.write_bytes(b"payload")
+    executable.write_bytes(b"\x7fELFpayload")
     executable.chmod(0o755)
     documentation = tmp_path / "usr/share/doc/devlegate"
     documentation.mkdir(parents=True)
-    (documentation / "INSTALLATION-PROVENANCE.json").write_text(
-        json.dumps(marker), encoding="ascii"
-    )
-    return executable
+    monkeypatch.setenv("PEX", str(executable))
+    monkeypatch.setenv("SCIE", str(executable))
+    return executable, documentation / "INSTALLATION-PROVENANCE.json"
 
 
-def test_debian_marker_requires_exact_payload_digest(tmp_path):
-    executable = make_debian_layout(
-        tmp_path,
-        {
-            "distribution": "debian",
+@pytest.mark.parametrize("distribution", ["debian", "arch"])
+def test_native_version_requires_exact_payload_digest(
+    native_layout, monkeypatch, capsys, distribution
+):
+    executable, marker = native_layout
+    marker.write_text(
+        json.dumps({
+            "distribution": distribution,
             "package": "devlegate",
-            "payload_sha256": hashlib.sha256(b"payload").hexdigest(),
-        },
+            "payload_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        }),
+        encoding="ascii",
     )
-    assert runtime_identity._debian_marker(executable)
-    executable.write_bytes(b"portable")
-    assert not runtime_identity._debian_marker(executable)
+    monkeypatch.setattr("sys.argv", ["devlegate", "version"])
+    assert cli.main() == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert "Distribution: standalone" in lines
+    assert f"Installation: {distribution}" in lines
+
+    monkeypatch.setattr("sys.argv", ["devlegate", "version", "--json"])
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["distribution"] == {
+        "form": "standalone",
+        "installer": distribution,
+        "editable": "no",
+        "direct_url": "unknown",
+    }
+
+    executable.write_bytes(b"\x7fELFreplaced")
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out)["distribution"]["installer"] == "unknown"
 
 
-def test_debian_marker_missing_or_malformed_is_unknown(tmp_path):
-    executable = make_debian_layout(tmp_path, {"distribution": "debian"})
-    assert not runtime_identity._debian_marker(executable)
-
-
-def test_debian_marker_absent_is_unknown(tmp_path):
-    executable = tmp_path / "usr/bin/devlegate"
-    executable.parent.mkdir(parents=True)
-    executable.write_bytes(b"payload")
-    executable.chmod(0o755)
-    assert not runtime_identity._debian_marker(executable)
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        None,
+        "{",
+        "[]",
+        {"distribution": "unsupported"},
+        {"distribution": ["arch"]},
+        {"package": "unrelated"},
+        {"payload_sha256": None},
+        {"payload_sha256": "bad digest"},
+        {"payload_sha256": "0" * 64},
+    ],
+)
+def test_invalid_native_provenance_is_unknown(native_layout, invalid):
+    executable, marker = native_layout
+    if isinstance(invalid, dict):
+        value = {
+            "distribution": "arch",
+            "package": "devlegate",
+            "payload_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        }
+        for field, entry in invalid.items():
+            if entry is None:
+                del value[field]
+            else:
+                value[field] = entry
+        invalid = json.dumps(value)
+    if invalid is not None:
+        marker.write_text(invalid, encoding="ascii")
+    value = runtime_identity.identity()
+    assert value["distribution"]["form"] == "standalone"
+    assert value["distribution"]["installer"] == "unknown"
+    assert "Installation: unknown" in runtime_identity.banner(value).splitlines()
 
 
 def test_metadata_must_resolve_to_imported_package(tmp_path, monkeypatch):
@@ -77,7 +121,9 @@ def test_bound_python_distribution_accepts_installer(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runtime_identity.metadata, "distribution", lambda _name: distribution
     )
-    result = runtime_identity._package_identity()
+    monkeypatch.delenv("PEX", raising=False)
+    result = runtime_identity.identity()["distribution"]
+    assert result["form"] == "python-package"
     assert result["installer"] == "pip"
     assert result["editable"] == "unknown"
     assert result["direct_url"] == "unknown"
