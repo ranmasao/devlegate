@@ -1,0 +1,30 @@
+{
+  "code_base_head": "f4393718061be714279193d87be6d09be7812767",
+  "conclusion": "completed",
+  "control_head": "03a6a9317f3b1cef47f94465fe4f318bffa1073e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-198",
+  "execution_id": "8ef7c69c5256453bb0b52c799e8bd09e",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-198",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-198/8ef7c69c5256453bb0b52c799e8bd09e.md",
+  "report_sha256": "0bf044a8504cf7e51c059a16637a5da5d3120497675e893f164678fb092ef948",
+  "resource_generation": "1004b4eed87e6461b141198a07edc15c2180cf3e10dcc58669b5959b2c672af0",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-198",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused Git, workspace, resource-binding, reconciliation, and REWORK checks passed: 223 passed, 1 skipped. ./dev lint and git diff --check passed. Exact-checkpoint hosted CI was not run from the worker workspace; it remains a Devlegate review and integration gate.",
+    "summary": "Implemented an owner-held Git transfer that retains exact A/B/H evidence and prepares candidates in a private repository. Added durable replay, explicit resolution checkpointing, and custody-gated cleanup, and documented the contract for the REWORK and active-reconciliation integrations."
+  },
+  "workspace_head": "7bc17683c555d8c25ba5e750a1e1062528e75fee"
+}
