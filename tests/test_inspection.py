@@ -1242,6 +1242,8 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         for args, message in (
             (("inspect", "execution", active), "no unique canonical committed report"),
             (("inspect", "ticket", "../T-2"), "canonical object ID"),
+            (("inspect", "workspace", "missing-ticket"),
+             "ticket has no unique canonical committed state"),
             (("workspace", "ls"), "inventory observation unavailable"),
             (("workspace", "prune", "--dry-run"), "inventory observation unavailable"),
             (("workspace", "prune", "--apply"), "mutable request was not admitted"),

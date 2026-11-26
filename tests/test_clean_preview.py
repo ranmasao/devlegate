@@ -488,11 +488,19 @@ def test_unknown_ticket_refusal_on_owner_ipc_has_no_effect(owner):
         request_id="missing", method="inspect", onto="workspace", fingerprint="fixture",
         ticket_id="missing-ticket", mutable=False,
     )
+    before_store = owner._runtime_store.observe()
     before = snapshot(owner.repo.parent)
-    with pytest.raises(DevlegateError, match="canonical committed state"):
-        owner._admit_operator_command(command)
+    owner._admit_operator_command(command)
     assert command.admission_event.is_set()
+    assert command.admission_result is None
+    assert isinstance(command.admission_error, DevlegateError)
+    with pytest.raises(
+        DevlegateError, match="ticket has no unique canonical committed state",
+    ) as refused:
+        owner._admission_result(command)
+    assert refused.value is command.admission_error
     assert snapshot(owner.repo.parent) == before
+    assert owner._runtime_store.observe() == before_store
 
 
 @pytest.mark.parametrize("change", ["orphan-review", "deleted-review", "accepted"])
