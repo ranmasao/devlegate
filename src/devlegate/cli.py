@@ -2080,7 +2080,12 @@ def _background_command(
     return (launcher or product_launcher()).argv("--env", str(env_file), "foreground")
 
 
-def _start_background(env_file: Path, *, launcher: LaunchCommand | None = None) -> int:
+def _start_background(
+    env_file: Path,
+    *,
+    launcher: LaunchCommand | None = None,
+    cleanup_failed_start: bool = True,
+) -> int:
     if not hosted_runtime_supported():
         raise DevlegateError(HOSTED_RUNTIME_ERROR)
     try:
@@ -2141,7 +2146,7 @@ def _start_background(env_file: Path, *, launcher: LaunchCommand | None = None) 
         if line == "READY" and child.poll() is None:
             print(f"service started; log: {log_path}")
             return 0
-        if child.poll() is None:
+        if cleanup_failed_start and child.poll() is None:
             child.terminate()
             try:
                 child.wait(timeout=5)

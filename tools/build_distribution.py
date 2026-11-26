@@ -1355,7 +1355,22 @@ def retain_stage_reports(
     evidence.write(f"Standalone build report: {retained}")
 
 
-def package(args: argparse.Namespace) -> int:
+def preflight(args: argparse.Namespace) -> Source:
+    source = source_identity(Path(args.repo).resolve(), str(Path(args.python)))
+    require_tools(("git",))
+    try:
+        validate_source_submodules(source.repo, source.commit)
+    except SourcePreflightError as error:
+        raise DistributionError(str(error)) from error
+    if args.target in {"standalone", "deb", "arch", "all"}:
+        require_tools(("file",))
+    return source
+
+
+def package(
+    args: argparse.Namespace, *, expected_source: Source | None = None,
+    native_result: Callable[[Path, Path], None] | None = None,
+) -> int:
     repo = Path(args.repo).resolve()
     output_path = output_directory(repo, args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1364,14 +1379,9 @@ def package(args: argparse.Namespace) -> int:
     previous_evidence = _ACTIVE_EVIDENCE
     _ACTIVE_EVIDENCE = evidence
     try:
-        source = source_identity(repo, str(Path(args.python)))
-        require_tools(("git",))
-        try:
-            validate_source_submodules(source.repo, source.commit)
-        except SourcePreflightError as error:
-            raise DistributionError(str(error)) from error
-        if args.target in {"standalone", "deb", "arch", "all"}:
-            require_tools(("file",))
+        source = preflight(args)
+        if expected_source is not None and source != expected_source:
+            raise DistributionError("package source changed after preflight")
     except Exception as error:
         evidence.write(f"FAILED before semantic plan: {error}")
         evidence.close()
@@ -1433,6 +1443,8 @@ def package(args: argparse.Namespace) -> int:
             output_path,
         )
         retain_stage_reports(args.target, values, output_path, evidence)
+        if native_result is not None:
+            native_result(final_files[0], values[args.target + "-binary"])
         evidence.write("Artifacts:")
         for path in final_files:
             evidence.write(f"{path}: {path.stat().st_size} bytes {digest(path)}")
@@ -1477,7 +1489,7 @@ class ExplicitRepoAction(argparse.Action):
 
 def parser() -> argparse.ArgumentParser:
     repo = Path(__file__).parents[1].resolve()
-    def add_common_options(target, *, defaults: bool) -> None:
+    def add_common_options(target, *, defaults: bool, native: bool = False) -> None:
         target.add_argument(
             "--output-dir",
             type=Path,
@@ -1489,7 +1501,8 @@ def parser() -> argparse.ArgumentParser:
             "--ticket",
             default=None if defaults else argparse.SUPPRESS,
             metavar="ID",
-            help="build a verified local ticket source using its own packaging tools",
+            help=(argparse.SUPPRESS if native else
+                  "build a verified local ticket source using its own packaging tools"),
         )
         target.add_argument(
             "--repo",
@@ -1548,18 +1561,24 @@ def parser() -> argparse.ArgumentParser:
         ),
         "full-source": "Build and validate the materialized full-source archive.",
         "all": "Build and validate all supported distribution formats.",
+        "native-install": (
+            "Drain services and reinstall the validated native package. "
+            "Requires a clean source checkout; --ticket is not accepted."
+        ),
     }
-    for target in TARGETS:
+    for target in (*TARGETS, "native-install"):
         child = commands.add_parser(
             target,
             prog=f"./dev package {target}",
-            parents=[common],
+            parents=[] if target == "native-install" else [common],
             help=descriptions[target].split(".", 1)[0],
             description=descriptions[target],
             error_prefix=f"dev: package {target}",
             quote_unknown_commands=False,
             help_program=f"./dev package {target}",
         )
+        if target == "native-install":
+            add_common_options(child, defaults=False, native=True)
         child._optionals.title = "Options"
         child.set_defaults(target=target)
     return command
@@ -1569,6 +1588,14 @@ def main() -> int:
     args = parser().parse_args()
     ticket_errors = ()
     try:
+        if args.target == "native-install":
+            if args.ticket is not None:
+                raise DistributionError("native-install does not accept --ticket")
+            if __package__:
+                from tools.native_install import native_install
+            else:
+                from native_install import native_install
+            return native_install(args, preflight=preflight, build=package)
         if args.ticket is not None:
             if args.repo_explicit:
                 raise DistributionError("--repo and --ticket are mutually exclusive")
@@ -1584,11 +1611,17 @@ def main() -> int:
                              ExecutionWorkspaceError, RuntimeLocatorError)
             return package_ticket(args, Path(__file__).parents[1].resolve())
         return package(args)
+    except KeyboardInterrupt:
+        if args.target != "native-install":
+            raise
+        print("dev: package: native install interrupted", file=sys.stderr)
+        return 130
     except Exception as error:
-        category = ("ticket source refused" if isinstance(error, ticket_errors)
+        category = ("native install refused" if args.target == "native-install"
+                    else "ticket source refused" if isinstance(error, ticket_errors)
                     else "build failed")
         detail = str(error)
-        if isinstance(error, OSError):
+        if isinstance(error, OSError) and args.target != "native-install":
             detail = (f"{error.strerror or type(error).__name__}; "
                       "check local file access and build tools")
         elif (isinstance(error, ticket_errors)

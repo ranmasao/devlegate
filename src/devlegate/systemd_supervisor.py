@@ -403,6 +403,26 @@ class SystemdSupervisor:
         result = self._run("is-active", selected, allow_failure=True)
         return result.returncode == 0 or result.stdout.strip() == "deactivating"
 
+    def observe_unit(self, name: str) -> dict[str, str]:
+        """Observe the loaded identity and pending work, including start jobs."""
+        properties = (
+            "LoadState", "ActiveState", "MainPID", "Job", "FragmentPath",
+            "DropInPaths", "NeedDaemonReload", "ExecStart",
+            "KillMode", "KillSignal", "TimeoutStopUSec", "Restart",
+        )
+        self.probe_user_manager()
+        result = self._run(
+            "show", "--all", "--no-pager", "--property=" + ",".join(properties),
+            _validate_unit_name(name),
+        )
+        fields = dict(
+            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+        )
+        pid = fields.get("MainPID", "")
+        if not (set(properties) <= fields.keys() and pid.isascii() and pid.isdigit()):
+            raise SystemdSupervisorError(f"incomplete systemd observation for {name}")
+        return fields
+
     def allocate_unit_name(self, locator: RuntimeLocator) -> str:
         prefix_lengths = (8, 16, *range(20, 65, 4))
         for prefix_length in prefix_lengths:

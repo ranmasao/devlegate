@@ -473,6 +473,41 @@ The canonical dependency flow is `wheel -> standalone -> deb` or `arch`. The Pyt
 aggregate selects `wheel + sdist + pip proofs`; `all` selects wheel, sdist,
 standalone, Debian, Arch, and full-source artifacts.
 
+### Reinstall the local native package
+
+Run `./dev package native-install` as your normal user from a clean, reviewed
+source checkout. This opt-in command selects Debian or Arch from the native
+package database's ownership of `/usr/bin/devlegate`, even if a venv shadows
+that path. It requires a supported installed native package and `sudo` for
+the package manager alone. It does not accept `--ticket`.
+
+The helper records running registered services, requests graceful stops, and
+builds and validates the matching package while the services drain. It checks
+shutdown before running the installer, verifies the installed payload even for
+a same-version reinstall, and restarts only the previously running persistent
+services in their recorded hosting modes. Attached `foreground` and `once`
+sessions require manual relaunch; the helper prints their commands. Observable
+other-user and unregistered services require acknowledgment and are left alone.
+They may keep running the old runtime. Linux process visibility is best-effort;
+restricted `/proc` metadata or a different PID namespace can conceal services.
+
+Avoid starting services, changing registrations or supervision, or running other
+package operations during the update, including while the installer prompts.
+The helper re-observes owners before installation but does not hold a global
+lock across operator commands or the package manager. A service that has not
+proved graceful shutdown is never force-stopped by this command.
+
+The printed `dist/native-install-*/restart-inventory.jsonl` (or the corresponding
+subdirectory of `--output-dir`) records the original owners, stop and restart
+attempts, and exact validated artifact. On failure, a stopped persistent service
+is restored only when its stop and a known-good installed executable can be
+proved. If the update is interrupted, first check whether the native manager
+finished and verify or repair the installed package. Then check each recorded
+project's status before launching: wait for any outstanding graceful stop, do
+not duplicate a live owner, and use the recorded unit or original internal
+launcher for persistent restoration. Use the printed attached launch commands
+for `foreground` and `once`. There is no automatic package rollback.
+
 `./dev` exists only in the source tree and full-source material. It is not
 installed as part of the normal wheel, standalone, Debian, or Arch runtime
 packages.
