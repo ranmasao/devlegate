@@ -321,6 +321,36 @@ feedback or start it as FRESH. Stop the service, preserve and inspect its worksp
 and evidence, then explicitly dispose of that pending generation outside the
 runtime before publishing a new, fully attributed review disposition.
 
+### Reopening completed implementation work
+
+An authorized curator can reopen an ordinary implementation ticket from a
+separate checkout of the canonical control branch. Fast-forward to the published
+tip, then move the one canonical file from `done` to `todo` in a single commit.
+The same commit can replace the specification with valid metadata and a new body,
+or keep it unchanged:
+
+```sh
+git pull --ff-only
+git mv kanban/done/TASK-123.md kanban/todo/TASK-123.md
+# Optionally edit kanban/todo/TASK-123.md here.
+git add kanban/todo/TASK-123.md
+git commit -m "Reopen TASK-123 for follow-up implementation"
+git push origin devlegate/control
+```
+
+Use the project's configured paths and control branch. The owner validates the
+graph, settles any proven prior workspace retirement, and admits FRESH work at
+the current eligible product HEAD. The former integration, execution reports,
+reviews, and ticket blackboard remain in place. The new execution gets its own
+review and acceptance. Editing a done ticket in place, deleting and re-adding it
+in separate commits, reset, and moving an abandoned or abandonment-analysis
+ticket do not reopen it.
+
+Already completed dependents stay done. A dependent not yet admitted waits until
+the reopened prerequisite is done again. Existing admission and publication
+safety checks still apply to work already bound; reopening does not cancel its
+worker. Start a new log follower if an earlier one already ended at done.
+
 ### Editing a ticket
 
 Edit the canonical Markdown at its existing path on `devlegate/control`, commit

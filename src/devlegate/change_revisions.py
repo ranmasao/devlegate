@@ -107,6 +107,7 @@ def published_checkpoint_history(
     repo: Path, control: Path, base: str, head: str, reports: Sequence,
     ticket_id: str, branch: str, *, allow_replay: bool = False,
     displaced_checkpoint: tuple[str, Checkpoint] | None = None,
+    after_control: str | None = None,
 ) -> RevisionNamespace:
     """Order real checkpoints by owner report publication, not Git parentage.
 
@@ -130,7 +131,8 @@ def published_checkpoint_history(
     try:
         paths = _git(
             control, "log", "--first-parent", "--reverse", "--format=",
-            "--name-only", "--no-renames", "--diff-filter=A", "-z", "--", prefix,
+            "--name-only", "--no-renames", "--diff-filter=A", "-z",
+            *((f"{after_control}..HEAD",) if after_control else ()), "--", prefix,
             limit=128 * 1024, deadline=deadline,
         ).decode().split("\0") if reports else ()
         ordered = []

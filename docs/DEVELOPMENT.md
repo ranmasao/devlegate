@@ -172,6 +172,39 @@ checkout with newline conversion can use the committed store after fresh
 validation proves the parsed stores equal. A different working graph cannot
 authorize use of a committed one. No graph is saved to runtime storage.
 
+### Reopening authority and consumer audit
+
+`ticket_cycle.py` reads the terminal departure on the canonical first-parent
+history. A single commit must have a unique ordinary `done` claim in its parent
+and a unique ordinary `todo` claim in its result, both in valid graphs. The move
+commit bounds subsequent admissions; the blob alone cannot distinguish cycles.
+The owner does not persist a separate cycle registry.
+
+- `runtime.py` bounds REWORK, acceptance and Change Explorer report selection by
+  the control admission. Existing descendant validation still protects admitted
+  executions. Older exact-execution inspection and prompts use their own
+  admission and publication, and the blackboard remains keyed by ticket.
+  `clean_preview.py` includes prior reports in the immutable evidence inventory
+  but does not let them supply current workspace or acceptance authority.
+- Acceptance recovery can acknowledge a proved historical done publication
+  without replaying it. Before new admission, the owner can retire any remaining
+  prior resources using that done commit, report and the existing generation,
+  registration and ref proofs. Durable cleanup cohorts record their control
+  observation: branch name and checkpoint alone can coincide across cycles.
+- `ticket_reset.py` selects current continuation evidence; it cannot publish a
+  reopening. Failure/retry still checks exact execution and generation; queued
+  unbound reset and automatic-retry launch grants cannot cross the move. Pending
+  mutations still use their original recovery contracts.
+- `tools/ticket_source.py` selects only current-cycle reports and bindings. A
+  reopened ticket with no current source evidence has nothing to package.
+- `abandonment_admission.py` scopes target resources to the current cycle and
+  keeps attributable prior-cycle pins out of disposal scope; the terminal
+  publication and lease proofs are unchanged.
+- `log_reader.py` is deliberately ticket history, ordered by publication, with
+  exact-execution mode and the existing terminal follow behavior. It does not
+  select evidence for admission. The existing DAG uses current `done` for new
+  admissions but does not recalculate historical integration of dependents.
+
 ### Representative owner read-path measurement
 
 Run `./dev test -q -s tests/test_workflow_consumers.py::test_real_size_owner_read_paths`.

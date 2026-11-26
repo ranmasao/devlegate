@@ -28,6 +28,7 @@ from devlegate.execution_result import ExecutionReport
 from devlegate.execution_workspace import ExecutionWorkspaceManager
 from devlegate.resource_binding import ResourceBinding, _read, _safe_path
 from devlegate.runtime_locator import RuntimeLocator, read_env
+from devlegate.ticket_cycle import latest_reopening
 from devlegate.tickets import is_canonical_ticket_name
 
 try:
@@ -130,6 +131,7 @@ def resolve(
         raise TicketSourceError(
             "ticket is missing or ambiguous in committed project control evidence"
         )
+    reopening = latest_reopening(repo, control, paths, ticket, runner=git)
     root = locator.state_dir / "worktrees" / locator.state_key
     manager = ExecutionWorkspaceManager(repo, root, ticket, runner=git)
     bindings = []
@@ -147,6 +149,8 @@ def resolve(
         if path.parent != binding.directory:
             raise TicketSourceError("generation intent has a foreign storage identity")
         binding._validate_intent()
+        if reopening and not reopening.includes(repo, intent["control"], runner=git):
+            continue
         binding._require_settled()
         binding.require_worker_retirement()
         receipt = _read(binding.directory / "receipt.json")
@@ -183,7 +187,8 @@ def resolve(
     latest_report = None
     publication = None
     history = git(
-        repo, "log", "--format=%H", control, "--", f"executions/{ticket}/"
+        repo, "log", "--format=%H", f"{reopening.previous}..{control}"
+        if reopening else control, "--", f"executions/{ticket}/"
     ).stdout.splitlines()
     publications = []
     for commit in history:
@@ -212,6 +217,9 @@ def resolve(
         if path not in reports:
             raise TicketSourceError("latest execution evidence was removed")
         latest_report = reports[path]
+        if reopening and not reopening.includes(repo, latest_report.control_head,
+                                                runner=git):
+            raise TicketSourceError("latest execution predates the reopening")
         publication = commit
         if (latest_report.execution_branch != manager.branch
                 or latest_report.execution_path != str(manager.path)):

@@ -318,6 +318,16 @@ def admit(owner, ticket_id):
             raise ValueError(f"reset blocked by pending owner transaction: {key}")
     reports = ExecutionReportStore(owner.control_worktree).list(ticket_id)
     current = owner._state.get("execution_ticket_id") == ticket_id
+    reopening = owner._ticket_reopening(head, ticket_id)
+    if reopening:
+        reports = [report for report in reports if reopening.includes(
+            owner.control_worktree, report.control_head, runner=owner._git_runtime,
+        )]
+        if current and owner._state.get("phase") == "idle":
+            current = reopening.includes(
+                owner.control_worktree, owner._state["execution_control_head"],
+                runner=owner._git_runtime,
+            )
     if ticket.state == "todo" and not reports and not current:
         manager = _manager(owner, ticket_id)
         if _namespace_absent(owner, manager):
