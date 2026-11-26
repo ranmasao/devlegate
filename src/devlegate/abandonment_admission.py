@@ -84,9 +84,23 @@ def specification(source: OwnerGitEvidence, head: str, ticket: Ticket,
             "sha256": hashlib.sha256(raw).hexdigest()}
 
 
+def current_cycle_pins(pins, reports, control, reopening, *, runner):
+    """Prior execution-specific pins are historical, not target disposal scope."""
+    if reopening is None:
+        return pins
+    historical = {
+        prefix + report.execution_id + suffix
+        for report in reports
+        if not reopening.includes(control, report.control_head, runner=runner)
+        for prefix in prefixes(report.ticket_id)
+        for suffix in ("", "-rewritten")
+    }
+    return [pin for pin in pins if pin["ref"] not in historical]
+
+
 def observe_resources(*, repo: Path, root: Path, remote: str, target: Ticket,
-                      control: Path, control_head: str,
-                      source: OwnerGitEvidence, runner) -> dict[str, object]:
+                      control: Path, control_head: str, source: OwnerGitEvidence,
+                      runner, reopening=None) -> dict[str, object]:
     """Capture independent local ownership; label upstream continuity honestly.
 
     An exact upstream observation is recorded for later lease comparison, never
@@ -116,7 +130,15 @@ def observe_resources(*, repo: Path, root: Path, remote: str, target: Ticket,
         "code_pins": [],
     }
     reports = ExecutionReportStore(control).list(target.id)
-    for pin in inventory(repo, remote, target.id, runner):
+    pins = current_cycle_pins(
+        inventory(repo, remote, target.id, runner), reports, control, reopening,
+        runner=runner,
+    )
+    if reopening:
+        reports = [report for report in reports if reopening.includes(
+            control, report.control_head, runner=runner,
+        )]
+    for pin in pins:
         pin = {**pin, "generation": None, "execution_id": None,
                "gap": "no independently receipted execution pin"}
         for report in reports:

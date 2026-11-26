@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from devlegate import __version__
 from devlegate.abandonment_admission import (
     AbandonmentAdmission,
+    current_cycle_pins,
     observe_resources,
     require_quiescence,
 )
@@ -200,6 +201,7 @@ from devlegate.runtime_state_validation import (
 )
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 from devlegate.status_projection import blocked_tickets
+from devlegate.ticket_cycle import Reopening, latest_reopening
 from devlegate.tickets import (
     WORKFLOW_STATES,
     Ticket,
@@ -1596,6 +1598,11 @@ class ServiceEngine:
                 "forced retry control admission identity is incomplete"
             )
         current_head, _remote_head = self._sync_control()
+        reopening = self._ticket_reopening(current_head, ticket_id)
+        if reopening and not reopening.includes(
+            self.control_worktree, admitted_control, runner=self._git_runtime,
+        ):
+            raise DevlegateError("stranded execution predates the reopening")
         try:
             control_is_ancestor = is_ancestor(
                 self.control_worktree,
@@ -2212,7 +2219,9 @@ class ServiceEngine:
             self._save_state("idle", automatic_retry=retry)
         return ExecutionAuthorization(ticket_id, "zero_delta_product_drift")
 
-    def _discard_ineligible_zero_delta_retry(self, ticket_store: TicketStore) -> None:
+    def _discard_ineligible_zero_delta_retry(
+        self, ticket_store: TicketStore, control_head: str,
+    ) -> None:
         retry = self._state.get("automatic_retry")
         if not isinstance(retry, dict) or retry.get("status") != ("pending_admission"):
             return
@@ -2220,10 +2229,15 @@ class ServiceEngine:
         if not isinstance(ticket_id, str):
             raise WorkflowBlockedError("automatic zero-delta retry identity is invalid")
         ticket = ticket_store.by_id.get(ticket_id)
+        reopening = self._ticket_reopening(control_head, ticket_id)
         if (
             ticket is not None
             and ticket.state == "todo"
             and ticket in ticket_store.runnable
+            and (reopening is None or reopening.includes(
+                self.control_worktree, str(retry["control_head"]),
+                runner=self._git_runtime,
+            ))
         ):
             return
         self._save_state(
@@ -2509,7 +2523,11 @@ class ServiceEngine:
                 not isinstance(cohort, list)
                 or any(
                     not isinstance(item, dict)
-                    or set(item) != {"ticket_id", "path", "branch", "head"}
+                    or set(item) - {"control_head"}
+                    != {"ticket_id", "path", "branch", "head"}
+                    or ("control_head" in item and not _is_git_identity(
+                        item["control_head"],
+                    ))
                     or not all(
                         isinstance(item[field], str) and item[field]
                         for field in ("ticket_id", "path", "branch", "head")
@@ -2581,11 +2599,19 @@ class ServiceEngine:
                 if isinstance(previous, dict) and isinstance(
                     previous.get("cohort"), list
                 ):
+                    if any("control_head" not in item for item in previous["cohort"]):
+                        raise DevlegateError(
+                            "retained cleanup cohort has no control admission identity"
+                        )
                     receipt["cohort"] = previous["cohort"]
                 else:
-                    receipt["cohort"] = self._workspace_cleanup_cohort(
-                        int(command.onto)
-                    )
+                    head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+                    if head is None:
+                        raise DevlegateError("workspace cleanup control is unavailable")
+                    receipt["cohort"] = [
+                        {**target, "control_head": head}
+                        for target in self._workspace_cleanup_cohort(int(command.onto))
+                    ]
             if command.method == "retry" and command.force:
                 self._force_retry_transition(
                     command.ticket_id, command.request_id, receipt, updated
@@ -4440,7 +4466,17 @@ class ServiceEngine:
             load_project_context(self.repo)
         except ProjectContextError as error:
             raise WorkflowBlockedError(str(error)) from error
-        self._discard_ineligible_zero_delta_retry(ticket_store)
+        self._discard_ineligible_zero_delta_retry(ticket_store, control_head)
+        if queued_reset is not None and queued_reset["fresh_execution_id"] is None:
+            reopening = self._ticket_reopening(control_head, queued_reset["ticket_id"])
+            if reopening and not reopening.includes(
+                self.control_worktree, queued_reset["transaction"]["commit"],
+                runner=self._git_runtime,
+            ):
+                # Queued without a binding: retirement and publication have
+                # finished; only the superseded launch authorization remains.
+                self._save_state("idle", ticket_reset=None)
+                queued_reset = None
         bound_execution = pending_agent_execution
         execution_plan = self._make_execution_plan(
             self._state,
@@ -4706,6 +4742,22 @@ class ServiceEngine:
                     _log(f"no actionable ticket files in {self.todo_path}")
                 return 0
             failed = self._state.get("failed_executions", {})
+            reopening = self._ticket_reopening(control_head, selected_ticket.id)
+            if reopening is not None and authorization is not None and (
+                authorization.is_forced_retry and isinstance(persisted_force, dict)
+                and not reopening.includes(
+                    self.control_worktree, persisted_force["control_head"],
+                    runner=self._git_runtime,
+                )
+            ):
+                raise WorkflowBlockedError(
+                    "pending forced retry predates the reopening"
+                )
+            if reopening is not None and not pending_agent_execution:
+                self._prepare_reopened_ticket(
+                    selected_ticket.id, control_head, reopening,
+                )
+                failed = self._state.get("failed_executions", {})
             failed_for_ticket = (
                 failed.get(selected_ticket.id) if isinstance(failed, dict) else None
             )
@@ -4927,7 +4979,9 @@ class ServiceEngine:
                         "cannot verify whether the persisted pending execution "
                         "is rework"
                     ) from error
-                if self._latest_reviewed_rework_report(pending_reports) is not None:
+                if self._latest_reviewed_rework_report(
+                    pending_reports, reopening=reopening,
+                ) is not None:
                     raise WorkflowBlockedError(
                         "persisted pending rework has no current review binding; "
                         "explicitly dispose of this pre-protocol pending execution "
@@ -4949,7 +5003,9 @@ class ServiceEngine:
                         "cannot read previous execution evidence for "
                         f"{selected_ticket.id}"
                     ) from error
-                previous_generation = self._latest_reviewed_rework_report(reports)
+                previous_generation = self._latest_reviewed_rework_report(
+                    reports, reopening=reopening,
+                )
                 if previous_generation is not None:
                     lifecycle_commit, previous = previous_generation
                     if (
@@ -6852,6 +6908,14 @@ class ServiceEngine:
             prior = ExecutionReportStore(self.control_worktree).list(
                 workspace.ticket_id,
             )
+            reopening = self._ticket_reopening(
+                binding.intent["control"], workspace.ticket_id,
+            )
+            if reopening:
+                prior = [report for report in prior if reopening.includes(
+                    self.control_worktree, report.control_head,
+                    runner=self._git_runtime,
+                )]
             if isinstance(rework, dict):
                 previous = rework.get("previous_execution_id")
                 checkpoint = rework.get("previous_report_checkpoint")
@@ -6887,9 +6951,12 @@ class ServiceEngine:
                 workspace.head, prior, workspace.ticket_id, workspace.branch,
                 allow_replay=reconciled_replay or isinstance(rework, dict),
                 displaced_checkpoint=displaced,
+                after_control=reopening.previous if reopening else None,
             )
-        except (ExecutionReportError, ExecutionWorkspaceError,
-                RevisionUnavailable, OSError):
+        except (
+            ExecutionReportError, ExecutionWorkspaceError, GitAncestryError,
+            GitObservationError, RevisionUnavailable, WorkflowBlockedError, OSError,
+        ):
             pass  # Unprovable history stays unavailable.
         try:
             root = resources.enter_context(tempfile.TemporaryDirectory(
@@ -7002,8 +7069,105 @@ class ServiceEngine:
                 "after evidence publication"
             )
 
+    def _ticket_reopening(self, head: str, ticket_id: str) -> Reopening | None:
+        try:
+            return latest_reopening(
+                self.control_worktree, head, self._workflow_paths(), ticket_id,
+                runner=self._git_runtime,
+            )
+        except (TicketError, GitObservationError) as error:
+            raise WorkflowBlockedError(str(error)) from error
+
+    def _prepare_reopened_ticket(
+        self, ticket_id: str, head: str, reopening: Reopening,
+    ) -> None:
+        """Settle retained prior integration resources before a fresh admission."""
+        self._assert_repository_owner()
+        state = self._state
+        if state["phase"] != "idle" or state.get("worker_identity") is not None:
+            raise WorkflowBlockedError("reopening requires an idle execution owner")
+
+        def historical(control: object) -> bool:
+            return isinstance(control, str) and self._is_ancestor_runtime(
+                self.control_worktree, control, reopening.previous,
+            )
+
+        old_execution = (
+            state.get("execution_ticket_id") == ticket_id
+            and historical(state.get("execution_control_head"))
+        )
+        failed = state.get("failed_executions", {})
+        failure = failed.get(ticket_id)
+        if not old_execution and state.get("execution_ticket_id") == ticket_id:
+            return  # Current-cycle continuation owns the namespace.
+        # Runtime can describe a different ticket after a restart or other work.
+        # A current-cycle report is also sufficient to leave its resources alone.
+        reports = ExecutionReportStore(self.control_worktree).list(ticket_id)
+        if any(reopening.includes(
+            self.control_worktree, report.control_head, runner=self._git_runtime,
+        ) for report in reports):
+            return
+        manager = self.recovery_workspace_manager(ticket_id)
+        registrations = manager._registrations()
+        retirement = state.get("execution_ref_retirement")
+        reconciliation = state.get("reconciliation")
+        resolved = (
+            isinstance(reconciliation, dict)
+            and reconciliation.get("status") == "resolved"
+            and reconciliation.get("ticket_id") == ticket_id
+            and historical(reconciliation.get("control_head"))
+        )
+        retained = (
+            manager.path.exists() or manager.path.is_symlink()
+            or manager.path.resolve() in registrations
+            or any(item.get("branch") == manager.branch
+                   for item in registrations.values())
+            or self._resolve_commit_runtime(self.repo, f"refs/heads/{manager.branch}")
+            is not None or self._execution_remote_head(manager.branch) is not None
+            or (isinstance(retirement, dict)
+                and retirement.get("branch") == manager.branch)
+        )
+        if retained or resolved:
+            integration = self._find_accepted_integration_commit(
+                ticket_id, historical_head=reopening.previous,
+            )
+            if integration is None:
+                raise WorkflowBlockedError("previous cycle integration is not proven")
+            if resolved and not self._is_ancestor_runtime(
+                self.control_worktree, reconciliation["control_head"], integration,
+            ):
+                raise WorkflowBlockedError("resolved prior integration is not proven")
+        if retained:
+            report = self._accepted_execution_report(
+                ticket_id, evidence_head=integration,
+                cleanup_head=(retirement.get("expected_head")
+                              if isinstance(retirement, dict)
+                              and retirement.get("branch") == manager.branch else None),
+            )
+            self._retire_integrated_workspace(
+                ticket_id, report, integration, reopening=reopening,
+            )
+        self._ticket_store(head=head, require_clean=True)
+        fields = {}
+        if isinstance(failure, dict) and historical(failure.get("control_head")):
+            fields["failed_executions"] = {
+                key: value for key, value in failed.items() if key != ticket_id
+            }
+            manual = state.get("manual_retry_required")
+            if isinstance(manual, dict) and manual.get("execution_id") == failure.get(
+                "execution_id"
+            ):
+                fields["manual_retry_required"] = None
+        if old_execution:
+            fields["rework_provenance"] = None
+        if resolved:
+            fields["reconciliation"] = None
+        if fields:
+            self._save_state("idle", clear_execution=old_execution, **fields)
+
     def _latest_reviewed_rework_report(
-        self, reports: tuple[ExecutionReport, ...]
+        self, reports: tuple[ExecutionReport, ...], *,
+        reopening: Reopening | None = None,
     ) -> tuple[str, ExecutionReport] | None:
         """Return only the newest exact normal lifecycle report for this ticket.
 
@@ -7025,7 +7189,7 @@ class ServiceEngine:
         try:
             history = history_changes(
                 self.control_worktree,
-                "HEAD",
+                f"{reopening.previous}..HEAD" if reopening else "HEAD",
                 f"executions/{ticket_id}",
                 runner=self._git_runtime,
             )
@@ -7046,6 +7210,11 @@ class ServiceEngine:
                 raise WorkflowBlockedError("reviewed execution lifecycle is ambiguous")
             if touched:
                 report = touched[0]
+                if reopening and not reopening.includes(
+                    self.control_worktree, report.control_head,
+                    runner=self._git_runtime,
+                ):
+                    raise WorkflowBlockedError("review evidence crosses a reopening")
                 # Failed transport attempts are not completed worker generations.
                 # A valid worker claim can still be reviewed after a no-op result.
                 if (
@@ -7241,6 +7410,7 @@ class ServiceEngine:
 
     def _accepted_execution_report(
         self, ticket_id: str, *, cleanup_head: str | None = None,
+        evidence_head: str = "HEAD",
     ) -> ExecutionReport:
         root = self.control_worktree / "executions" / ticket_id
         if not root.is_dir() or root.is_symlink():
@@ -7261,7 +7431,7 @@ class ServiceEngine:
             ) from error
         accepted_revision = file_history_commit(
             self.control_worktree,
-            "HEAD",
+            evidence_head,
             f"{self.accepted_path}/{ticket_id}.md",
             runner=self._git_runtime,
         )
@@ -7321,6 +7491,11 @@ class ServiceEngine:
             )
         except ExecutionProvenanceError as error:
             raise WorkflowBlockedError(str(error)) from error
+        reopening = self._ticket_reopening(evidence_head, ticket_id)
+        if reopening and not reopening.includes(
+            self.control_worktree, report.control_head, runner=self._git_runtime,
+        ):
+            raise WorkflowBlockedError("accepted execution predates the reopening")
         checkpoint = report.workspace_head
         assert checkpoint is not None
         if not all(
@@ -7337,7 +7512,8 @@ class ServiceEngine:
         return report
 
     def _published_accepted_execution_report(
-        self, ticket_id: str, pending: dict[str, object]
+        self, ticket_id: str, pending: dict[str, object], *,
+        historical_head: str | None = None,
     ) -> ExecutionReport:
         """Resolve a completed integration without disposable refs.
 
@@ -7361,7 +7537,10 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted integration control predecessor is invalid"
             )
-        integration = self._find_accepted_integration_commit(ticket_id)
+        integration = self._find_accepted_integration_commit(
+            ticket_id, historical_head=historical_head,
+            historical_predecessor=control_predecessor if historical_head else None,
+        )
         if integration is None:
             raise WorkflowBlockedError("published accepted integration is not proven")
         parents = commit_parents(
@@ -7422,9 +7601,23 @@ class ServiceEngine:
         pending = self._state.get("accepted_integration")
         store = self._ticket_store(head=control.local_head, require_clean=True)
         ticket = store.by_id.get(ticket_id)
+        reopening = self._ticket_reopening(control.local_head, ticket_id)
+        if isinstance(pending, dict) and reopening and not reopening.includes(
+            self.control_worktree, str(pending.get("control_head")),
+            runner=self._git_runtime,
+        ):
+            # The curator may have observed the published done commit before
+            # the owner's SQLite acknowledgement. Prove that exact historical
+            # publication, then acknowledge it without replaying either effect.
+            self._published_accepted_execution_report(
+                ticket_id, pending, historical_head=reopening.previous,
+            )
+            return control.local_head
         if isinstance(pending, dict) and ticket is not None and ticket.state == "done":
             report = self._published_accepted_execution_report(ticket_id, pending)
         else:
+            if ticket is None or ticket.state != "accepted":
+                raise WorkflowBlockedError("ticket is not durably accepted")
             report = self._accepted_execution_report(ticket_id)
         if report.resource_generation is not None and (
             ticket is None or ticket.state != "done"
@@ -7642,7 +7835,8 @@ class ServiceEngine:
             )
 
     def _retire_integrated_workspace(
-        self, ticket_id: str, report: ExecutionReport, integration_head: str
+        self, ticket_id: str, report: ExecutionReport, integration_head: str, *,
+        reopening: Reopening | None = None,
     ) -> None:
         """Retire only the checkout proven by the accepted-to-done commit."""
         if report.resource_generation is None:
@@ -7665,9 +7859,10 @@ class ServiceEngine:
             )
         ):
             raise WorkflowBlockedError("accepted integration provenance is not exact")
-        ticket = self._ticket_store().by_id.get(ticket_id)
-        if ticket is None or ticket.state != "done":
-            raise WorkflowBlockedError("ticket is not durably done")
+        if reopening is None:
+            ticket = self._ticket_store().by_id.get(ticket_id)
+            if ticket is None or ticket.state != "done":
+                raise WorkflowBlockedError("ticket is not durably done")
         manager = ExecutionWorkspaceManager(
             self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
         )
@@ -7678,7 +7873,7 @@ class ServiceEngine:
             raise WorkflowBlockedError(
                 "accepted execution workspace branch is not exact"
             )
-        self._assert_cleanup_has_no_execution_dependency(report)
+        self._assert_cleanup_has_no_execution_dependency(report, reopening=reopening)
         registrations = manager._registrations()
         registration = registrations.get(manager.path.resolve())
         if registration is None:
@@ -7689,17 +7884,21 @@ class ServiceEngine:
                     "accepted execution workspace registration is ambiguous"
                 )
             self._retire_execution_refs(
-                report.execution_branch, report.workspace_head, report=report
+                report.execution_branch, report.workspace_head, report=report,
+                reopening=reopening,
             )
             return
         workspace = manager._validate_existing(registration, report.workspace_head)
         # Workspace validation can take time (notably with submodules). Check
         # durable ownership and the exact Git observations again immediately
         # before the destructive worktree removal.
-        self._revalidate_cleanup_retirement(report, manager, registration)
+        self._revalidate_cleanup_retirement(
+            report, manager, registration, reopening=reopening,
+        )
         manager.retire(workspace, report.workspace_head)
         self._retire_execution_refs(
-            report.execution_branch, report.workspace_head, report=report
+            report.execution_branch, report.workspace_head, report=report,
+            reopening=reopening,
         )
 
     def _cleanup_resource_status(self, ticket_id: str, branch: str) -> dict[str, str]:
@@ -7763,6 +7962,7 @@ class ServiceEngine:
         candidate: dict[str, str] | None = None,
         abandonment=None,
         completed_only: bool = False,
+        reopening: Reopening | None = None,
     ) -> None:
         """Release only exact, already-published disposable execution refs."""
         self._assert_repository_owner()
@@ -7801,6 +8001,9 @@ class ServiceEngine:
                 or retirement.get("expected_head") != expected_head
             ):
                 raise WorkflowBlockedError("execution ref retirement intent conflicts")
+            if reopening is not None:
+                assert report is not None
+                self._revalidate_cleanup_retirement(report, reopening=reopening)
             # A process can die after compare-and-delete but before the helper
             # observes a newly attached worktree and restores the ref. The
             # durable intent permits only that exact create-if-absent repair.
@@ -7830,7 +8033,7 @@ class ServiceEngine:
             if local_head != expected_head:
                 raise WorkflowBlockedError("local execution ref changed before removal")
             if report is not None:
-                self._revalidate_cleanup_retirement(report)
+                self._revalidate_cleanup_retirement(report, reopening=reopening)
             elif candidate is not None:
                 # A worktree can already be absent after an interrupted pass.
                 # Re-prove durable ownership, ref identity, dependencies, and
@@ -7904,7 +8107,7 @@ class ServiceEngine:
         if remote_head != expected_head:
             raise WorkflowBlockedError("remote execution ref changed before removal")
         if report is not None:
-            self._revalidate_cleanup_retirement(report)
+            self._revalidate_cleanup_retirement(report, reopening=reopening)
             remote_head = remote_ref(
                 self.repo,
                 self.remote_name,
@@ -7979,7 +8182,7 @@ class ServiceEngine:
             )
 
     def _assert_cleanup_has_no_execution_dependency(
-        self, report: ExecutionReport
+        self, report: ExecutionReport, *, reopening: Reopening | None = None,
     ) -> None:
         """Reject only durable runtime state that owns this execution.
 
@@ -8107,7 +8310,15 @@ class ServiceEngine:
             ]
             if execution_id is not None:
                 reconciliation_ownership.append(("execution_id", execution_id))
-            if any(
+            historical_resolution = (
+                reopening is not None and reconciliation["status"] == "resolved"
+                and reconciliation["ticket_id"] == ticket_id
+                and self._is_ancestor_runtime(
+                    self.control_worktree, reconciliation["control_head"],
+                    report.control_head,
+                )
+            )
+            if not historical_resolution and any(
                 reconciliation[field] == expected
                 for field, expected in reconciliation_ownership
             ):
@@ -8174,13 +8385,38 @@ class ServiceEngine:
         report: ExecutionReport,
         manager: ExecutionWorkspaceManager | None = None,
         registration: dict[str, str] | None = None,
+        *, reopening: Reopening | None = None,
     ) -> None:
         """Re-observe exact ownership and Git evidence before each deletion."""
-        self._assert_cleanup_has_no_execution_dependency(report)
-        ticket = self._ticket_store().by_id.get(report.ticket_id)
-        if ticket is None or ticket.state != "done":
-            raise WorkflowBlockedError("ticket is not durably done")
-        fresh = self._accepted_execution_report(report.ticket_id)
+        self._assert_cleanup_has_no_execution_dependency(report, reopening=reopening)
+        if reopening is None:
+            ticket = self._ticket_store().by_id.get(report.ticket_id)
+            if ticket is None or ticket.state != "done":
+                raise WorkflowBlockedError("ticket is not durably done")
+            fresh = self._accepted_execution_report(report.ticket_id)
+            integration = self._find_accepted_integration_commit(
+                report.ticket_id, fresh,
+            )
+        else:
+            head = self._resolve_commit_runtime(self.control_worktree, "HEAD")
+            if head is None:
+                raise WorkflowBlockedError("reopening control revision is unavailable")
+            store = self._ticket_store(head=head, require_clean=True)
+            ticket = store.by_id.get(report.ticket_id)
+            if (
+                ticket is None or ticket.state != "todo"
+                or self._ticket_reopening(head, report.ticket_id) != reopening
+            ):
+                raise WorkflowBlockedError("reopening changed before retirement")
+            integration = self._find_accepted_integration_commit(
+                report.ticket_id, report, historical_head=reopening.previous,
+            )
+            if integration is None:
+                raise WorkflowBlockedError("previous cycle integration is not proven")
+            fresh = self._accepted_execution_report(
+                report.ticket_id, evidence_head=integration,
+                cleanup_head=report.workspace_head,
+            )
         if (
             fresh.execution_id != report.execution_id
             or fresh.execution_branch != report.execution_branch
@@ -8198,10 +8434,18 @@ class ServiceEngine:
                     "cleanup resource generation differs from report"
                 )
             binding.require_ref(report.workspace_head)
+            if reopening is not None:
+                binding.require_worker_retirement()
+                upstream = self._execution_remote_head(report.execution_branch)
+                if upstream is not None and upstream != binding.latest_remote(
+                    binding.intent["prior_remote"],
+                ):
+                    raise WorkflowBlockedError(
+                        "prior cycle upstream ownership is unproven"
+                    )
         self._validate_execution_ref_heads(
             report.execution_branch, report.workspace_head
         )
-        integration = self._find_accepted_integration_commit(report.ticket_id, fresh)
         if integration is None:
             raise WorkflowBlockedError("accepted integration is not proven")
         self._prove_published_product_checkpoint(
@@ -8239,6 +8483,12 @@ class ServiceEngine:
         ticket = store.by_id.get(ticket_id)
         if ticket is None or ticket.state != "done":
             raise WorkflowBlockedError("ticket is not durably done")
+        if admitted := target.get("control_head"):
+            reopening = self._ticket_reopening("HEAD", ticket_id)
+            if reopening and not reopening.includes(
+                self.control_worktree, admitted, runner=self._git_runtime,
+            ):
+                raise WorkflowBlockedError("cleanup admission predates the reopening")
         if completed_only:
             report = self._accepted_execution_report(
                 ticket_id, cleanup_head=expected_head,
@@ -8659,13 +8909,18 @@ class ServiceEngine:
             ) from error
 
     def _find_accepted_integration_commit(
-        self, ticket_id: str, report: ExecutionReport | None = None
+        self, ticket_id: str, report: ExecutionReport | None = None, *,
+        historical_head: str | None = None,
+        historical_predecessor: str | None = None,
     ) -> str | None:
         result = self._git_runtime(
             self.control_worktree,
             "log",
             "--format=%H",
-            "HEAD",
+            *("--first-parent", "--diff-filter=A", "--no-renames")
+            if historical_head is not None else (),
+            f"{historical_predecessor}..{historical_head}"
+            if historical_predecessor else historical_head or "HEAD",
             "--",
             f"{self.done_path}/{ticket_id}.md",
             check=False,
@@ -8675,28 +8930,29 @@ class ServiceEngine:
                 "canonical control history could not be observed"
             )
         commits = result.stdout.splitlines()
-        if not commits:
-            return None
         # The newest done-path change establishes the current done generation.
         # Never fall back to an older integration after a requeue or edit made
-        # the current generation unprovable.
-        commit = commits[0].strip()
-        parents = commit_parents(
-            self.control_worktree, commit, runner=self._git_runtime
-        )
-        if (
-            parents
-            and self._accepted_integration_commit_is_exact(
-                commit, ticket_id, parents[0]
+        # the current generation unprovable. A historical WAL acknowledgment
+        # instead names its exact predecessor and may predate several cycles.
+        for commit in commits if historical_predecessor else commits[:1]:
+            parents = commit_parents(
+                self.control_worktree, commit, runner=self._git_runtime
             )
-            and (
-                report is None
-                or self._accepted_integration_commit_matches_report(
-                    commit, ticket_id, report
+            if (
+                parents
+                and (historical_predecessor is None
+                     or parents[0] == historical_predecessor)
+                and self._accepted_integration_commit_is_exact(
+                    commit, ticket_id, parents[0]
                 )
-            )
-        ):
-            return commit
+                and (
+                    report is None
+                    or self._accepted_integration_commit_matches_report(
+                        commit, ticket_id, report
+                    )
+                )
+            ):
+                return commit
         return None
 
     def _accepted_integration_commit_matches_report(
@@ -11165,13 +11421,19 @@ class ServiceEngine:
                 )
                 return
             assert request is not None
-            require_quiescence(self._state, self._workers.active_count)
+            self._ticket_reopening(control_head, request.id)
             target = store.by_id[request.target]
+            reopening = self._ticket_reopening(control_head, target.id)
+            if reopening is not None and target.state == "todo" and (
+                self._state["phase"] == "idle" and not self._workers.active_count
+            ):
+                self._prepare_reopened_ticket(target.id, control_head, reopening)
+            require_quiescence(self._state, self._workers.active_count)
             resources = observe_resources(
                 repo=self.repo, root=self.execution_worktree_root,
                 remote=self.remote_name, target=target,
                 control=self.control_worktree, control_head=control_head,
-                source=source, runner=self._git_runtime,
+                source=source, runner=self._git_runtime, reopening=reopening,
             )
             admission = AbandonmentAdmission.create(
                 state=self._state, active_count=self._workers.active_count,
@@ -11896,6 +12158,13 @@ class ServiceEngine:
         try:
             observed_pins = inventory(self.repo, self.remote_name, target_id,
                                       self._git_runtime)
+            reopening = self._ticket_reopening(admission["control_head"], target_id)
+            if reopening is not None:
+                observed_pins = current_cycle_pins(
+                    observed_pins, ExecutionReportStore(self.control_worktree).list(
+                        target_id,
+                    ), self.control_worktree, reopening, runner=self._git_runtime,
+                )
             known = {pin["location"] + ":" + pin["ref"] for pin in admitted_pins}
             receipts = dict(cleanup.get("receipts") or {})
             observed = {pin["location"] + ":" + pin["ref"]: pin

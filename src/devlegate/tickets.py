@@ -29,7 +29,7 @@ WORKFLOW_TRANSITIONS = {
     "todo": frozenset({"review", "abandoned"}),
     "review": frozenset({"todo", "backlog", "accepted", "abandoned"}),
     "accepted": frozenset({"done", "abandoned"}),
-    "done": frozenset(),
+    "done": frozenset({"todo"}),
     "abandoned": frozenset(),
 }
 _METADATA_KEYS = {"type", "title", "depends_on"}
@@ -44,7 +44,9 @@ def is_canonical_ticket_name(name: str) -> bool:
 
 def validate_workflow_transition(ticket: Ticket, target: str) -> None:
     """Validate a canonical edge; its owner must also publish the required audit."""
-    if target not in WORKFLOW_TRANSITIONS.get(ticket.state, frozenset()):
+    if target not in WORKFLOW_TRANSITIONS.get(ticket.state, frozenset()) or (
+        ticket.state == "done" and ticket.type != "devlegate.ticket"
+    ):
         raise TicketError(
             f"workflow prohibits {ticket.state} -> {target} for {ticket.id}; "
             "acceptance and terminal disposition have no reverse requeue edge"
@@ -52,7 +54,12 @@ def validate_workflow_transition(ticket: Ticket, target: str) -> None:
 
 
 def requeue_transition(ticket: Ticket) -> None:
-    """Preserving todo is a no-op; all moves use the canonical workflow edges."""
+    """Reset cannot publish a curator's reopening."""
+    if ticket.state == "done":
+        raise TicketError(
+            f"workflow prohibits done -> todo for reset of {ticket.id}; "
+            "reopening requires a committed curator move"
+        )
     if ticket.state != "todo":
         validate_workflow_transition(ticket, "todo")
 

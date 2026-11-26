@@ -29,6 +29,7 @@ from devlegate.execution_workspace import (
 )
 from devlegate.git import remote_ref, resolve_ref_commit
 from devlegate.resource_binding import ResourceBinding, _safe_path
+from devlegate.ticket_cycle import latest_reopening
 from devlegate.tickets import load_ticket_store, parse_ticket_text
 
 SCHEMA = "devlegate.inspect-workspace.v2"
@@ -264,6 +265,7 @@ def inspect_clean(
         raise EvidenceError("ticket has no unique canonical committed state")
     state, path = matches[0]
     ticket = parse_ticket_text(control / path, state, _blob(control, tree[path]))
+    reopening = latest_reopening(control, head, workflow, ticket_id, runner=observe_git)
     blockers = []
     identity: dict = {
         "schema": SCHEMA,
@@ -447,6 +449,11 @@ def inspect_clean(
                 ):
                     raise EvidenceError("report identity disagrees with canonical path")
                 entry.update(publication=publication, report=report.as_dict())
+                historical = reopening and not reopening.includes(
+                    control, report.control_head, runner=observe_git,
+                )
+                if historical:
+                    entry["historical_cycle"] = True
                 if not lifecycle_commit_is_exact(
                     control, publication, report, todo_path=workflow["todo"],
                     review_path=workflow["review"], runner=observe_git,
@@ -468,7 +475,7 @@ def inspect_clean(
                                        "decision": decision, "binding": binding}
                 else:
                     entry["review"] = {"state": "absent"}
-                if supervising_worker:
+                if historical or supervising_worker:
                     continue
                 binding = ResourceBinding.for_execution(manager, report.execution_id)
                 if binding.intent["generation"] != report.resource_generation or (
@@ -558,7 +565,8 @@ def inspect_clean(
     if not (_evidence_only or supervising_worker) and len(proved) != 1:
         blockers.append("current resource has no unique proved report generation")
     if state in {"accepted", "done"} and not any(
-        entry.get("review", {}).get("decision") == "accepted"
+        not entry.get("historical_cycle")
+        and entry.get("review", {}).get("decision") == "accepted"
         for entry in identity["executions"]
     ):
         blockers.append(
