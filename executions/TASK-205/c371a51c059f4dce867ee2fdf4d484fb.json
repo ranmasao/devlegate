@@ -1,0 +1,30 @@
+{
+  "code_base_head": "bfa9cfebb2baeb35bb5ef50aa097d9e527f5e3df",
+  "conclusion": "completed",
+  "control_head": "41cbedb982802f98f3ddc18ebfa0941d1217d4ca",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-205",
+  "execution_id": "c371a51c059f4dce867ee2fdf4d484fb",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-205",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-205/c371a51c059f4dce867ee2fdf4d484fb.md",
+  "report_sha256": "2dd9246b08be613045363d4a5afc4e1925b5b8044c0488a04be430f4ad64b7f6",
+  "resource_generation": "78c704beb3b757761a59c8de84521a8a2982dda3861523fd3fe171194d2b43a9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-205",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Reproduced the original divergence diagnostic failure and verified it with its original assertion; the new real-Git regression checks that historical forced retry is refused without changing SQLite, workspace refs, or recovery refs. The watchdog case passed normally; strace showed the pytest readiness loop taking shared flocks before the child acquired its exclusive lock. Pausing the pytest process after it took that exact shared flock reproduced the same EAGAIN in the launched service; the same instrumented test passed after removing the probe. This demonstrates a test-harness startup race, without claiming the CI log identifies its holder. No production lock behavior changed. Final focused groups passed (71 cases), including both retained same-ID cycles, accepted integration replay, the reported watchdog node, and adjacent recovery, graph, source and log checks. A broader local batch hit the shell timeout; the selected boundaries and reset cases near the cutoff passed in scoped reruns. ./dev lint and git diff --check passed. Exact-successor hosted CI has not run in the worker workspace and remains the Devlegate checkpoint gate.",
+    "summary": "Same-ID reopening retains its Git-derived cycle boundary, and forced retry now checks control ancestry first while refusing executions admitted before the reopening. The live-service test harness waits for a ready IPC response from the launched PID without competing for the service lock."
+  },
+  "workspace_head": "cafb5e5a87d5d7e62a1877267f70da0777d10bce"
+}
