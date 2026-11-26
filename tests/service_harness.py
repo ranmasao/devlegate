@@ -108,28 +108,31 @@ class LiveService:
         return self
 
     def wait_ready(self, timeout: float = 10) -> None:
+        process = self.process
+        if process is None:
+            raise AssertionError("service was not started")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.process is not None and self.process.poll() is not None:
+            if process.poll() is not None:
                 self._collect_output()
                 raise AssertionError(
                     f"service exited before readiness\nstdout:\n{self.stdout}\n"
                     f"stderr:\n{self.stderr}"
                 )
-            if self.locator.daemon_authority_present():
-                try:
-                    response = request(
-                        self.locator.socket_path, "ping", timeout=0.2
-                    )
-                except IPCClientError:
-                    pass
-                else:
-                    if (
-                        response.get("service") == "devlegate"
-                        and response.get("protocol_version") == 1
-                        and response.get("ready") is True
-                    ):
-                        return
+            # A shared flock probe can race the child's exclusive acquisition.
+            # The owner opens IPC only after acquiring authority.
+            try:
+                response = request(self.locator.socket_path, "ping", timeout=0.2)
+            except IPCClientError:
+                pass
+            else:
+                if (
+                    response.get("service") == "devlegate"
+                    and response.get("protocol_version") == 1
+                    and response.get("pid") == process.pid
+                    and response.get("ready") is True
+                ):
+                    return
             time.sleep(0.02)
         self._collect_output()
         raise AssertionError(

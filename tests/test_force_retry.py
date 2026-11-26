@@ -283,6 +283,38 @@ def test_force_retry_rejects_divergent_control_without_mutation(tmp_path, monkey
     assert engine._state == before
 
 
+def test_force_retry_rejects_execution_from_before_reopening(tmp_path, monkeypatch):
+    engine, workspace, control, _old_control = _prepare_changed_descendant(
+        tmp_path, monkeypatch
+    )
+    publisher = tmp_path / "curator"
+    git(
+        tmp_path, "clone", "-b", engine.control_branch, tmp_path / "remote.git",
+        publisher,
+    )
+    git(publisher, "config", "user.name", "Curator")
+    git(publisher, "config", "user.email", "curator@example.com")
+    todo = "kanban/todo/T-1.md"
+    done = "kanban/done/T-1.md"
+    git(publisher, "mv", todo, done)
+    git(publisher, "commit", "-m", "record completed disposition")
+    git(publisher, "mv", done, todo)
+    git(publisher, "commit", "-m", "reopen the same ticket")
+    git(publisher, "push", "origin", "HEAD:devlegate/control")
+    before = state_payload(engine.state_dir)
+    refs = ("for-each-ref", f"refs/heads/{workspace.branch}", "refs/devlegate")
+    refs_before = git(workspace.path, *refs).stdout
+
+    with engine._lock(), pytest.raises(DevlegateError, match="predates the reopening"):
+        engine._validate_force_retry_admission("T-1")
+
+    assert git(control, "rev-parse", "HEAD").stdout == git(
+        publisher, "rev-parse", "HEAD"
+    ).stdout
+    assert state_payload(engine.state_dir) == before
+    assert git(workspace.path, *refs).stdout == refs_before
+
+
 @pytest.mark.parametrize("field", ["execution_branch", "execution_path"])
 def test_force_retry_rejects_unsafe_workspace_without_mutation(
     tmp_path, monkeypatch, field

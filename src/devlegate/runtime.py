@@ -1598,11 +1598,6 @@ class ServiceEngine:
                 "forced retry control admission identity is incomplete"
             )
         current_head, _remote_head = self._sync_control()
-        reopening = self._ticket_reopening(current_head, ticket_id)
-        if reopening and not reopening.includes(
-            self.control_worktree, admitted_control, runner=self._git_runtime,
-        ):
-            raise DevlegateError("stranded execution predates the reopening")
         try:
             control_is_ancestor = is_ancestor(
                 self.control_worktree,
@@ -1618,6 +1613,11 @@ class ServiceEngine:
             raise DevlegateError(
                 "control history diverged; use explicit control reconciliation"
             )
+        reopening = self._ticket_reopening(current_head, ticket_id)
+        if reopening and not reopening.includes(
+            self.control_worktree, admitted_control, runner=self._git_runtime,
+        ):
+            raise DevlegateError("stranded execution predates the reopening")
         ticket_store = self._ticket_store(head=current_head, require_clean=True)
         ticket = ticket_store.by_id.get(ticket_id)
         if (
