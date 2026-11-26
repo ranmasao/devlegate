@@ -1148,6 +1148,17 @@ def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
         before_state = owner._runtime_store.observe()
         state = before_state[0]
         active = state["execution_id"]
+
+        def running_status_published():
+            execution = request(service.locator.socket_path, "status")["execution"]
+            return (execution["stage"], execution["execution_id"]) == (
+                "worker-running", active,
+            )
+
+        # Persisting worker identity precedes the owner's status refresh, whose
+        # Git porcelain calls can still take index.lock. Wait for the refreshed
+        # view before installing the hook and taking the exact file snapshots.
+        service.wait_for(running_status_published)
         worktree = owner.recovery_workspace_manager("T-2").path
         # The fixture, not inspection, changes the current worker's files.
         (worktree / "live.txt").write_text("worker changes\n")

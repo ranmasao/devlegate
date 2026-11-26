@@ -70,8 +70,17 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(update.os, "geteuid", lambda: 1234)
     monkeypatch.setattr(update, "require_tools", lambda _tools: None)
     monkeypatch.setattr(update, "validate_builder_python", lambda _python: None)
-    monkeypatch.setattr(update, "DRAIN_TIMEOUT", 0.05)
-    monkeypatch.setattr(update.time, "sleep", lambda _seconds: None)
+    # Advance the mocked drain on poll intervals, independent of host I/O time.
+    now = 0.0
+
+    def advance(seconds):
+        nonlocal now
+        now += seconds
+
+    monkeypatch.setattr(update, "DRAIN_TIMEOUT", 0.25)
+    monkeypatch.setattr(
+        update, "time", SimpleNamespace(monotonic=lambda: now, sleep=advance),
+    )
 
     def query(tool, *argv):
         kind = "deb" if tool == "dpkg-query" else "arch"
