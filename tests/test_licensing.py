@@ -192,7 +192,7 @@ def _build_distribution_artifacts(root: Path) -> tuple[Path, Path]:
 
 def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> None:
     wheel, sdist = _build_distribution_artifacts(tmp_path)
-    installed = tmp_path / "installed"
+    installed = tmp_path / "coverage-equivalent" / "installed"
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         dist_info = next(name for name in names if name.endswith(".dist-info/METADATA"))
@@ -230,6 +230,11 @@ def test_built_wheel_and_sdist_carry_complete_license_boundaries(tmp_path) -> No
             if name.startswith("devlegate/default_templates/")
             if not name.endswith("/")
         )
+        # Coverage aliases this extraction to the checkout. Prove the Python
+        # payload matches before running any code from the aliased path.
+        for name in sorted(names):
+            if name.startswith("devlegate/") and name.endswith(".py"):
+                assert archive.read(name) == (ROOT / "src" / name).read_bytes(), name
         archive.extractall(installed)
 
     with tarfile.open(sdist) as archive:

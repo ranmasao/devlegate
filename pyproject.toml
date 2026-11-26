@@ -53,6 +53,14 @@ patch = ["subprocess"]
 parallel = true
 sigterm = true
 
+[tool.coverage.paths]
+# Only test fixtures with byte-identical Python sources use coverage-equivalent/.
+devlegate = [
+    "src/devlegate",
+    "**/coverage-equivalent/installed/devlegate",
+    "**/coverage-equivalent/devlegate-*.whl/devlegate",
+]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 88
