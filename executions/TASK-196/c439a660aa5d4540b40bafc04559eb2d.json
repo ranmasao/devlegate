@@ -1,0 +1,30 @@
+{
+  "code_base_head": "c449c44728163d8257258ea627cb7565df80c899",
+  "conclusion": "completed",
+  "control_head": "6e4cade513d215407819c196876deb5b3f64847e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-196",
+  "execution_id": "c439a660aa5d4540b40bafc04559eb2d",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-196",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-196/c439a660aa5d4540b40bafc04559eb2d.md",
+  "report_sha256": "64d44f70c4f8f2306a076947bece5903e0081a18a8e0854ff78566745335e443",
+  "resource_generation": "ceb7dfaad14d36fe1538cfe868c7d3e497b65feddf2cf31e98b87daf4fd64533",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-196",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Final focused checks passed (108 test cases), along with ./dev lint and git diff --check. Exact-checkpoint hosted CI is a Devlegate integration gate and was not run in this worker workspace.",
+    "summary": "Scheduling, status publication, and ticket inspection now share an owner-scoped committed workflow projection while retaining fresh working-tree, ref, and provenance checks. Added a production consumer map, real Git regressions, and a measured 211-ticket comparison."
+  },
+  "workspace_head": "d6664a5d2d5dae4d9e62cd3d75cc8231ea10a6b8"
+}
