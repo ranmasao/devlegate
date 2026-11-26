@@ -159,7 +159,8 @@ review provenance, or permission to mutate anything.
 | `_run_iteration_body`, selection, serial review/accepted barriers, dependency and abandonment eligibility | The graph at the exact synchronized control commit. Normal iteration first materializes it after control sync and before planning; it publishes counts, runnable order and queues from this store. Fresh registered-checkout, cleanliness and branch checks and a comparison against working ticket names, kinds and bytes establish that the graph applies. Worker admission repeats the proof before recording the pending execution. |
 | `_collect_status_attempt`, `_make_status_snapshot`, `_make_execution_plan`, `check_result`, retry/interrupt candidate views, `status_projection` | Use the same store where working workflow agrees with the sampled commit. Dirty or staged workflow can still be described using a fresh working store. Status retains its before/after Git, runtime and working-file observation and retry protocol. Published status reads only the owner's immutable snapshot. Status-specific dependency explanations derive from the store and runtime state. |
 | Forced retry, control descendant adoption, interrupted recovery, reconciliation resume, lifecycle input and accepted predecessor/completion | Use the projection of the applicable current control commit with fresh working-state proof at graph-dependent mutation boundaries. Ancestry, report identity, admitted dependency blobs, CAS, checkout and workspace ownership remain independently verified. |
-| Recovery reload/title, historical-report retry handling, workspace retirement and cleanup candidates | Fresh working evidence, including invalid evidence, remains observable. If it matches committed storage these use the same projection; otherwise they validate working ticket files. Resource and durable state proofs are re-observed separately where required. |
+| Recovery reload/title, historical-report retry handling, and immediate integrated-workspace retirement | Fresh working evidence, including invalid evidence, remains observable. If it matches committed storage these use the same projection; otherwise they validate working ticket files. Resource and durable state proofs are re-observed separately where required. |
+| Workspace inventory, done-ticket cleanup and historical cleanup cohorts | Each screening pass samples the current committed graph against the clean registered checkout once, lazily for ordinary targets. Invalid or changed evidence refuses screening; historical passes retain the cohort-level refusal and non-done blocker. The sample is private to screening. Fresh clean-workflow, registration, resource, runtime and publication proofs precede worktree, local-ref and upstream-ref removal, with independent CAS/lease checks. |
 | `inspection._ticket` | Committed at the requested revision, independent of checkout/index changes. Uses shared entries and validation diagnostics. Each request still reads ticket history and checks control identity. A historical revision uses its own graph; response data and local runtime annotations are not cached. |
 | Lifecycle output validation, `clean_preview.inspect_clean` working evidence, control bootstrap index/files | Intentional transient working/index observations. The lifecycle validates the resulting graph after moving the ticket and before staging. Clean preview independently hashes working evidence and validates the working graph for its blockers. Bootstrap verifies the exact staged layout. |
 | `clean_preview` committed tree, `ticket_reset.admit` | The recursive path/object inventory and selected-ticket read bind the workspace reset digest and verify evidence modes, including non-ticket files. Ticket reset uses the selected exact blob with its own lineage and authority checks. These are object proofs, not independent DAG validation or selection. |
@@ -187,27 +188,54 @@ by the owner (not internal Git children):
 
 | Observation | Elapsed | Git | `cat-file` | Ticket parses |
 | --- | ---: | ---: | ---: | ---: |
-| Legacy ticket inspection | 677.70 ms | 234 | 212 | 212 |
-| Cold ticket inspection | 97.87 ms | 26 | 1 | 211 |
-| Warm ticket inspection | 69.76 ms | 23 | 0 | 0 |
-| Legacy status | 174.36 ms | 33 | 0 | 211 |
-| Warm status | 128.18 ms | 35 | 0 | 0 |
-| Legacy idle iteration | 317.27 ms | 57 | 0 | 422 |
-| Warm idle iteration | 286.68 ms | 66 | 0 | 0 |
-| Independent control sync | 68.39 ms | 17 | 0 | 0 |
-| Unrelated commit inspection | 56.90 ms | 23 | 0 | 0 |
-| Moved and amended ticket inspection | 73.61 ms | 27 | 1 | 1 |
-| Warm status after amendment | 113.48 ms | 35 | 0 | 0 |
+| Legacy ticket inspection | 649.51 ms | 234 | 212 | 212 |
+| Cold ticket inspection | 107.19 ms | 26 | 1 | 211 |
+| Warm ticket inspection | 63.10 ms | 23 | 0 | 0 |
+| Legacy status | 156.49 ms | 33 | 0 | 211 |
+| Warm status | 116.68 ms | 35 | 0 | 0 |
+| Legacy idle iteration | 490.64 ms | 57 | 0 | 422 |
+| Warm idle iteration | 386.94 ms | 64 | 0 | 0 |
+| Independent control sync | 68.84 ms | 17 | 0 | 0 |
+| Unrelated commit inspection | 61.45 ms | 23 | 0 | 0 |
+| Moved and amended ticket inspection | 80.24 ms | 27 | 1 | 1 |
+| Warm status after amendment | 114.40 ms | 35 | 0 | 0 |
 
 Warm inspection uses two graph lookup commands; the other 21 observe control
 identity and ticket history. Execution report/review/prompt and workspace
-observations are not included. Compared with the old filesystem graph loader,
-warm status adds two immutable lookups; idle iteration also checks live control
-state, so its total Git count rises in exchange for eliminating repeated
-ticket parsing and proving the committed graph applies. An unrelated control
+observations are not included. Idle iteration adds two immutable lookups at
+planning and two at the independently bracketed status refresh, where a new
+control revision can be observed. Planning rechecks status, checked-out branch
+and exact canonical ref after matching the live workflow, since control sync
+precedes product synchronization. The canonical ref check needs only one exact
+identity read: a missing, unreadable or different ref all refuse the observation.
+This removes two redundant probes (idle iteration was 66 Git calls). An unrelated control
 commit shares the graph with distinct attribution; a changed workflow tree
 binds new ticket paths and reparses only the edited blob. The test asserts
 counts and reuse, not latency thresholds.
+
+### Cleanup screening measurement
+
+`test_cleanup_ref_only_screening_real_git_trace` counts runtime Git launches
+against real Trace2 events and instruments the separate projection runner and
+workflow reads. With no candidates, discovery alone used four runtime Git
+calls and no workflow reads (17 ms). With 32 non-done or missing candidates,
+the rework reduced 132 runtime and 67 projection calls, with 32 working scans
+(670 ms), to 11 runtime and five cold projection calls with one working scan
+(58 ms). Discovery is two registration lists plus local and remote ref lists.
+The single workflow sample adds registration, root and branch checks, initial
+HEAD, porcelain status, branch recheck and the exact canonical ref check. The
+cold projection adds commit/tree lookup, two distinct state-tree listings and
+one blob batch. No rejected candidate adds a Git call or workflow scan.
+
+The eligible trace screens one done and 32 ref-only candidates with the same
+one workflow sample: 30 runtime calls (the old single-candidate trace used 26)
+and five cold projection calls. Applying to the done candidate uses 110 runtime
+and eight warm projection calls with four working scans. Relative to the
+original 104 runtime calls, four workflow observations add four live calls
+each (initial HEAD, cleanliness, branch and ref verification); removing the
+duplicate candidate proof between checkout removal and ref retirement saves
+ten runtime calls, including one fetch and two remote reads. The retained ref
+retirement path independently proves the candidate at each actual ref deletion.
 
 ### Projection-only measurement
 

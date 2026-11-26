@@ -9,15 +9,38 @@ import json
 import subprocess
 import threading
 from collections import Counter
+from time import perf_counter
 from types import SimpleNamespace
 
 from _control_support import *  # noqa: F403,F405
 from devlegate import recovery_workspace
 import devlegate.execution_workspace as execution_workspace_module
 import devlegate.runtime as runtime_module
+from devlegate import tickets, workflow_projection
 from devlegate.execution_result import ExecutionReport, ExecutionResult
 from devlegate.git import resolve_commit
 from devlegate.resource_binding import ResourceBinding
+
+
+@pytest.fixture
+def cleanup_workflow_trace(monkeypatch):
+    counts = Counter()
+
+    def instrument(module, name, key):
+        original = getattr(module, name)
+
+        def traced(*args, **kwargs):
+            counts[key] += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, traced)
+
+    instrument(workflow_projection, "observe_git", "projection Git")
+    instrument(runtime_module, "working_workflow_fingerprint", "working scan")
+    instrument(runtime_module, "load_ticket_store", "working load")
+    instrument(tickets, "parse_ticket_content", "working parse")
+    instrument(workflow_projection, "parse_ticket_content", "projection parse")
+    return counts
 
 
 def _bound_cleanup_workspace(manager, control, base, execution_id):
@@ -150,7 +173,7 @@ def test_workspace_cleanup_dry_run_retains_unintegrated_execution(
     assert engine._state.get("mutable_receipts", {}) == {}
 
 
-def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
+def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch, cleanup_workflow_trace):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     engine = Devlegate(config)
@@ -164,6 +187,8 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     )
     _publish_done_execution(control, workspace, "T-1", checkpoint, "trace-cleanup")
     git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    for number in range(32):
+        git(working, "branch", f"devlegate/work/T-{number + 100}")
     trace = []
     original = runtime_module._git
 
@@ -174,8 +199,12 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_module, "_git", traced)
     trace_path = tmp_path / "cleanup-trace.jsonl"
     monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
-    dry = engine.cleanup_workspaces(apply=False, limit=1)
+    dry = engine.cleanup_workspaces(apply=False, limit=33)
     boundary = len(trace)
+    assert cleanup_workflow_trace == {
+        "projection Git": 5, "projection parse": 1, "working scan": 1,
+    }
+    cleanup_workflow_trace.clear()
     result = engine.cleanup_workspaces(apply=True, limit=1)
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
     starts = [
@@ -185,15 +214,16 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
     dry_counts = Counter(x[0] for x in trace[:boundary])
     applied = trace[boundary:]
     apply_counts = Counter(x[0] for x in applied)
-    # Workflow reuse resolves a fresh HEAD; immutable object reads use the
-    # separate observation runner (which deliberately strips GIT_TRACE2_EVENT).
-    assert len(trace[:boundary]) == 27 and dry_counts["fetch"] == 1
+    # One workflow sample for screening, then fresh samples before worktree,
+    # local-ref and upstream-ref deletion. No extra post-removal proof pass.
+    assert len(trace[:boundary]) == 30 and dry_counts["fetch"] == 1
     assert dry_counts["ls-remote"] == 3
-    assert len(applied) == 109
+    assert len(applied) == 110
+    assert cleanup_workflow_trace == {"projection Git": 8, "working scan": 4}
     assert (
         apply_counts["fetch"], apply_counts["ls-remote"],
         apply_counts["update-ref"], apply_counts["push"],
-    ) == (5, 14, 1, 1)
+    ) == (4, 12, 1, 1)
     removal = next(
         i for i, args in enumerate(applied) if args[:2] == ("worktree", "remove")
     )
@@ -205,16 +235,19 @@ def test_cleanup_eligible_real_git_trace(tmp_path, monkeypatch):
         for e in events
     )
     assert dry["decisions"][0]["status"] == "eligible"
+    assert [item["status"] for item in dry["decisions"][1:]] == ["skipped"] * 32
     assert result["decisions"][0]["status"] == "retired"
 
 
 @pytest.mark.parametrize("candidates", [0, 32])
-def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candidates):
+def test_cleanup_ref_only_screening_real_git_trace(
+    tmp_path, monkeypatch, candidates, cleanup_workflow_trace,
+):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     engine = Devlegate(config)
     for number in range(candidates):
-        git(working, "branch", f"devlegate/work/T-{number + 100}")
+        git(working, "branch", f"devlegate/work/T-{number + 1}")
     trace = []
     original = runtime_module._git
 
@@ -225,16 +258,38 @@ def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candid
     monkeypatch.setattr(runtime_module, "_git", traced)
     trace_path = tmp_path / "screen-trace.jsonl"
     monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_path))
+    start = perf_counter()
     result = engine.cleanup_workspaces(apply=False, limit=max(1, candidates))
+    elapsed_ms = (perf_counter() - start) * 1000
+    print(f"cleanup screening ({candidates}): {elapsed_ms:.2f} ms, "
+          f"{len(trace)} runtime Git, {dict(cleanup_workflow_trace)}")
     events = [json.loads(line) for line in trace_path.read_text().splitlines()]
     starts = [
         e for e in events if e.get("event") == "start" and "/" not in e["sid"]
     ]
     assert [tuple(e["argv"][3:]) for e in starts] == trace
     counts = Counter(x[0] for x in trace)
-    assert len(trace) == 4 + 3 * candidates
+    assert trace[:4] == [
+        ("worktree", "list", "--porcelain"),
+        ("worktree", "list", "--porcelain"),
+        ("for-each-ref", "--format=%(refname) %(objectname)",
+         "refs/heads/devlegate/work"),
+        ("ls-remote", "origin", "refs/heads/devlegate/work/*"),
+    ]
+    assert trace[4:] == ([
+        ("worktree", "list", "--porcelain"),
+        ("rev-parse", "--show-toplevel"),
+        ("symbolic-ref", "--quiet", "--short", "HEAD"),
+        ("rev-parse", "--verify", "HEAD^{commit}"),
+        ("status", "--porcelain"),
+        ("symbolic-ref", "--quiet", "--short", "HEAD"),
+        ("show-ref", "--verify", "refs/heads/devlegate/control"),
+    ] if candidates else [])
+    assert cleanup_workflow_trace == ({
+        "projection Git": 5, "projection parse": 1, "working scan": 1,
+    } if candidates else {})
     assert counts["ls-remote"] == 1
-    assert counts["worktree"] == 2 + candidates
+    assert counts["worktree"] == 2 + bool(candidates)
     assert len(result["decisions"]) == candidates
     assert all(item["status"] == "skipped" for item in result["decisions"])
     assert any(
@@ -242,6 +297,34 @@ def test_cleanup_ref_only_screening_real_git_trace(tmp_path, monkeypatch, candid
         and "upload-pack" in " ".join(e.get("argv", []))
         for e in events
     )
+
+
+def test_cleanup_screening_shares_ref_advance_refusal(
+    tmp_path, monkeypatch, cleanup_workflow_trace,
+):
+    working, config, _state = control_fixture(tmp_path)
+    assert invoke(working, "control", "init", config=config).returncode == 0
+    engine = Devlegate(config)
+    control = engine.control_worktree
+    for number in range(1, 5):
+        git(working, "branch", f"devlegate/work/T-{number}")
+    head = git(control, "rev-parse", "HEAD").stdout.strip()
+    original = engine._committed_workflow
+    original(head)
+    cleanup_workflow_trace.clear()
+
+    def advance(revision):
+        view = original(revision)
+        git(control, "commit", "--allow-empty", "-m", "Advance during screening")
+        return view
+
+    monkeypatch.setattr(engine, "_committed_workflow", advance)
+    decisions = engine.cleanup_workspaces(limit=4)["decisions"]
+    assert [(item["status"], item["reason"]) for item in decisions] == [
+        ("skipped", "canonical control changed during workflow observation"),
+    ] * 4
+    assert cleanup_workflow_trace == {"projection Git": 2, "working scan": 1}
+    assert git(control, "rev-parse", "HEAD^").stdout.strip() == head
 
 
 def test_validated_workspace_retirement_forces_removal_but_keeps_branch(
@@ -746,7 +829,7 @@ def test_done_unregistered_checkout_retains_all_resources(tmp_path, monkeypatch)
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
 
     result = engine.cleanup_workspaces(apply=True, limit=1)
@@ -817,7 +900,7 @@ def test_done_clean_worktree_retires_without_historical_execution_report(
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
     monkeypatch.setattr(
         engine,
@@ -877,7 +960,7 @@ def test_done_published_changed_worktree_retires_without_historical_report(
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
 
     result = engine.cleanup_workspaces(apply=True, limit=1)
@@ -1698,7 +1781,7 @@ def test_workspace_cleanup_does_not_require_remote_provenance_history(
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
     monkeypatch.setattr(
         engine,
@@ -1749,7 +1832,7 @@ def test_workspace_cleanup_reports_partial_apply_resources(tmp_path, monkeypatch
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="done")}),
     )
     monkeypatch.setattr(
         engine, "_accepted_execution_report", lambda _ticket_id, **_kwargs: report,
@@ -2287,7 +2370,7 @@ def test_workspace_cleanup_retains_candidate_owned_runtime_dependencies(
     monkeypatch.setattr(
         engine,
         "_ticket_store",
-        lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="accepted")}),
+        lambda **_: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="accepted")}),
     )
     with pytest.raises(WorkflowBlockedError, match="pending integration dependency"):
         engine._assert_cleanup_has_no_execution_dependency(report)
@@ -2401,8 +2484,9 @@ def test_workspace_cleanup_revalidates_ownership_before_worktree_removal(
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
 
 
+@pytest.mark.parametrize("publish", [False, True], ids=["staged", "committed"])
 def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, publish,
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2433,11 +2517,10 @@ def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
         nonlocal requeued
         if not requeued:
             requeued = True
-            monkeypatch.setattr(
-                engine,
-                "_ticket_store",
-                lambda: SimpleNamespace(by_id={"T-1": SimpleNamespace(state="review")}),
-            )
+            (control / "kanban/done/T-1.md").rename(control / "kanban/todo/T-1.md")
+            git(control, "add", "-A")
+            if publish:
+                git(control, "commit", "-m", "Requeue candidate after screening")
         return original_validate(*args, **kwargs)
 
     monkeypatch.setattr(
@@ -2447,9 +2530,12 @@ def test_workspace_cleanup_revalidates_done_state_before_worktree_removal(
     result = engine.cleanup_workspaces(apply=True, limit=1)
 
     assert result["decisions"][0]["status"] == "blocked"
-    assert result["decisions"][0]["reason"] == "ticket is not durably done"
+    assert result["decisions"][0]["reason"] == (
+        "ticket is not durably done" if publish else "control working tree is dirty"
+    )
     assert workspace.path.is_dir()
     assert resolve_commit(working, f"refs/heads/{workspace.branch}") == checkpoint
+    assert git(working, "ls-remote", "origin", f"refs/heads/{workspace.branch}").stdout
 
 
 def test_workspace_cleanup_retains_candidate_for_malformed_unrelated_provenance(

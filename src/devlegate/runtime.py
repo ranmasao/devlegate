@@ -18,7 +18,9 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from contextlib import ExitStack, contextmanager, nullcontext
+from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3417,16 +3419,23 @@ class ServiceEngine:
                 if require_clean:
                     assert graph.store is not None
                     store = graph.store
-            if require_clean and (
-                self._branch_runtime(control) != self.control_branch
-                or resolve_ref_commit(
-                    self.repo, f"refs/heads/{self.control_branch}",
-                    runner=self._git_runtime,
-                ) != head
-            ):
-                raise WorkflowBlockedError(
-                    "canonical control changed during workflow observation"
+            if require_clean:
+                ref = f"refs/heads/{self.control_branch}"
+                # Only an exact match can authorize this graph. There is no
+                # absence path here, and the projection verified the object.
+                current = (
+                    self._git_runtime(
+                        self.repo, "show-ref", "--verify", ref, check=False,
+                    )
+                    if self._branch_runtime(control) == self.control_branch else None
                 )
+                if (
+                    current is None or current.returncode
+                    or current.stdout.split() != [head, ref]
+                ):
+                    raise WorkflowBlockedError(
+                        "canonical control changed during workflow observation"
+                    )
             self._workflow_validation_succeeded = True
             return store
         except (TicketError, GitObservationError) as error:
@@ -8045,6 +8054,7 @@ class ServiceEngine:
     def _observe_cleanup_candidate(
         self, target: dict[str, str], registrations: dict[Path, dict[str, str | None]],
         *, completed_only: bool = False,
+        screen_workflow: Callable[[], TicketStore] | None = None,
     ) -> tuple[ExecutionWorkspaceManager, ExecutionWorkspace | None, SimpleNamespace]:
         """Prove current Git identity and the required done execution authority."""
         ticket_id = target["ticket_id"]
@@ -8058,14 +8068,14 @@ class ServiceEngine:
             or target["branch"] != manager.branch
         ):
             raise WorkflowBlockedError("workspace cleanup target identity is invalid")
-        ticket = self._ticket_store().by_id.get(ticket_id)
+        store = (
+            self._ticket_store(require_clean=True)
+            if screen_workflow is None else screen_workflow()
+        )
+        ticket = store.by_id.get(ticket_id)
         if ticket is None or ticket.state != "done":
             raise WorkflowBlockedError("ticket is not durably done")
         if completed_only:
-            if not getattr(self, "_workspace_preview", False) and self._status_runtime(
-                self.control_worktree
-            ):
-                raise WorkflowBlockedError("control working tree is dirty")
             report = self._accepted_execution_report(
                 ticket_id, cleanup_head=expected_head,
             )
@@ -8210,12 +8220,27 @@ class ServiceEngine:
                     "reason": self._workspace_cleanup_observation_error,
                 }
             )
+        @cache
+        def sample_workflow() -> TicketStore | Exception:
+            # This sample is only for screening this cohort. Share failures as
+            # well as successes so an invalid checkout cannot trigger N scans.
+            try:
+                return self._ticket_store(require_clean=True)
+            except (
+                DevlegateError, GitObservationError, OSError,
+                subprocess.SubprocessError, ValueError,
+            ) as error:
+                return error
+
+        def screen_workflow() -> TicketStore:
+            sample = sample_workflow()
+            if isinstance(sample, Exception):
+                raise sample.with_traceback(None)
+            return sample
+
         tickets = {}
         if historical and targets:
-            # Do not classify an uncommitted workflow move as durable state.
-            if self._status_runtime(self.control_worktree):
-                raise WorkflowBlockedError("control working tree is dirty")
-            tickets = self._ticket_store().by_id
+            tickets = screen_workflow().by_id
         for target in targets:
             retained = (self._state.get("abandonment_retirements") or {}).get(
                 target.get("ticket_id")
@@ -8301,8 +8326,9 @@ class ServiceEngine:
                 )
                 continue
             try:
-                manager, workspace, _binding = self._observe_cleanup_candidate(
+                manager, _workspace, _binding = self._observe_cleanup_candidate(
                     target, registrations, completed_only=completed_only,
+                    screen_workflow=screen_workflow,
                 )
                 decision = {
                     "ticket_id": ticket_id,
@@ -8310,16 +8336,14 @@ class ServiceEngine:
                     "reason": "done execution is published and disposable",
                 }
                 if apply:
-                    # Repeat every safety observation after inspection and before
-                    # each destructive stage, so interrupted cleanup converges.
+                    # The cohort sample is not authority to remove a checkout.
                     manager, current, _binding = self._observe_cleanup_candidate(
                         target, manager._registrations(), completed_only=completed_only,
                     )
                     if current is not None:
                         manager.retire(current, target["head"])
-                    self._observe_cleanup_candidate(
-                        target, manager._registrations(), completed_only=completed_only,
-                    )
+                    # Ref retirement independently re-observes the candidate
+                    # before each deletion, including on interrupted re-entry.
                     self._retire_execution_refs(
                         manager.branch, target["head"], candidate=target,
                         completed_only=completed_only,
