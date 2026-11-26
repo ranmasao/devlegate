@@ -1,0 +1,34 @@
+{
+  "code_base_head": "c449c44728163d8257258ea627cb7565df80c899",
+  "conclusion": "incomplete",
+  "control_head": "40a24ee5aa6891e7628fbce2cdf2de5b09147c81",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-196",
+  "execution_id": "2c7c92bd8201480b9878161e271c612b",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-196",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Complete hosted verification: Devlegate must checkpoint this worktree and run full hosted CI against that exact checkpoint."
+  ],
+  "report_artifact": "executions/TASK-196/2c7c92bd8201480b9878161e271c612b.md",
+  "report_sha256": "6d3d43f4204400ba86e05cc1d6badb817e2b3db1386dd250445c337bfd471524",
+  "resource_generation": "dddb59d9774cd8a6a1cc7070cbf6b9c5cb11774d634adbe6387dcd33492335dd",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-196",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "incomplete",
+    "questions": [],
+    "remaining": [
+      "Complete hosted verification: Devlegate must checkpoint this worktree and run full hosted CI against that exact checkpoint."
+    ],
+    "report": "The final focused groups passed (153 tests), as did ./dev lint and git diff --check. Exact-checkpoint hosted CI is still unverified and is outside the worker's Git/workflow authority.",
+    "summary": "Cleanup screens each cohort against one shared workflow observation and revalidates control and resource evidence before each destructive stage. Exact canonical-ref verification uses a single Git read, and the consumer map and real-Git measurements document the revised boundaries."
+  },
+  "workspace_head": "4338f6d4721c01a96893e916241193f74afd80dd"
+}
