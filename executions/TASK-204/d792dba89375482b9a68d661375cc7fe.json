@@ -1,0 +1,30 @@
+{
+  "code_base_head": "99ffee4638b1af43617b49b74bd76abd6e6c3e6e",
+  "conclusion": "completed",
+  "control_head": "350400dde0ea9a81eed7ae9a7da2be78b622ad4e",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-204",
+  "execution_id": "d792dba89375482b9a68d661375cc7fe",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-204",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-204/d792dba89375482b9a68d661375cc7fe.md",
+  "report_sha256": "f535f1ec0eaaafdcafd2cebc9d3d460a4b0bda59a72ac55a83c19335eb6ada00",
+  "resource_generation": "3082ad56064a63395b0e79dda54c4dc2756813aad3c9478146f8f1c1cee4db47",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-204",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Baseline Git Trace2 identified control worktree index.lock writes from ordinary git status --porcelain in both live-worker variants. Final focused checks passed (95 tests, including both live-worker variants and native-install/package graph/systemd regressions), along with ./dev lint and git diff --check. Exact successor hosted CI remains a Devlegate integration gate; no host package install was performed.",
+    "summary": "The live-worker inspection regression waits for the matching owner-published status before taking exact filesystem snapshots. The native-install drain fixture advances a simulated clock so host I/O cannot consume its mocked timeout."
+  },
+  "workspace_head": "bfa9cfebb2baeb35bb5ef50aa097d9e527f5e3df"
+}
