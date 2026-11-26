@@ -5,13 +5,14 @@
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from subprocess import run
-from time import perf_counter
+from time import monotonic, perf_counter
 
 import pytest
 from git_support import git
 
 from devlegate import clean_preview, tickets
 from devlegate import workflow_projection as projection
+from devlegate.change_explorer import ObservationExpired, observation_budget
 from devlegate.git import GitObservationError
 from devlegate.tickets import WORKFLOW_STATES, TicketError, load_ticket_store
 from devlegate.workflow_projection import WorkflowProjectionCache
@@ -82,6 +83,30 @@ def counts(monkeypatch):
     monkeypatch.setattr(projection, "parse_ticket_content", parse)
     monkeypatch.setattr(tickets, "parse_ticket_content", parse)
     return calls, parses, batches
+
+
+def test_cancelled_blob_batch_can_be_retried(repo, monkeypatch):
+    put(repo, "todo", "T-1", text("First"))
+    put(repo, "todo", "T-2", text("Second"))
+    head = commit(repo)
+    cache = WorkflowProjectionCache(repo, PATHS)
+    parse = projection.parse_ticket_content
+    parsed = []
+
+    def counted_parse(content):
+        parsed.append(content)
+        return parse(content)
+
+    monkeypatch.setattr(projection, "parse_ticket_content", counted_parse)
+    token = observation_budget.set((monotonic() + 30, lambda: bool(parsed)))
+    try:
+        with pytest.raises(ObservationExpired):
+            cache.observe(head)
+    finally:
+        observation_budget.reset(token)
+    assert len(parsed) == 1
+    assert set(cache.observe(head).graph.by_id) == {"T-1", "T-2"}
+    assert len(parsed) == 3
 
 
 def test_same_tree_moves_edits_additions_deletions_and_attribution(repo, counts):

@@ -5,13 +5,17 @@
 
 import json
 import os
+import shlex
+import shutil
 import sys
 import threading
 import unicodedata
 
 import pytest
+from _cli_support import _long_worker_script, _worker_body_started
 from _control_support import Devlegate, control_fixture, git, invoke
 from runtime_helpers import run_test_iteration
+from service_harness import LiveService
 from test_clean_preview import owner as preview_owner  # noqa: F401
 from test_clean_preview import snapshot
 
@@ -84,7 +88,7 @@ def test_owner_queue_no_refresh_or_persistence(owner, monkeypatch, kind):
         ticket_id=owner._state["execution_id"] if kind == "execution" else "T-1",
         fingerprint="fixture", mutable=False,
     )
-    owner._operator_command = command
+    owner._operator_observation = command
     monkeypatch.setattr(owner, "status_view", lambda: pytest.fail("status refresh"))
     monkeypatch.setattr(owner, "run_iteration", lambda: pytest.fail("scheduler"))
     state = owner._runtime_store.observe()
@@ -946,7 +950,8 @@ def test_execution_prompt_cli_over_real_owner_socket(
 
 
 @pytest.mark.parametrize("kind", ["ticket", "execution", "workspace", "service"])
-def test_real_socket_owner_serialization(owner, short_state_dir, kind):
+@pytest.mark.parametrize("supervising", [False, True], ids=["idle", "worker-poll"])
+def test_real_socket_owner_serialization(owner, short_state_dir, kind, supervising):
     from devlegate.ipc_client import request
     from devlegate.ipc_server import UnixIPCServer
 
@@ -974,18 +979,272 @@ def test_real_socket_owner_serialization(owner, short_state_dir, kind):
     try:
         thread.start()
         assert owner._service_wake.wait(2)
-        command, _ = owner._claim_owner_work(True)
-        assert command is not None and not command.mutable
-        owner._admit_operator_command(command)
-        owner._release_operator_command()
+        if supervising:
+            reset = OperatorCommand(
+                request_id="reset", method="reset", ticket_id="T-1",
+                fingerprint="fixture",
+            )
+            owner._operator_command = reset
+            owner._poll_worker_observation()
+            assert owner._operator_command is reset
+            assert owner._operator_observation is not None
+            owner._operator_command = None
+            owner._poll_worker_observation()
+        else:
+            command, _ = owner._claim_owner_work(True)
+            assert command is not None and not command.mutable
+            owner._admit_operator_command(command)
         thread.join(5)
         assert not thread.is_alive()
         assert not errors
         assert results[0]["informational"]
+        if supervising and kind == "workspace":
+            assert results[0]["digest"] is None and not results[0]["snapshot_complete"]
+            assert results[0]["identity"]["resources"]["dirty"] == "unknown"
+        if supervising and kind == "execution":
+            execution = results[0]["observation"]
+            assert execution["id"] == identifier
+            assert execution["provenance_state"] == "proved"
+            assert execution["independent_generation"]["current_local"] == "unknown"
         assert snapshot(owner.repo.parent) == before
     finally:
         server.stop()
         owner.end_hosted_owner()
+
+
+def test_expired_read_is_discarded_before_io(owner, short_state_dir, monkeypatch):
+    from devlegate.ipc_client import IPCClientError, request
+    from devlegate.ipc_server import UnixIPCServer
+
+    owner.begin_hosted_owner()
+    socket = short_state_dir / "expire.sock"
+    server = UnixIPCServer(owner, socket)
+    server.start()
+    monkeypatch.setattr("devlegate.runtime.OBSERVATION_WAIT_SECONDS", 0.1)
+    monkeypatch.setattr("devlegate.inspection.inspect_object",
+                        lambda *_a, **_k: pytest.fail("expired read entered IO"))
+    before = owner._runtime_store.observe()
+    try:
+        with pytest.raises(IPCClientError, match="read-only observation timed out"):
+            request(socket, "inspect", {"object_type": "ticket", "object_id": "T-1"})
+        owner._poll_worker_observation()
+        assert not owner._operator_command_pending()
+        assert owner._runtime_store.observe() == before
+    finally:
+        server.stop()
+        owner.end_hosted_owner()
+
+
+@pytest.mark.parametrize("retry", [False, True], ids=["scheduled", "retry"])
+def test_live_worker_inspection(tmp_path, short_state_dir, monkeypatch, retry):
+    repo, config, _ = control_fixture(tmp_path)
+    config.write_text(config.read_text() + f"\nSTATE_DIR={short_state_dir}\n")
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+    control = owner.control_worktree
+    original = (control / owner.todo_path / "T-1.md").read_text()
+
+    def finish(workspace, _prompt, *, prompt_delivered_handler, **_kwargs):
+        (workspace.path / "implementation.txt").write_text("historical change\n")
+        prompt_delivered_handler()
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(owner._workers, "run", finish)
+    assert run_test_iteration(owner) == 0
+    historical = owner._state["execution_id"]
+    evidence = inspect_object(owner, "execution", historical, include_prompt=True)[
+        "observation"
+    ]
+    exact_prompt = evidence["worker_prompt"]["text"]
+    report = evidence["report"]
+    review = control / "reviews" / "T-1" / f"{historical}.md"
+    review.parent.mkdir(parents=True)
+    review.write_text(
+        "<!-- devlegate-review-v1\nticket: T-1\n"
+        f"execution: {historical}\ncheckpoint: {report['workspace_head']}\n"
+        f"control: {report['control_head']}\ndisposition: rework\n-->\nDeferred.\n"
+    )
+    git(control, "mv", f"{owner.review_path}/T-1.md", f"{owner.backlog_path}/T-1.md")
+    git(control, "add", ".")
+    git(control, "commit", "-m", "Defer historical ticket with review")
+    (control / owner.todo_path / "T-2.md").write_text(original)
+    git(control, "add", ".")
+    git(control, "commit", "-m", "Add current worker fixture")
+    git(control, "push", "origin", "HEAD:refs/heads/devlegate/control")
+    if retry:
+        monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: WorkerRunResult(
+            1, None, None, None,
+        ))
+        assert run_test_iteration(owner) == 1
+
+    worker, pid, attempts = (tmp_path / name for name in ("worker", "pid", "attempts"))
+    _long_worker_script(worker)
+    monkeypatch.setenv("DEVLEGATE_TEST_WORKER_PID", str(pid))
+    monkeypatch.setenv("DEVLEGATE_TEST_ATTEMPTS", str(attempts))
+    config.write_text(config.read_text().replace(
+        "OPENCODE_BIN=true", f"OPENCODE_BIN={worker}",
+    ))
+
+    # A test-only Git delay makes a timeout and competing lifecycle request
+    # deterministic. Only the workspace inspection's read-only command matches.
+    real_git = shutil.which("git")
+    gate, observed = tmp_path / "delay", tmp_path / "observing"
+    release = tmp_path / "release-observation"
+    wrapper = tmp_path / "git"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f"if [ -f {shlex.quote(str(gate))} ]; then\n"
+        '  case " $* " in\n'
+        '    *" --no-optional-locks "*" rev-list --parents --first-parent "*)\n'
+        f"      touch {shlex.quote(str(observed))}\n"
+        f"      if [ -f {shlex.quote(str(release))} ]; then exec sleep 60; fi\n"
+        f"      while [ -f {shlex.quote(str(gate))} ]; do sleep .01; done;;\n"
+        "  esac\nfi\n"
+        f'exec {shlex.quote(real_git)} "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+
+    service = LiveService(repo, config).start()
+    try:
+        service.wait_ready()
+        if retry:
+            ack = service.cli("retry", "T-2")
+            assert ack.returncode == 0, ack.stderr
+
+        def worker_running():
+            state, _ = owner._runtime_store.observe()
+            return state.get("execution_stage") == "worker-running" and (
+                _worker_body_started(pid, state["worker_identity"], attempts, 1)
+            )
+
+        service.wait_for(worker_running)
+        before_state = owner._runtime_store.observe()
+        state = before_state[0]
+        active = state["execution_id"]
+        worktree = owner.recovery_workspace_manager("T-2").path
+        # The fixture, not inspection, changes the current worker's files.
+        (worktree / "live.txt").write_text("worker changes\n")
+        git(repo, "config", "filter.inspect-test.clean",
+            f"touch {tmp_path / 'filter-ran'}")
+        (worktree / ".gitattributes").write_text("* filter=inspect-test\n")
+        hooks = repo / ".git" / "hooks"
+        hook = hooks / "post-index-change"
+        hook.write_text(f"#!/bin/sh\ntouch {tmp_path / 'hook-ran'}\n")
+        hook.chmod(0o755)
+        trees = [repo / ".git", control, owner.execution_worktree_root]
+        before_files = [snapshot(path) for path in trees]
+
+        def inspect(kind, identifier=None, *flags):
+            args = [identifier] if identifier else []
+            response = service.cli("inspect", kind, *args, *flags, "--json")
+            assert response.returncode == 0, response.stderr
+            view = json.loads(response.stdout)
+            assert view["informational"] and not view["mutation_authorized"]
+            version = 2 if kind == "workspace" else 1
+            assert view["schema"] == f"devlegate.inspect-{kind}.v{version}"
+            return view
+
+        diagnostics = inspect("service")["observation"]["diagnostic_snapshot"]
+        assert diagnostics["execution"]["execution_id"] == active
+        current = inspect("ticket", "T-2")["observation"]
+        assert (current["id"], current["state"]) == ("T-2", "todo")
+        other = inspect("ticket", "T-1")["observation"]
+        assert (other["id"], other["state"]) == ("T-1", "backlog")
+        assert current["provenance"]["control_head"] == (
+            other["provenance"]["control_head"]
+        )
+        execution = inspect("execution", historical)["observation"]
+        assert execution["report"]["execution_id"] == historical
+        assert execution["provenance_state"] == "proved"
+        assert execution["independent_generation"]["current_local"] == "unknown"
+        assert "text" not in execution["worker_prompt"]
+        assert inspect("execution", historical, "--prompt")["observation"][
+            "worker_prompt"
+        ]["text"] == exact_prompt
+        workspace = inspect("workspace", "T-2")
+        assert workspace["identity"]["ticket"]["id"] == "T-2"
+        assert workspace["identity"]["resources"]["dirty"] == "unknown"
+        assert not workspace["snapshot_complete"] and workspace["digest"] is None
+        assert any("worker ownership" in blocker for blocker in workspace["blockers"])
+
+        for args, message in (
+            (("inspect", "execution", active), "no unique canonical committed report"),
+            (("inspect", "ticket", "../T-2"), "canonical object ID"),
+            (("workspace", "ls"), "inventory observation unavailable"),
+            (("workspace", "prune", "--dry-run"), "inventory observation unavailable"),
+            (("workspace", "prune", "--apply"), "mutable request was not admitted"),
+            (("retry", "T-2"), "mutable request was not admitted"),
+        ):
+            failed = service.cli(*args)
+            assert failed.returncode != 0 and message in failed.stderr, failed.stderr
+        assert worker_running()
+        assert owner._runtime_store.observe() == before_state
+        assert [snapshot(path) for path in trees] == before_files
+        assert not (tmp_path / "filter-ran").exists()
+        assert not (tmp_path / "hook-ran").exists()
+
+        journal_path = worker_prompt_artifact_path(owner.state_dir, historical)
+        saved = journal_path.with_suffix(".saved")
+        journal_path.rename(saved)
+        try:
+            missing = inspect("execution", historical, "--prompt")["observation"]
+            assert missing["report"] == report
+            assert missing["worker_prompt"] == {"status": "missing"}
+        finally:
+            saved.rename(journal_path)
+
+        if not retry:
+            gate.touch()
+            moving = service.start_cli("inspect", "workspace", "T-2", "--json")
+            try:
+                service.wait_for(observed.exists)
+                (worktree / "live.txt").write_text("changed during inspection\n")
+                gate.unlink()
+                output, stderr = moving.communicate(timeout=5)
+                assert moving.returncode == 0, stderr
+                view = json.loads(output)
+                assert view["identity"]["resources"]["dirty"] == "unknown"
+                assert view["digest"] is None and not view["mutation_authorized"]
+            finally:
+                gate.unlink(missing_ok=True)
+                observed.unlink(missing_ok=True)
+                if moving.poll() is None:
+                    moving.kill()
+                    moving.wait(timeout=5)
+
+        release.touch()
+        gate.touch()
+        pending = service.start_cli("inspect", "workspace", "T-2", "--json")
+        try:
+            service.wait_for(observed.exists)
+            assert pending.poll() is None
+            if retry:
+                # Stop while the read is in flight; it must not steal retry's
+                # owner slot or stage any replacement execution.
+                stopped = service.cli("stop", "--force")
+                assert stopped.returncode == 0, stopped.stderr
+            _, stderr = pending.communicate(timeout=5)
+            assert pending.returncode != 0 and "read-only observation" in stderr
+            if retry:
+                service.wait_exited()
+                assert owner._runtime_store.observe()[0]["worker_identity"] is None
+            else:
+                assert "time budget expired" in stderr
+                assert worker_running()
+                assert owner._runtime_store.observe() == before_state
+                assert inspect("ticket", "T-2")["observation"]["id"] == "T-2"
+            assert attempts.read_text().splitlines() == ["attempt"]
+        finally:
+            if pending.poll() is None:
+                pending.kill()
+                pending.wait(timeout=5)
+    finally:
+        gate.unlink(missing_ok=True)
+        if service.process.poll() is None:
+            service.cli("stop", "--force")
+        service.stop()
 
 
 def test_missing_dependency_stays_visible(owner):

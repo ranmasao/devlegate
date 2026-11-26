@@ -238,10 +238,14 @@ interruption. If recovery cannot prove ownership or retirement after a service
 restart, it blocks admission rather than starting a second worker. Check status
 and the previous execution's log before taking recovery action.
 
-An admission timeout is a coordination wait, not a maximum response time. A
+A mutation admission timeout is a coordination wait, not a maximum response time. A
 request still queued at expiry is removed and reported not admitted. A published
 admission result is returned; a claimed request without a published result has
 an unknown outcome and is not cancelled.
+
+Read-only [inspection](inspect.md) is served at bounded owner safe points, including
+during worker supervision. A timed-out read has no mutation outcome to reconcile.
+Published status remains available independently of the owner queue.
 
 At the low-level IPC boundary, a client that retains the original request ID and
 semantics can replay that identity after service availability. Matching receipts

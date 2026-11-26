@@ -12,7 +12,7 @@ from runtime_helpers import run_test_iteration
 from test_clean_preview import owner as owner
 from test_clean_preview import snapshot
 
-from devlegate import cli
+from devlegate import clean_preview, cli
 from devlegate.ipc_protocol import IPCRequest
 from devlegate.ipc_server import dispatch_request
 from devlegate.resource_binding import ResourceBinding
@@ -64,7 +64,17 @@ def admit(owner, method, payload=None, request_id="prune-one"):
     return results[0]
 
 
-def test_done_preview_and_inventory_are_observation_only(done):
+def test_done_preview_and_inventory_are_observation_only(done, monkeypatch):
+    observe_git = clean_preview.observe_git
+
+    def observe(repo, *args, **kwargs):
+        if repo == done.control_worktree:
+            assert args[0] != "status", "control status can run conversion filters"
+        return observe_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(clean_preview, "observe_git", observe)
+    # Inventory must populate the real owner's cache even if it is cold.
+    done._workflow_cache = None
     store = done._runtime_store.observe()
     before = snapshot(done.repo.parent)
     for method, payload in (
@@ -73,6 +83,7 @@ def test_done_preview_and_inventory_are_observation_only(done):
         result = admit(done, method, payload)
         assert result["dry_run"] is True
         assert result["decisions"][0]["status"] == "eligible", result
+        assert done._workflow_cache is not None
     assert snapshot(done.repo.parent) == before
     assert done._runtime_store.observe() == store
 

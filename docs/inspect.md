@@ -12,8 +12,10 @@ devlegate inspect service --json
 
 The object type selects a versioned schema. Normal `--json` and `--yaml` output
 conventions apply. All four commands use read-only IPC to the existing
-service owner. An unavailable or busy owner is an explicit error; inspection
-does not start a service, launch a worker, or refresh the published status view.
+service owner. The owner can answer at safe points during worker supervision,
+including during retry. Read-only contention, drain, shutdown and timeouts are
+reported as observation failures. Inspection does not start a service, launch a
+worker, or refresh the published status view.
 IPC `inspect` requires `object_type` and `object_id`; service uses a null ID.
 Execution inspection supports the optional boolean `include_prompt`.
 Inspection is never mutation permission, a reset authorization, or a cleanup
@@ -55,7 +57,10 @@ Publication and review proofs use the existing lifecycle attribution rules.
 publication chronology, independently of `independent_generation`. A missing
 ResourceBinding does not hide the immutable checkpoint or adopt a historical
 resource. `current_local` is proved only by independent read-only local identity
-checks. This view does not contact the remote or claim remote continuity.
+checks. During worker supervision, current workspace continuity is not checked;
+the committed report and independently verified prompt remain inspectable. An
+active execution without a committed report has no execution inspection result.
+This view does not contact the remote or claim remote continuity.
 
 `local_log` reports the canonical execution log path and whether the log is
 `present`, `missing`, or `unavailable` locally. Use `devlegate logs execution
@@ -100,6 +105,10 @@ admission and replay consume this same version. Incomplete proof remains inspect
 `digest: null`. Neither a digest nor `snapshot_complete` grants mutation authority.
 Missing or unsafe working ticket/report copies are blockers; their committed
 immutable evidence remains visible.
+During worker supervision the view includes the committed ticket and execution
+evidence and live ownership blockers. Local workspace state, cleanliness and
+upstream evidence are left unknown or unavailable. The view is incomplete and
+has no digest; it does not describe a stable worktree for editing or cleanup.
 The human view groups the ticket and control binding, workspace and Git
 observations, and each independent execution generation. Blockers appear first;
 private worker authority is hash-bound and its safety conclusions are reported
@@ -123,7 +132,8 @@ with `diagnostic_snapshot: null` when no status has been published.
 All Git inspection reuses the proven no-optional-locks/no-lazy-fetch observation
 runner. Workspace and independent generation checks use the existing filter
 preflight before status. No hooks, conversion filters, fetch, index refresh,
-SQLite write, or worktree/ref mutation is part of inspection. Requests share the
-existing owner queue, including during active worker ownership; conflicting
-ownership remains a workspace blocker. No historical ResourceBinding adoption,
-resource migration, prune, or cleanup policy is introduced.
+SQLite write, or worktree/ref mutation is part of inspection. A bounded read-only
+slot is separate from mutation admission, but the same owner thread handles both.
+The worker poll gives pending reset priority. `workspace ls` and `workspace prune`
+without `--apply` report that the inventory cannot be safely scanned during worker
+supervision; use `inspect workspace ID` for the partial view.
