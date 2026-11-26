@@ -1,0 +1,30 @@
+{
+  "code_base_head": "bfa9cfebb2baeb35bb5ef50aa097d9e527f5e3df",
+  "conclusion": "completed",
+  "control_head": "ed6b0ded700e04a7b0e950f7f51f961017a6719a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-205",
+  "execution_id": "b54f2ea022eb4977b015de5624e9e4cf",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-205",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-205/b54f2ea022eb4977b015de5624e9e4cf.md",
+  "report_sha256": "8521bf9e5f5d806e44ad624cde3842e7ca4a93916849364d61f18e894f273d53",
+  "resource_generation": "19b8b89383ffe727ade1310821a859d16cdf0e924ff6643ff9e8afa460308856",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-205",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused local checks for reopening, replay, retirement, reset/retry, inspection, Change Explorer, packaging, abandonment and logs passed, as did ./dev lint and git diff --check. An expanded clean-preview command hit its local timeout; targeted clean-preview nodes passed. Exact-checkpoint hosted CI is owned by Devlegate and was not run by the worker. Retained cleanup cohorts add the observed control commit to the existing receipt, because a branch name and checkpoint SHA can both recur across cycles; no new transaction, command, registry, or migration was added.",
+    "summary": "Implemented curator-authorized reopening of ordinary implementation tickets under the same ID, with fresh admission derived from committed control history. Scoped current-cycle evidence and retained-resource cleanup while preserving prior integrations and execution evidence. Documented the curator procedure and added disposable Git and owner workflow regressions."
+  },
+  "workspace_head": "a781940e68cfc41d14f93600866840a9d6bc93be"
+}
