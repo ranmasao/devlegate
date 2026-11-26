@@ -78,6 +78,10 @@ just to reproduce CI. Local tests are a cheap defect filter, not complete
 regression proof: hosted exact-checkpoint CI runs the complete configured suite
 with coverage and lint and is required for independent review and integration.
 
+The internal [implementation transfer contract](implementation-transfer.md)
+documents the isolated preparation and replay boundary shared by upcoming
+REWORK and active-reconciliation integrations.
+
 The real-service auto-resume topology test publishes its rework review from an
 independent clone of the remote control branch. A `none` scheduler plan at the
 review barrier does not grant exclusive access to the service's control index:
