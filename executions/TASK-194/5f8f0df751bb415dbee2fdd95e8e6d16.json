@@ -1,0 +1,30 @@
+{
+  "code_base_head": "4338f6d4721c01a96893e916241193f74afd80dd",
+  "conclusion": "completed",
+  "control_head": "2923944148c900face0686f9420b6e04b808ae64",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-194",
+  "execution_id": "5f8f0df751bb415dbee2fdd95e8e6d16",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-194",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-194/5f8f0df751bb415dbee2fdd95e8e6d16.md",
+  "report_sha256": "c0b17a80db4b5b5d3b33d69ae8e57651aa3b756d3e2c54f33be6de3a324de5a1",
+  "resource_generation": "c5884311bb91cf2991f5fc5df5ce0323649e1b39d71e7d154dbc4f87c6239639",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-194",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Reproduced the original failure before editing. All 261 focused tests passed across split runs, along with ./dev lint and git diff --check. Exact-checkpoint hosted CI remains the independent integration gate.",
+    "summary": "Updated the unknown-workspace regression to check the requester-facing refusal and confirm that filesystem and runtime state are unchanged. Added coverage for the same refusal through real CLI/IPC while scheduled and retry workers remain active."
+  },
+  "workspace_head": "e57f5a79d2d918abc6ffcb9389bb6eaf73488479"
+}
