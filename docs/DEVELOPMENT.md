@@ -213,6 +213,36 @@ commit shares the graph with distinct attribution; a changed workflow tree
 binds new ticket paths and reparses only the edited blob. The test asserts
 counts and reuse, not latency thresholds.
 
+### Inspection during worker supervision
+
+Run `./dev test -q -s tests/test_inspection.py::test_live_worker_inspection`.
+The live service fixture builds a packed control history with 212 tickets, a
+210-ticket dependency chain across five commits, and a committed report and
+saved prompt. It exercises the CLI, then repeats each read three times over
+real IPC with the same worker held open, both in normal scheduling and in an
+admitted retry. The measurements include IPC and the wait for a worker poll,
+but exclude CLI startup. Git Trace2 records subprocesses from the service
+process tree during each read; the held worker itself launches no Git.
+
+One Linux run with Git 2.56.1 / Python 3.14.10 (ranges rounded outward):
+
+| Observation | Scheduled IPC | Retry IPC | Git (scheduled / retry) | `cat-file` | `log` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Service | 6–51 ms | 6–50 ms | 0 / 0 | 0 | 0 |
+| Ticket | 163–176 ms | 161–170 ms | 23 / 23 | 0 | 1 |
+| Historical execution | 341–347 ms | 328–345 ms | 54 / 54 | 10 | 5 |
+| Historical execution with `--prompt` | 335–487 ms | 329–345 ms | 54 / 54 | 10 | 5 |
+| Current workspace (partial) | 184–196 ms | 243–249 ms | 27 / 40 | 1 / 5 | 2 / 3 |
+
+The ticket's warm graph lookup is two Git calls; the other 21 check control
+identity and read ticket history. Execution counts include report, chronology
+and saved-prompt provenance; revealing the verified text in this fixture adds
+no Git calls. The workspace view skips live worktree and upstream checks. The
+retry fixture has a prior failed report for the current ticket, so its partial
+workspace view does additional committed-evidence reads. All repeated reads
+completed within the existing supervision budget; the test also forces a
+separate timeout and checks that published status remains available during it.
+
 ### Cleanup screening measurement
 
 `test_cleanup_ref_only_screening_real_git_trace` counts runtime Git launches
