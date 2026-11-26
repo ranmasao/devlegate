@@ -1,0 +1,38 @@
+{
+  "code_base_head": "f4393718061be714279193d87be6d09be7812767",
+  "conclusion": "blocked",
+  "control_head": "653cd06701082e0fa9cab76cc024baebe0f41696",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-203",
+  "execution_id": "28227e69b6ca47eca33a6c3e7daf4b36",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-203",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate checkpoint the implementation and run the configured hosted CI to obtain the required exact-checkpoint coverage and badge evidence?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [
+    "Verify the full-suite report and coverage.json on the exact hosted checkpoint: one canonical Devlegate file inventory, no vendor entries, and merged statement and branch totals. Compare the totals with the historical run and verify the generated badge payload."
+  ],
+  "report_artifact": "executions/TASK-203/28227e69b6ca47eca33a6c3e7daf4b36.md",
+  "report_sha256": "3e9f1edc9ff2f7b2998d55b793d60343f4b25723c221da33633d9b34d1435c17",
+  "resource_generation": "0ec2dd8a53fc5af05b85cd48d4c376fc2c86aa40d3d33dd8af35251cd1ac52aa",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-203",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate checkpoint the implementation and run the configured hosted CI to obtain the required exact-checkpoint coverage and badge evidence?"
+    ],
+    "remaining": [
+      "Verify the full-suite report and coverage.json on the exact hosted checkpoint: one canonical Devlegate file inventory, no vendor entries, and merged statement and branch totals. Compare the totals with the historical run and verify the generated badge payload."
+    ],
+    "report": "The regression failed on the old config with five extra package entries. Seven focused tests passed through ./dev coverage with xdist, and ./dev lint and git diff --check passed. Focused JSON exactly matched the 67 non-vendor checkout files (20,968 statements, 8,854 branches; 8.933% combined); running the existing badge generator on that JSON produced 9%. Historical hosted run 45842014863 reported 134 files, 42,118 statements, 17,708 branches, 43.04% statements and a 41% combined badge; its canonical cohort alone had 84.20% statement coverage. A local full-suite attempt emitted failures/errors and timed out after 600 seconds before combination, so it produced no full-suite coverage results.",
+    "summary": "Coverage.py combines byte-identical wheel and extracted-package execution with the canonical source paths. The regression exercises subprocess collection, branch attribution, the unexecuted source inventory, and vendor exclusion through combine, text reporting, and JSON reporting."
+  },
+  "workspace_head": "99ffee4638b1af43617b49b74bd76abd6e6c3e6e"
+}
