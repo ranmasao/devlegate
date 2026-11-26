@@ -1,0 +1,30 @@
+{
+  "code_base_head": "cafb5e5a87d5d7e62a1877267f70da0777d10bce",
+  "conclusion": "completed",
+  "control_head": "8b1a04ee8dcd6c72cdab234383a779c27e018d3a",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-204",
+  "execution_id": "ac7cad75ec1c4ffaad7081db1da5686e",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-204",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-204/ac7cad75ec1c4ffaad7081db1da5686e.md",
+  "report_sha256": "511c2f101563e2f83d566ad39fb6f4848cf9d463e84a64d2188fc7c9b8bedb15",
+  "resource_generation": "c5d18276fa1abac58d317884fbb120f7d2c57bee084932dc14a24b0cf40372d3",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-204",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "118 focused tests passed, along with ./dev lint and git diff --check. The packaging tests used an extracted dpkg-deb in scratch space. A disposable copy of the existing real scie reproduced the SCIE-only initial launch and passed isolated IPC discovery and restart; systemd metadata and package installation were simulated in regressions. Current version code recognized the copied genuine Arch marker and payload. No live host installation or service mutation was performed; exact-checkpoint hosted CI remains for Devlegate.",
+    "summary": "Native-install now identifies registered systemd services from the verified unit, MainPID, IPC authority, and process owner, and recognizes the SCIE-only cached launch layout for other hosts. Runtime version output recognizes Arch and Debian native provenance only when the package marker matches the executable digest."
+  },
+  "workspace_head": "556a8864b8b54a899257f6efd218abee5e27b90d"
+}
