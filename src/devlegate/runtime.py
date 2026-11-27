@@ -49,7 +49,7 @@ from devlegate.abandonment_publication import (
     verify_transaction,
 )
 from devlegate.abandonment_refs import create_pin, inventory, publish_pin, require_pin
-from devlegate.active_transfer import update_base
+from devlegate.active_transfer import require_target_lineage, update_base
 from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
@@ -159,7 +159,6 @@ from devlegate.project_context import (
 from devlegate.reconciliation import (
     has_valid_evidence_identity,
     reconciliation_evidence_ref,
-    same_parent_replacement,
 )
 from devlegate.recovery import classify_stage, has_pre_worker_absence_proof
 from devlegate.recovery_transactions import (
@@ -737,22 +736,6 @@ def _status_summary(status: str) -> dict[str, int]:
 
 def _status_fingerprint(status: str) -> str:
     return hashlib.sha256(status.encode()).hexdigest()
-
-
-def _is_same_parent_replacement(
-    repo: Path, original: str, target: str, *, runner: GitRunner
-) -> bool:
-    """Prove that two distinct commits are single-parent replacements."""
-    parent_map: dict[str, tuple[str, ...]] = {}
-    for commit in (original, target):
-        try:
-            parents = commit_parents(repo, commit, runner=runner)
-        except GitObservationError:
-            return False
-        if parents is None:
-            return False
-        parent_map[commit] = parents
-    return same_parent_replacement(original, target, parent_map)
 
 
 class ServiceEngine:
@@ -2114,6 +2097,11 @@ class ServiceEngine:
             command.onto = local_head
         else:
             command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
+        binding = (self._state.get("transfer_progress") or {}).get("active_binding")
+        if binding is None:
+            require_target_lineage(self, reconciliation["original_base"], command.onto)
+        elif command.onto != binding["base"]:
+            raise DevlegateError("target differs from admitted transfer")
 
     def _canonical_reconcile_assertion(self, value: str, current_head: str) -> str:
         if not value:
@@ -2165,6 +2153,7 @@ class ServiceEngine:
         remote_head = str(product["remote_head"])
         if not local_head or local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
+        require_target_lineage(self, reconciliation["original_base"], local_head)
         if command.onto is not None:
             command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
         else:

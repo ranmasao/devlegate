@@ -30,8 +30,8 @@ def main() -> int:
         original_remote = engine._execution_remote_head
 
         def remote(branch):
-            rework = engine._state.get("rework_provenance") or {}
-            if (engine._scheduler_active and rework.get("confirmation")
+            progress = engine._state.get("transfer_progress") or {}
+            if (engine._scheduler_active and progress.get("confirmation")
                     and not gate.exists()):
                 gate.with_suffix(".waiting").touch()
                 deadline = time.monotonic() + 15
