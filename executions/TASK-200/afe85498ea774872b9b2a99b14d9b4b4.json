@@ -1,0 +1,30 @@
+{
+  "code_base_head": "6d4388c5c9934627bb21dbb34b6b3c2a9ba22513",
+  "conclusion": "completed",
+  "control_head": "d2d3bcab189d3aeb1dd11bedb4adc65169f09e8b",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-200",
+  "execution_id": "afe85498ea774872b9b2a99b14d9b4b4",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-200",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-200/afe85498ea774872b9b2a99b14d9b4b4.md",
+  "report_sha256": "f3514d81607f05923de6489e76d57d4785c00be8e8e8c92785eff03296ea67ad",
+  "resource_generation": "439b21da261537c79fdb59661d23f22c41e1df0ead3f313960e251bb0182ea58",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-200",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused batches passed (7 IPC/lifecycle, 18 active replay and evidence, 156 shared candidate/resource/reconciliation/Change Explorer, 26 REWORK effect/cleanup, 38 reset); ./dev lint and git diff --check passed. Exact successor hosted CI is the Devlegate integration gate and was not run by the worker. Relative to TASK-199, tracked Python production LOC 42,869\u219242,329 and test LOC 58,087\u219257,406; collected cases 2,758 (derived from reviewed baseline delta)\u21922,737 locally. The in-place rewrite module, native rebase/replay paths, and implementation-only tests/hooks remain removed. No comparable baseline focused timing was available.",
+    "summary": "Active update-base and reviewed REWORK share candidate preparation, conflict confirmation, and lease-guarded installation while retaining separate lifecycle continuations. Active admission enforces exact target lineage, and an explicit reset can discard a provably safe pre-install conflict. Settled legacy receipts retain their evidence value without restoring obsolete replay paths."
+  },
+  "workspace_head": "5fbbdcec15000b793e791a6869e4ced137715848"
+}
