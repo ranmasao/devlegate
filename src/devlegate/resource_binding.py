@@ -35,6 +35,9 @@ _OPERATIONS = (
     "predecessor-publication",
     "force-checkpoint",
 )
+_HISTORICAL_OPERATIONS = (
+    "rewrite", "rollback", "rewrite-publication",
+)
 
 
 class UnprovenResource(ExecutionWorkspaceError):
@@ -406,7 +409,7 @@ class ResourceBinding:
         attempts = []
         for path in self.directory.glob("*-intent.json"):
             operation = path.name.removesuffix("-intent.json").split(".")[0]
-            if operation not in _OPERATIONS:
+            if operation not in _OPERATIONS and operation not in _HISTORICAL_OPERATIONS:
                 continue
             intent = _read(path)
             sequence = intent.get("sequence")
@@ -606,7 +609,8 @@ class ResourceBinding:
         current = self.intent["prior_remote"]
         if current is not None:
             predecessor = None
-            for name in ("transfer-started.json", "handoff-intent.json"):
+            for name in ("transfer-started.json", "rework-started.json",
+                         "handoff-intent.json"):
                 path = self.directory / name
                 if path.exists():
                     predecessor = _read(path).get("predecessor")

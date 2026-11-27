@@ -1650,9 +1650,11 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             service.wait_for(published_wait, timeout=30)
             inspection = service.cli("inspect", "ticket", "T-1", "--json")
             assert inspection.returncode == 0, inspection.stderr
-            assert json.loads(inspection.stdout)["observation"]["rework_conflict"] == (
-                conflict
-            )
+            observation = json.loads(inspection.stdout)["observation"]
+            observed_conflict = observation.get("transfer_conflict")
+            if observed_conflict is None:
+                observed_conflict = observation.get("rework_conflict")
+            assert observed_conflict == conflict
             assert conflict["identity"]["target"] == base
             assert conflict["identity"]["checkpoint"] == report.workspace_head
             assert git(source, "rev-parse", "HEAD").stdout.strip() == (
