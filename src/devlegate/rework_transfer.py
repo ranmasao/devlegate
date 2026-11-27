@@ -16,6 +16,7 @@ from devlegate.git import GitObservationError, push_refs, resolve_ref_commit
 from devlegate.implementation_transfer import (
     ImplementationTransfer,
     ResolutionAuthorization,
+    ResolutionEditError,
     TransferConflict,
     TransferIdentity,
     TransferReady,
@@ -29,14 +30,17 @@ INSTALLED = "remote_predecessor_installed"
 
 def origin_digest(provenance):
     origin = {key: value for key, value in provenance.items()
-              if key not in {"preparation_stage", "conflict", "candidate", "review"}}
+               if key not in {"preparation_stage", "conflict", "candidate", "review",
+                              "confirmation", "resolution_error"}}
     origin["review"] = {key: value for key, value in provenance["review"].items()
                         if key not in {"legacy", "legacy_boundary"}}
     return hashlib.sha256(json.dumps(origin, sort_keys=True).encode()).hexdigest()
 
 
 def conflict_record(conflict):
-    return {**asdict(conflict), "path": str(conflict.path)}
+    record = asdict(conflict)
+    record.pop("unmerged")  # Internal replay evidence, not operator identity.
+    return {**record, "path": str(conflict.path)}
 
 
 def waiting_message(conflict):
@@ -182,15 +186,36 @@ class ReworkTransfer:
             return workspace
         result = (self.transfer.observe() if self.installation_started
                   else self.transfer.prepare())
+        confirmation = self.provenance.get("confirmation")
+        resolution_error = self.provenance.get("resolution_error")
+        if confirmation is not None and isinstance(result, TransferConflict) and (
+            conflict_record(result) == self.provenance.get("conflict")
+        ):
+            try:
+                result = self._resolve(result, confirmation["source_digest"])
+            except ResolutionEditError as error:
+                resolution_error = str(error)
         if isinstance(result, TransferConflict):
             record = conflict_record(result)
-            if self.provenance.get("conflict") != record:
+            if self.provenance.get("conflict") != record or confirmation is not None:
+                if self.provenance.get("conflict") != record:
+                    resolution_error = None
                 owner._save_state("agent_pending", rework_provenance={
-                    **self.provenance, "conflict": record,
+                    **self.provenance, "conflict": record, "confirmation": None,
+                    "resolution_error": resolution_error,
                 })
-            raise ExecutionWorkspaceError(waiting_message(record))
+            message = waiting_message(record)
+            raise ExecutionWorkspaceError(
+                f"{resolution_error}; {message}" if resolution_error else message
+            )
         if not isinstance(result, TransferReady):
             raise ExecutionWorkspaceError(f"REWORK candidate refused: {result.reason}")
+        if confirmation is not None:
+            # A durable approval may already have advanced the transfer on a
+            # previous owner pass. Consume only after re-observing its outcome.
+            self.provenance = {**self.provenance, "conflict": None,
+                               "confirmation": None, "resolution_error": None}
+            owner._save_state("agent_pending", rework_provenance=self.provenance)
 
         receipt = binding.directory / "receipt.json"
         if not receipt.exists():
@@ -210,11 +235,11 @@ class ReworkTransfer:
             if tree.stdout.strip() != result.tree:
                 raise ExecutionWorkspaceError("imported REWORK tree differs")
 
-        def require_current():
-            if receipt.exists():
-                self.require_assignment()
-            else:
+        def require_current(*, publishing=False):
+            if publishing or not receipt.exists():
                 self.require_before_install()
+            else:
+                self.require_assignment()
             if self.transfer.observe() != result:
                 raise ExecutionWorkspaceError("REWORK candidate changed before handoff")
 
@@ -293,8 +318,7 @@ class ReworkTransfer:
             binding.require_local(clean=True)
             binding.begin_operation(op, details)
         if remote == before:
-            self.require_before_install()
-            require_current()
+            require_current(publishing=True)
             if binding._observe_local(clean=True).head != after:
                 raise ExecutionWorkspaceError("REWORK checkout changed before push")
             ref = binding.intent["remote_ref"]
@@ -307,29 +331,14 @@ class ReworkTransfer:
             raise ExecutionWorkspaceError("REWORK predecessor publication is unproved")
         binding.finish_operation(op, details)
 
-    def resolve(self, path, digest):
-        try:
-            self.require_before_install()
-            waiting = self.provenance.get("conflict")
-            if not isinstance(waiting, dict) or str(Path(path)) != waiting.get("path"):
-                raise ExecutionWorkspaceError("confirmation must name the candidate")
-            result = self.transfer.observe()
-            if not isinstance(result, TransferConflict) or (
-                conflict_record(result) != waiting
-            ):
-                raise ExecutionWorkspaceError("waiting REWORK conflict changed")
-            if source_resolution_digest(result.path) != digest:
-                raise ExecutionWorkspaceError("candidate changed since confirmation")
-            tree = self.transfer.stage_source_resolution(result)
-            self.require_before_install()
-            if source_resolution_digest(result.path) != digest:
-                raise ExecutionWorkspaceError("candidate changed during confirmation")
-            outcome = self.transfer.checkpoint_resolution(ResolutionAuthorization(
-                result, tree, "Explicit source resolution including added files.",
-                digest,
-            ))
-            if not isinstance(outcome, (TransferConflict, TransferReady)):
-                raise ExecutionWorkspaceError(outcome.reason)
-        except (EvidenceError, GitObservationError, OSError, CalledProcessError,
-                DevlegateError) as error:
-            raise ExecutionWorkspaceError(str(error)) from error
+    def _resolve(self, conflict, digest):
+        if source_resolution_digest(conflict.path) != digest:
+            raise ResolutionEditError("candidate changed since confirmation")
+        tree = self.transfer.stage_source_resolution(conflict)
+        self.require_before_install()
+        # The primitive re-observes the attempt, staged tree and source bytes
+        # before publishing approval, and again on approval replay.
+        return self.transfer.checkpoint_resolution(ResolutionAuthorization(
+            conflict, tree, "Explicit source resolution including added files.",
+            digest,
+        ))

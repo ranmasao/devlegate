@@ -108,6 +108,7 @@ class TransferConflict:
     step: int
     parent: str
     source_commit: str
+    unmerged: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,10 @@ class _Unsafe(ExecutionWorkspaceError):
 
 class _Interrupted(_Unsafe):
     pass
+
+
+class ResolutionEditError(ExecutionWorkspaceError):
+    """A fresh source decision is needed; no staged tree was authorized."""
 
 
 def source_resolution_digest(path: Path) -> str:
@@ -251,24 +256,29 @@ class ImplementationTransfer:
         self._require_owner()
         self._check_conflict(conflict)
         path = conflict.path
-        unmerged = self._command(path, "ls-files", "--unmerged", "-z")
-        for record in filter(None, unmerged.split("\0")):
-            if record.startswith("160000 "):
-                raise _Unsafe("source edits cannot select an unresolved gitlink")
+        if any(record.startswith("160000 ") for record in conflict.unmerged):
+            raise ResolutionEditError(
+                "source-only resolution cannot select a gitlink commit; "
+                f"use devlegate reset {conflict.identity.ticket} to discard this REWORK"
+            )
         self._status(path)  # Reject hidden index entries before staging.
         self._command(path, "add", "-A", "--", ".")
         tree = self._staged_tree(path)
-        changed = self._command(
-            path, "diff-tree", "--no-renames", "--diff-filter=AMT", "--name-only",
-            "-r", "-z", f"{conflict.parent}^{{tree}}", tree,
-        ).split("\0")
-        for name in filter(None, changed):
+        # The original conflict paths survive a crash after staging. Recognize
+        # cherry-pick labels, not bare runs of punctuation (e.g. doctest >>>).
+        oid = conflict.source_commit
+        labels = "|".join(oid[:size] for size in range(4, len(oid) + 1))
+        marker = rf"^(<{{7,}} HEAD|(>+ |\|+ parent of )({labels})( \(.*\))?)" "\r?$"
+        names = sorted({record.partition("\t")[2] for record in conflict.unmerged})
+        for name in names:
             markers = self._git(
                 path, "--literal-pathspecs", "grep", "-I", "-l", "-E",
-                r"^(<{3,}|>{3,}|\|{3,})( |$)", tree, "--", name,
+                marker, tree, "--", name,
             )
+            if markers.returncode == 0:
+                raise ResolutionEditError(f"unresolved conflict markers in {name}")
             if markers.returncode != 1:
-                raise _Unsafe(f"cannot exclude unresolved conflict markers in {name}")
+                raise _Unsafe(f"cannot inspect conflict markers in {name}")
         return tree
 
     def _run(
@@ -495,6 +505,7 @@ class ImplementationTransfer:
         self._command(path, "checkout", "--detach", start, "--")
         head = start
         stopped = None
+        unmerged = []
         self._prove_checkout(path, objects, registration)
         self._require_clean(path)
         log = self._log(path)
@@ -511,8 +522,10 @@ class ImplementationTransfer:
             after = resolve_commit(path, "HEAD", runner=self._git)
             updated = self._log(path)
             if pick.returncode:
+                unmerged = self._command(path, "ls-files", "--unmerged", "-z")
+                unmerged = unmerged.split("\0")[:-1]
                 if (after == head and updated == log and self._marker(path) == commit
-                        and self._command(path, "ls-files", "--unmerged", "-z")):
+                        and unmerged):
                     stopped = applied
                     break
                 raise _Interrupted(f"unproved cherry-pick: {pick.stderr.strip()}")
@@ -528,7 +541,8 @@ class ImplementationTransfer:
             self._require_clean(path)
             head, log = after, updated
         return {"path": path.name, "registration": registration, "start": start,
-                "head": head, "log": hashlib.sha256(log).hexdigest(), "stop": stopped}
+                "head": head, "log": hashlib.sha256(log).hexdigest(), "stop": stopped,
+                "unmerged": unmerged}
 
     def _advance(
         self, directory: Path, commits: tuple[str, ...], start: str,
@@ -575,7 +589,16 @@ class ImplementationTransfer:
             if type(stop) is not int or not 0 <= stop < len(commits) - offset:
                 raise _Unsafe("invalid candidate conflict step")
             step = offset + stop
-            conflict = TransferConflict(self.identity, path, step, head, commits[step])
+            unmerged = result.get("unmerged")
+            if not isinstance(unmerged, list) or not unmerged or any(
+                not isinstance(entry, str) or not re.fullmatch(
+                    r"[0-7]{6} [0-9a-f]{40} [123]\t.+", entry, re.DOTALL,
+                ) for entry in unmerged
+            ):
+                raise _Unsafe("invalid original conflict paths")
+            conflict = TransferConflict(
+                self.identity, path, step, head, commits[step], tuple(unmerged),
+            )
             if self._marker(path) != conflict.source_commit:
                 raise _Unsafe("candidate no longer matches the recorded conflict")
             plan = _receipt(approval)

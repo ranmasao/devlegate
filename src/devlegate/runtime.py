@@ -2410,16 +2410,20 @@ class ServiceEngine:
         if command.method == "reconcile-resume":
             if command.onto is None:
                 self._validate_reconcile_resume_admission(command.ticket_id)
-            elif (
+                return
+            rework = self._state.get("rework_provenance")
+            conflict = rework.get("conflict") if isinstance(rework, dict) else None
+            if (
                 self._state.get("phase") != "agent_pending"
                 or self._state.get("execution_ticket_id") != command.ticket_id
                 or self._state.get("worker_identity") is not None
-                or not isinstance(self._state.get("rework_provenance"), dict)
-                or not isinstance(
-                    self._state["rework_provenance"].get("conflict"), dict,
-                )
+                or not isinstance(conflict, dict)
             ):
                 raise DevlegateError("ticket has no waiting REWORK candidate")
+            if command.onto != conflict.get("path"):
+                raise DevlegateError("confirmation must name the waiting candidate")
+            if rework.get("confirmation") is not None:
+                raise DevlegateError("REWORK confirmation is already recorded")
             return
         if command.method == "reconcile-control":
             if command.onto is None:
@@ -2566,14 +2570,6 @@ class ServiceEngine:
     def _record_operator_admission(self, command: OperatorCommand) -> None:
         if not command.mutable:
             return
-        if command.method == "reconcile-resume" and command.onto is not None:
-            try:
-                ReworkTransfer(
-                    self, self._execution_generation_binding(),
-                    self._state["rework_provenance"],
-                ).resolve(command.onto, command.plan_digest)
-            except ExecutionWorkspaceError as error:
-                raise DevlegateError(str(error)) from error
         if command.method == "clean-apply":
             from devlegate.clean_reset import reset_ack
 
@@ -2652,7 +2648,20 @@ class ServiceEngine:
                 return
             updated[command.request_id] = receipt
             reconciliation = None
-            if command.method == "reconcile-resume" and command.onto is None:
+            rework = None
+            if command.method == "reconcile-resume" and command.onto is not None:
+                # Persist the exact decision alongside its replay receipt. The
+                # scheduler validates and applies it under repository ownership,
+                # after admission and without the command lock.
+                rework = {
+                    **self._state["rework_provenance"],
+                    "confirmation": {
+                        "request_id": command.request_id,
+                        "source_digest": command.plan_digest,
+                    },
+                    "resolution_error": None,
+                }
+            elif command.method == "reconcile-resume":
                 current = self._state.get("reconciliation")
                 if not isinstance(current, dict):
                     raise DevlegateError("invalid reconciliation state")
@@ -2705,6 +2714,7 @@ class ServiceEngine:
                     else {}
                 ),
                 **({"reconciliation": reconciliation} if reconciliation else {}),
+                **({"rework_provenance": rework} if rework else {}),
             )
 
     def _workspace_cleanup_cohort(
@@ -3222,9 +3232,10 @@ class ServiceEngine:
             preparation_blocker is None and isinstance(rework, dict)
             and isinstance(rework.get("conflict"), dict)
         ):
-            preparation_blocker = (
-                self._state.get("execution_id"), waiting_message(rework["conflict"]),
-            )
+            message = waiting_message(rework["conflict"])
+            if rework.get("resolution_error"):
+                message = f"{rework['resolution_error']}; {message}"
+            preparation_blocker = (self._state.get("execution_id"), message)
         if (
             blocked_reason is None
             and preparation_blocker is not None

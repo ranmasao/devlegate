@@ -8,6 +8,7 @@ from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
 import select
 from devlegate.execution_result import ExecutionReportStore
+from devlegate.implementation_transfer import source_resolution_digest
 
 
 def _reconcile_when_not_busy(service, config, pending, target):
@@ -1469,7 +1470,9 @@ def test_publisher_index_is_independent_of_active_control_commit(git_fixture):
     assert not lock.exists()
 
 
-@pytest.mark.parametrize("rework", ["same-base", "advanced", "conflict"])
+@pytest.mark.parametrize(
+    "rework", ["same-base", "advanced", "conflict", "lost-confirmation"],
+)
 def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
     git_fixture, monkeypatch, rework,
 ):
@@ -1514,6 +1517,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
     service = LiveService(git_fixture["working"], config)
     service.start()
     service.wait_ready()
+    conflicting = rework in {"conflict", "lost-confirmation"}
     try:
         service.wait_for(
             lambda: (
@@ -1595,7 +1599,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             git(product, "clone", str(product), str(publisher_product))
             git(publisher_product, "config", "user.name", "Product Publisher")
             git(publisher_product, "config", "user.email", "product@example.test")
-            path = "process-worker.txt" if rework == "conflict" else "advance.txt"
+            path = "process-worker.txt" if conflicting else "advance.txt"
             (publisher_product / path).write_text("product change\n")
             git(publisher_product, "add", path)
             git(publisher_product, "commit", "-m", "advance product")
@@ -1610,7 +1614,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             "origin",
             "HEAD:refs/heads/devlegate/control",
         )
-        if rework == "conflict":
+        if conflicting:
             def waiting():
                 origin = _disk_state(config).get("rework_provenance") or {}
                 return origin.get("conflict")
@@ -1620,6 +1624,22 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             candidate = Path(conflict["path"])
             source = Path(report.execution_path)
             attempt = _disk_state(config)["execution_id"]
+
+            def confirm_cli(path):
+                response = None
+
+                def submitted():
+                    nonlocal response
+                    response = service.cli(
+                        "reconcile", "resume", "T-1", "--resolve-candidate", str(path),
+                    )
+                    return "service busy; mutable request was not admitted" not in (
+                        response.stderr
+                    )
+
+                service.wait_for(submitted)
+                return response
+
             def published_wait():
                 result = service.cli("status", "--json")
                 if not result.stdout:
@@ -1643,26 +1663,92 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             service.start()
             service.wait_ready()
             assert waiting() == conflict
-            foreign = service.cli(
-                "reconcile", "resume", "T-1", "--resolve-candidate", str(publisher),
+            foreign = confirm_cli(git_fixture["publisher"])
+            assert foreign.returncode != 0 and "waiting candidate" in foreign.stderr
+            response = confirm_cli(candidate)
+            assert response.returncode == 0, response.stderr
+            service.wait_for(lambda: "conflict markers" in (
+                _disk_state(config)["rework_provenance"].get("resolution_error") or ""
+            ))
+            assert git(source, "rev-parse", "HEAD").stdout.strip() == (
+                report.workspace_head
             )
-            assert foreign.returncode != 0 and "candidate" in foreign.stderr
-            response = service.cli(
-                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
-            )
-            assert response.returncode != 0 and "conflict markers" in response.stderr
             (candidate / "process-worker.txt").write_text("product and worker\n")
-            (candidate / "resolution.txt").write_text("addition from resolver\n")
+            doctest = "A justified addition:\n>>> print(1 + 1)\n2\n"
+            (candidate / "resolution.txt").write_text(doctest)
             service.stop()
+            if rework == "lost-confirmation":
+                monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "receipt_after_save")
+            else:
+                gate = git_fixture["tmp"] / "resolution.release"
+                monkeypatch.setenv("DEVLEGATE_TEST_RESOLUTION_GATE", str(gate))
+            service = LiveService(product, config, command=_recovery_driver(config))
             service.start()
             service.wait_ready()
             assert waiting() == conflict
             assert _disk_state(config)["execution_id"] == attempt
             assert len(attempts.read_text().splitlines()) == 2
-            response = service.cli(
-                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
-            )
-            assert response.returncode == 0, response.stderr
+            if rework == "lost-confirmation":
+                payload = {"ticket_id": "T-1", "resolve_candidate": str(candidate),
+                           "candidate_digest": source_resolution_digest(candidate)}
+
+                def confirm():
+                    result = None
+
+                    def submit():
+                        nonlocal result
+                        try:
+                            result = ipc_request(
+                                service.locator.socket_path, "reconcile-resume",
+                                payload,
+                                mutable=True, request_id="confirm-rework",
+                            )
+                        except IPCClientError as error:
+                            if "mutable request was not admitted" in str(error):
+                                return False
+                            raise
+                        return True
+
+                    service.wait_for(submit)
+                    return result
+
+                with pytest.raises(IPCClientError, match="outcome is uncertain"):
+                    confirm()
+                _wait_process_death(service)
+                crashed = _disk_state(config)
+                assert crashed["rework_provenance"]["confirmation"] == {
+                    "request_id": "confirm-rework",
+                    "source_digest": payload["candidate_digest"],
+                }
+                assert crashed["mutable_receipts"]["confirm-rework"]["accepted"]
+                assert not list(candidate.parent.glob("*.approval.json"))
+                assert git(source, "rev-parse", "HEAD").stdout.strip() == (
+                    report.workspace_head
+                )
+                monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+                service.locator.socket_path.unlink(missing_ok=True)
+                service = LiveService(product, config)
+                service.start()
+                service.wait_ready()
+                assert confirm() == {"accepted": True, "ticket_id": "T-1"}
+            else:
+                try:
+                    response = confirm_cli(candidate)
+                    assert response.returncode == 0, response.stderr
+                    assert "confirmation recorded" in response.stdout
+                    service.wait_for(gate.with_suffix(".waiting").exists)
+                    rework_state = _disk_state(config)["rework_provenance"]
+                    confirmation = rework_state["confirmation"]
+                    assert ipc_request(
+                        service.locator.socket_path, "reconcile-resume", {
+                            "ticket_id": "T-1", "resolve_candidate": str(candidate),
+                            "candidate_digest": confirmation["source_digest"],
+                        }, mutable=True, request_id=confirmation["request_id"],
+                    ) == {"accepted": True, "ticket_id": "T-1"}
+                    assert not list(candidate.parent.glob("*.approval.json"))
+                    assert len(attempts.read_text().splitlines()) == 2
+                finally:
+                    gate.touch()
         service.wait_for(
             lambda: (
                 _disk_state(config)["phase"] == "idle"
@@ -1683,9 +1769,12 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             report.workspace_head
         )
         assert "REWORK" in prompts.read_text()
-        if rework == "conflict":
+        if conflicting:
             assert reworked.execution_id == attempt
-            assert (Path(reworked.execution_path) / "resolution.txt").is_file()
+            added = Path(reworked.execution_path) / "resolution.txt"
+            assert added.read_text() == doctest
+        if rework == "lost-confirmation":
+            assert confirm() == {"accepted": True, "ticket_id": "T-1"}
         assert service.process is not None and service.process.poll() is None
     finally:
         if service.process is not None and service.process.poll() is None:

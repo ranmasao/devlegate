@@ -6,6 +6,7 @@
 import argparse
 import os
 import signal
+import time
 from pathlib import Path
 
 import devlegate.execution_containment as containment
@@ -23,6 +24,22 @@ def main() -> int:
             type(containment.default_containment_provider()).__name__
         )
     engine = ServiceEngine(args.env)
+    resolution_gate = os.environ.get("DEVLEGATE_TEST_RESOLUTION_GATE")
+    if resolution_gate:
+        gate = Path(resolution_gate)
+        original_remote = engine._execution_remote_head
+
+        def remote(branch):
+            rework = engine._state.get("rework_provenance") or {}
+            if (engine._scheduler_active and rework.get("confirmation")
+                    and not gate.exists()):
+                gate.with_suffix(".waiting").touch()
+                deadline = time.monotonic() + 15
+                while not gate.exists() and time.monotonic() < deadline:
+                    time.sleep(.02)
+            return original_remote(branch)
+
+        engine._execution_remote_head = remote
     original_ready = engine.mark_service_ready
 
     def mark_ready():

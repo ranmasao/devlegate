@@ -12,12 +12,14 @@ from devlegate.git import run_git
 from devlegate.implementation_transfer import (
     ImplementationTransfer,
     ResolutionAuthorization,
+    ResolutionEditError,
     TransferConflict,
     TransferEffect,
     TransferIdentity,
     TransferInterrupted,
     TransferReady,
     TransferUnavailable,
+    source_resolution_digest,
 )
 
 
@@ -202,6 +204,29 @@ def test_gitlink_transfer_keeps_submodule_checkouts_unchanged(repo, owner, tmp_p
     assert git(source / "sub", "rev-parse", "HEAD") == second
 
 
+def test_source_only_gitlink_conflict_requires_explicit_discard(repo, owner):
+    product, source, original = repo
+
+    def pin(path, oid):
+        git(path, "update-index", "--add", "--cacheinfo", f"160000,{oid},sub")
+        git(path, "commit", "-m", "update gitlink")
+        return git(path, "rev-parse", "HEAD")
+
+    a = pin(product, original)
+    git(source, "merge", "--ff-only", a)
+    h = pin(source, "1" * 40)
+    b = pin(product, "2" * 40)
+    identity = TransferIdentity("owner", "T-1", "a" * 64, "b" * 64, a, h, b)
+    transfer = owner(h, b, identity=identity)
+    conflict = transfer.prepare()
+    assert isinstance(conflict, TransferConflict), conflict
+    with pytest.raises(ResolutionEditError, match=r"gitlink.*devlegate reset T-1"):
+        transfer.stage_source_resolution(conflict)
+    assert transfer.prepare() == conflict
+    assert git(conflict.path, "ls-files", "--unmerged", "sub")
+    assert git(source, "rev-parse", "HEAD") == h
+
+
 @pytest.fixture
 def conflict_input(repo):
     product, source, _ = repo
@@ -217,6 +242,35 @@ def conflict_input(repo):
 def edit_resolution(conflict):
     (conflict.path / "common").write_text("resolved\n")
     (conflict.path / "explanation").write_text("additional justified change\n")
+
+
+def test_source_resolution_stages_supported_content_after_refusing_markers(
+    owner, conflict_input,
+):
+    h, b, _ = conflict_input
+    transfer = owner(h, b)
+    conflict = transfer.prepare()
+    assert isinstance(conflict, TransferConflict), conflict
+    for _ in range(2):  # The original paths remain known even after staging/restart.
+        with pytest.raises(ResolutionEditError, match="unresolved conflict markers"):
+            owner(h, b).stage_source_resolution(conflict)
+    path = conflict.path
+    (path / "common").write_text("Resolved example:\n>>> print(1 + 1)\n2\n")
+    (path / "payload.bin").write_bytes(b"\x00\x01\xff")
+    (path / "gone").unlink()
+    (path / "link").symlink_to("common")
+    (path / "script").chmod(0o755)
+    digest = source_resolution_digest(path)
+    tree = transfer.stage_source_resolution(conflict)
+    ready = transfer.checkpoint_resolution(ResolutionAuthorization(
+        conflict, tree, "Exact source-only resolution", digest,
+    ))
+    assert isinstance(ready, TransferReady), ready
+    assert (ready.path / "payload.bin").read_bytes() == b"\x00\x01\xff"
+    assert not (ready.path / "gone").exists()
+    assert (ready.path / "link").readlink().name == "common"
+    assert (ready.path / "script").stat().st_mode & 0o111
+    assert (ready.path / "follow-up").read_text() == "later edit\n"
 
 
 def test_explicit_resolution_is_exact_and_attributed(repo, owner, conflict_input):

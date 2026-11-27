@@ -16,10 +16,12 @@ from runtime_helpers import run_test_iteration
 
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
+from devlegate.implementation_transfer import source_resolution_digest
 from devlegate.resource_binding import ResourceBinding
 from devlegate.rework_transfer import ReworkTransfer
 from devlegate.runtime import (
     DevlegateError,
+    OperatorCommand,
     WorkflowBlockedError,
     WorkspacePreparationBlockedError,
 )
@@ -130,8 +132,6 @@ def test_rework_tree_already_present(tmp_path, monkeypatch, source_kind):
 def test_waiting_rework_refuses_stale_or_unowned_handoff(
     multi_commit_rework, monkeypatch, change,
 ):
-    from devlegate.implementation_transfer import source_resolution_digest
-
     owner, config, source = multi_commit_rework
     repo = owner.repo
     (repo / "first.txt").write_text("product version\n")
@@ -165,7 +165,7 @@ def test_waiting_rework_refuses_stale_or_unowned_handoff(
     elif change == "remote":
         git(repo, "push", f"--force-with-lease={ref}:{source.workspace_head}",
             "origin", f"HEAD:{ref}")
-        expected = "remote changed"
+        expected = "upstream predecessor changed"
     elif change == "unretired":
         # Missing independent group retirement must refuse even though the
         # successor's pending state has no worker identity of its own.
@@ -177,26 +177,34 @@ def test_waiting_rework_refuses_stale_or_unowned_handoff(
     elif change == "foreign":
         git(repo, "worktree", "remove", str(original))
         git(repo, "worktree", "add", str(original), source.execution_branch)
-        expected = "conflict changed"
+        expected = "candidate refused"
     else:
         (path / "added.txt").write_text("changed after observation\n")
         expected = "candidate changed since confirmation"
 
     restarted = Devlegate(config)
     with restarted._lock():
+        command = OperatorCommand(
+            request_id="test-confirmation", method="reconcile-resume",
+            fingerprint="test-fingerprint", ticket_id="T-1", onto=str(path),
+            plan_digest=digest,
+        )
+        restarted._admit_operator_command(command)
         transaction = ReworkTransfer(
-            restarted, restarted._execution_generation_binding(), pending,
+            restarted, restarted._execution_generation_binding(),
+            restarted._state["rework_provenance"],
         )
         with pytest.raises(ExecutionWorkspaceError, match=expected):
-            transaction.resolve(str(path), digest)
+            transaction.prepare()
     assert (path / "first.txt").read_text() == "resolved\n"
     assert git(original, "rev-parse", "HEAD").stdout.strip() == source.workspace_head
     assert restarted._state["execution_id"] == owner._state["execution_id"]
     assert ExecutionReportStore(owner.control_worktree).list("T-1") == reports
 
 
+@pytest.mark.parametrize("confirmation_recorded", [False, True])
 def test_reset_discards_waiting_rework_without_using_candidate(
-    multi_commit_rework, monkeypatch,
+    multi_commit_rework, monkeypatch, confirmation_recorded,
 ):
     from devlegate.ticket_reset import admit
 
@@ -211,6 +219,14 @@ def test_reset_discards_waiting_rework_without_using_candidate(
     candidate = Path(owner._state["rework_provenance"]["conflict"]["path"])
     (candidate / "first.txt").write_text("unapproved edit\n")
     with owner._lock():
+        if confirmation_recorded:
+            command = OperatorCommand(
+                request_id="reset-confirmation", method="reconcile-resume",
+                fingerprint="test-fingerprint", ticket_id="T-1", onto=str(candidate),
+                plan_digest=source_resolution_digest(candidate),
+            )
+            owner._admit_operator_command(command)
+            assert command.admission_result["accepted"]
         assert admit(owner, "T-1")["accepted"] is True
 
     restarted = Devlegate(config)
@@ -229,6 +245,7 @@ def test_reset_discards_waiting_rework_without_using_candidate(
         if launches:
             break
     assert len(launches) == 1
+    assert not list(candidate.parent.glob("*.approval.json"))
     assert (candidate / "first.txt").read_text() == "unapproved edit\n"
     assert source in ExecutionReportStore(owner.control_worktree).list("T-1")
 

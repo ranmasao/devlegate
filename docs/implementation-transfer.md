@@ -82,7 +82,7 @@ could wedge every replay. The replacement's durable inventory is:
 | Record | Evidence and replay boundary |
 | --- | --- |
 | Attempt intent | Binds exact A/B/H and caller identity to the source object store and, only for a real transfer, the filesystem identity of the private volume and pool. Reservation publishes atomically; an unpublished random directory is never opened by replay. |
-| One outcome per segment | Binds an owned private checkout, start, exact HEAD/reflog and ready/conflict position to the attempt. In a clean N-commit transfer this is one checkout, N native picks and one outcome, with no per-pick writes, fetches or pins. In-memory Git effects and cleanliness are checked before publication. If publication was lost, replay creates a fresh scratch from the admitted start and never adopts, resets or overwrites the previous scratch. |
+| One outcome per segment | Binds an owned private checkout, start, exact HEAD/reflog and ready/conflict position (including the original unmerged paths) to the attempt. In a clean N-commit transfer this is one checkout, N native picks and one outcome, with no per-pick writes, fetches or pins. In-memory Git effects and cleanliness are checked before publication. If publication was lost, replay creates a fresh scratch from the admitted start and never adopts, resets or overwrites the previous scratch. |
 | One authorization per exposed conflict | Records the exact resolution tree and justification before writing its deterministic commit object. Repeating that write is safe; HEAD and conflict files stay in place. Revalidate the staged tree before continuing. The next outcome seals progress beyond that conflict. |
 | Release tombstone | Records downstream custody of exact C before removing fully attributed, unchanged storage. An inode-bound rename allows interrupted removal to resume. If there is unpublished scratch, retain the whole volume, including its object pool; the scratch may contain foreign edits and is never an adoption or automatic deletion target. |
 
@@ -109,11 +109,19 @@ edits to the running owner, use:
 devlegate reconcile resume T-1 --resolve-candidate /absolute/candidate/path
 ```
 
-The CLI captures the current source bytes and the owner re-observes them before
-authorizing the exact staged tree. A subsequent conflict needs its own
-confirmation. A stale target or assignment blocks handoff and keeps the
-candidate. A successful technical resolution still launches an ordinary REWORK
-worker to revalidate the implementation against the assignment and feedback.
+The CLI captures the current source bytes. One runtime write records their
+digest against the waiting conflict and records the mutable request receipt.
+The acknowledgement means confirmation was recorded; the owner processes it
+after admission. A retry with the same request ID returns that acknowledgement
+even if the candidate has advanced. The owner re-observes source, attempt and
+authority before approving the exact staged tree in the transfer journal. If
+the owner stops between these writes, it resumes from whichever evidence is
+durable. See service status for the result. Correct the edits and confirm
+again if the owner reports unresolved markers or changed content. A subsequent
+conflict needs its own confirmation. A stale target or assignment blocks handoff
+and keeps the candidate. A gitlink conflict cannot be resolved by source edits;
+`devlegate reset T-1` explicitly discards that REWORK attempt. A successful
+technical resolution launches an ordinary REWORK worker for semantic validation.
 
 Before local installation, the owner pins H locally and publishes immutable
 evidence. The handoff journal binds C to the old generation and ref witness;
@@ -121,6 +129,15 @@ the new registration uses an inode-bound reservation and a generation-specific
 Git registration lock until its creation receipt is durable. A remote
 predecessor replacement is lease guarded. Replay can settle an exact observed
 remote outcome only with the corresponding independent publication intent.
+
+The confirmation admission itself runs no Git commands. In the continuation,
+each assignment gate uses one control `ls-remote` and one product `fetch`;
+the pre-install gate adds one work-ref `ls-remote` and, after the journal starts,
+one immutable-evidence `ls-remote`. Candidate observations also recheck the
+source (work-ref `ls-remote` before the journal, local pin afterward). These
+network round trips are outside the admission budget. Predecessor publication
+shares one fresh assignment gate with its candidate and remote-ref checks
+before the lease-guarded push; the post-push observation proves its result.
 
 ## Next lifecycle integration
 

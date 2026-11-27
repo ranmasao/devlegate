@@ -1057,7 +1057,9 @@ def _reconcile_resume_daemon(
     emit(
         result,
         output_format,
-        f"reconciliation resume accepted: {ticket_id}",
+        (f"REWORK confirmation recorded: {ticket_id}; see service status for result"
+         if resolve_candidate is not None
+         else f"reconciliation resume accepted: {ticket_id}"),
     )
     return 0
 
