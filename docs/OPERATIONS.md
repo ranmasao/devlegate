@@ -291,8 +291,11 @@ exact edits with `devlegate reconcile resume "$TICKET_ID" --resolve-candidate
 /absolute/candidate/path` (on one line). Confirmation records the decision;
 status shows whether the owner completed the handoff or found another blocker.
 Restart retains the same attempt. Do not rebase, reset, or force-push the
-execution checkout to finish the handoff. See the [transfer contract](implementation-transfer.md)
-for the clean upgrade boundary.
+execution checkout to finish the handoff. Source-only confirmation cannot select
+a gitlink commit. To discard a waiting transfer, use `devlegate reset "$TICKET_ID"`
+before installation, if the owner can still prove the exact source is safe to
+retire. A refusal preserves the checkpoint and candidate. See the
+[transfer contract](implementation-transfer.md) for the clean upgrade boundary.
 
 Ticket IDs start with an ASCII letter or digit and may also contain ASCII
 letters, digits, underscores, and hyphens. Thus `reconcile update` selects the

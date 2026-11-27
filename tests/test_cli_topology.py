@@ -1739,7 +1739,8 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                     assert response.returncode == 0, response.stderr
                     assert "confirmation recorded" in response.stdout
                     service.wait_for(gate.with_suffix(".waiting").exists)
-                    confirmation = _disk_state(config)["transfer_progress"]["confirmation"]
+                    progress = _disk_state(config)["transfer_progress"]
+                    confirmation = progress["confirmation"]
                     assert ipc_request(
                         service.locator.socket_path, "reconcile-resume", {
                             "ticket_id": "T-1", "resolve_candidate": str(candidate),
@@ -2740,43 +2741,99 @@ def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
     finally:
         service.stop()
 
-@pytest.mark.parametrize("conflict", [False, True])
+@pytest.mark.parametrize("case", ["descendant", "conflict", "unrelated", "divergent"])
 def test_real_service_process_executes_reconciliation_from_real_cli(
-    git_fixture, monkeypatch, conflict,
+    git_fixture, monkeypatch, case,
 ):
-    monkeypatch.chdir(git_fixture["working"])
+    repo = git_fixture["working"]
+    monkeypatch.chdir(repo)
     config = _short_runtime_config(git_fixture)
-    config.write_text(config.read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1"))
+    worker = git_fixture["tmp"] / "active-worker.py"
+    ready = worker.with_suffix(".ready")
+    release = worker.with_suffix(".release")
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys, time\n"
+        "script = pathlib.Path(__file__)\n"
+        "prompt = sys.stdin.read()\n"
+        "if script.with_suffix('.ready').exists():\n"
+        "    script.with_suffix('.resume').write_text(prompt)\n"
+        "    sys.exit(1)\n"
+        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "(workspace / 'implementation.txt').write_text('worker work\\n')\n"
+        "script.with_suffix('.ready').touch()\n"
+        "while not script.with_suffix('.release').exists():\n"
+        "    time.sleep(.01)\n"
+        "print(json.dumps({'type': 'tool_use', 'part': {'type': 'tool', "
+        "'tool': 'devlegate_report', 'state': {'status': 'completed', "
+        "'input': {'outcome': 'completed', 'summary': 'process worker', "
+        "'remaining': [], 'questions': []}}}}), flush=True)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(config.read_text().replace("POLL_INTERVAL=0", "POLL_INTERVAL=1")
+                      .replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}"))
     engine = _service_engine_with_control(git_fixture, config)
     _add_service_ticket(engine)
+    git(repo, "commit", "--allow-empty", "-m", "active base A")
+    git(repo, "push", "origin", "HEAD:main")
+    ineligible = case in {"unrelated", "divergent"}
 
-    def worker(workspace, _prompt, **_kwargs):
-        (workspace.path / "implementation.txt").write_text("worker work\n")
-        product_file = "implementation.txt" if conflict else "product-change.txt"
-        (git_fixture["working"] / product_file).write_text("product B\n")
-        git(git_fixture["working"], "add", product_file)
-        git(git_fixture["working"], "commit", "-m", "advance product")
-        git(git_fixture["working"], "push", "origin", "HEAD:main")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "implemented", (), ()), None
+    with LiveService(repo, config) as service:
+        service.wait_for(ready.exists)
+        product_file = (
+            "implementation.txt" if case == "conflict" else "product-change.txt"
         )
-
-    monkeypatch.setattr(engine._workers, "run", worker)
-    assert run_test_iteration(engine) == 1
-    target = engine._state["reconciliation"]["observed_product"]
-    execution = next((engine.state_dir / "worktrees").glob("*/work/T-1"))
-    git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
-
-    with LiveService(git_fixture["working"], config) as service:
+        (repo / product_file).write_text("product B\n")
+        git(repo, "add", product_file)
+        git(repo, "commit", "-m", "advance product")
+        if ineligible:
+            parents = ()
+            if case == "divergent":
+                other = git(repo, "commit-tree", "HEAD^^{tree}", "-p", "HEAD^^",
+                            "-m", "divergent parent").stdout.strip()
+                parents = ("-p", other)
+            other = git(repo, "commit-tree", "HEAD^{tree}", *parents,
+                        "-m", "replace product history").stdout.strip()
+            git(repo, "reset", "--hard", other)
+        git(repo, "push", "--force-with-lease", "origin", "HEAD:main")
+        release.touch()
+        service.wait_for(lambda: (
+            (_disk_state(config).get("reconciliation") or {}).get("status") == "pending"
+        ))
         pending_before = _disk_state(config)["reconciliation"]
+        target = pending_before["observed_product"]
+        execution = Path(pending_before["execution_path"])
+        assert git(repo, "rev-parse", "HEAD").stdout.strip() == target
         service.kill()
         service.restart()
         assert _disk_state(config)["reconciliation"] == pending_before
         result = _reconcile_when_not_busy(service, config, pending_before, target)
+        if ineligible:
+            assert result.returncode != 0 and "not a descendant" in result.stderr
+            auto = service.cli("reconcile", "auto", "T-1")
+            assert auto.returncode != 0 and "not a descendant" in auto.stderr
+            state = _disk_state(config)
+            assert state["reconciliation"] == pending_before
+            assert not state.get("transfer_progress")
+            assert state["execution_id"] == pending_before["execution_id"]
+            assert state["worker_identity"] is None
+            assert not worker.with_suffix(".resume").exists()
+            assert git(repo, "rev-parse", "HEAD").stdout.strip() == target
+            product = git(repo, "ls-remote", "origin", "refs/heads/main")
+            control = git(repo, "ls-remote", "origin", "refs/heads/devlegate/control")
+            assert product.stdout.split()[0] == target
+            assert control.stdout.split()[0] == pending_before["control_head"]
+            source = pending_before["worker_checkpoint"]
+            assert git(execution, "rev-parse", "HEAD").stdout.strip() == source
+            pin = git(repo, "rev-parse", pending_before["evidence_ref"])
+            assert pin.stdout.strip() == source
+            branch = pending_before["execution_branch"]
+            assert not git(repo, "ls-remote", "origin", f"refs/heads/{branch}").stdout
+            return
         assert result.returncode == 0, result.stderr
         assert "reconciliation request accepted: T-1" in result.stdout
 
-        if conflict:
+        if case == "conflict":
             service.wait_for(lambda: bool(
                 (_disk_state(config).get("transfer_progress") or {}).get("conflict")
             ))
@@ -2813,7 +2870,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         payload = json.loads(status.stdout)
         assert payload["reconciliation"]["effective_base"] == target
         assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
-        expected = "confirmed source\n" if conflict else "worker work\n"
+        expected = "confirmed source\n" if case == "conflict" else "worker work\n"
         assert (execution / "implementation.txt").read_text() == expected
         pinned = git(execution, "rev-parse", pending_before["evidence_ref"]).stdout
         assert pinned.strip() == pending_before["worker_checkpoint"]

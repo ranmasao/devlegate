@@ -648,3 +648,50 @@ def test_repeatable_operations_do_not_reuse_uncertain_attempts(resources):
         restarted.begin_operation("checkpoint", {"before": workspace.head})
     assert "receipt missing" in proof(restarted).reason
     assert snapshot(binding.manager.root.parent) == before
+
+
+def test_settled_legacy_rewrite_receipts_still_prove_generation(resources):
+    binding = resources
+    workspace = binding.prepare(remote_head=None)
+    base = workspace.head
+    repo, ref = binding.manager.repo, str(binding.intent["ref"])
+    binding.begin_operation("worker", {"start": base})
+    binding.finish_operation("worker", {"group_retired": True})
+    binding.record_worker_retirement()
+    binding.begin_operation("publication", {"before": None, "after": base})
+    run_git(repo, "push", "origin", f"{base}:{ref}")
+    binding.finish_operation("publication", {})
+
+    def legacy_receipt(sequence, operation, before, after):
+        # Fixture for immutable records written by the retired runtime.
+        intent = {"sequence": sequence, "operation": operation.split(".")[0],
+                  "generation": binding.intent["generation"], "before": before}
+        (binding.directory / f"{operation}-intent.json").write_text(json.dumps(intent))
+        (binding.directory / f"{operation}-receipt.json").write_text(
+            json.dumps({**intent, "after": after}),
+        )
+
+    path = workspace.path
+    run_git(path, "commit", "--allow-empty", "-m", "first rewrite")
+    first = run_git(path, "rev-parse", "HEAD").stdout.strip()
+    legacy_receipt(3, "rewrite", base, first)
+    run_git(path, "reset", "--hard", base)
+    legacy_receipt(4, "rollback", first, base)
+    assert binding.require_local(clean=True).head == base
+    run_git(path, "commit", "--allow-empty", "-m", "settled rewrite")
+    head = run_git(path, "rev-parse", "HEAD").stdout.strip()
+    legacy_receipt(5, "rewrite.00000005", base, head)
+    run_git(repo, "push", "origin", f"{head}:{ref}")
+    legacy_receipt(6, "rewrite-publication", base, head)
+    assert binding.require_local(clean=True).head == head
+    binding.begin_operation("checkpoint", {"before": head})
+    binding.finish_operation("checkpoint", {"after": head})
+
+    before = snapshot(binding.manager.root.parent)
+    restarted = ResourceBinding.for_execution(binding.manager, "execution-one")
+    assert restarted.require_local(clean=True, read_only=True).head == head
+    assert restarted.latest_remote(None) == head
+    assert restarted.abandonment_remote_authority() == head
+    assert snapshot(binding.manager.root.parent) == before
+    with pytest.raises(ValueError, match="invalid resource operation"):
+        restarted.begin_operation("rewrite", {"before": head})
