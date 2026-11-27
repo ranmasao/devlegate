@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -34,7 +35,9 @@ from devlegate.resource_binding import (
     _read,
     _safe_path,
     _sync_directory,
-    _write_once,
+)
+from devlegate.resource_binding import (
+    _publish_once as _publish,
 )
 
 _OID = re.compile(r"[0-9a-f]{40}")
@@ -112,6 +115,7 @@ class ResolutionAuthorization:
     conflict: TransferConflict
     tree: str
     justification: str
+    source_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -141,21 +145,55 @@ class _Interrupted(_Unsafe):
     pass
 
 
+def source_resolution_digest(path: Path) -> str:
+    """Bind operator consent to source bytes, modes and paths, not the Git index."""
+    _safe_path(path)
+    if not path.is_dir() or not (path / ".git").is_dir():
+        raise _Unsafe("resolution path is not a candidate checkout")
+    digest = hashlib.sha256()
+
+    def visit(directory):
+        _safe_path(directory)
+        for entry in sorted(directory.iterdir()):
+            if entry.name == ".git":
+                if directory != path:
+                    raise _Unsafe("nested Git administration in resolution source")
+                continue
+            before = entry.lstat()
+            if stat.S_ISDIR(before.st_mode):
+                visit(entry)
+                continue
+            name = os.fsencode(entry.relative_to(path))
+            if stat.S_ISLNK(before.st_mode):
+                content = hashlib.sha256(os.fsencode(entry.readlink()))
+            elif stat.S_ISREG(before.st_mode):
+                fd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, "rb") as stream:
+                    if os.fstat(stream.fileno()) != before:
+                        raise _Interrupted("resolution source changed while reading")
+                    content = hashlib.file_digest(stream, "sha256")
+            else:
+                raise _Unsafe("resolution source contains a special file")
+            after = entry.lstat()
+            # Reading can advance atime; only inode, metadata and content matter.
+            if (before.st_ino, before.st_dev, before.st_mode, before.st_size,
+                before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_ino, after.st_dev, after.st_mode, after.st_size,
+                    after.st_mtime_ns, after.st_ctime_ns,
+            ):
+                raise _Interrupted("resolution source changed during observation")
+            digest.update(name + b"\0" + str(before.st_mode).encode() + b"\0")
+            digest.update(content.digest())
+
+    visit(path)
+    return digest.hexdigest()
+
+
 def _receipt(path: Path) -> dict | None:
     try:
         return _read(path)
     except FileNotFoundError:
         return None
-
-
-def _publish(path: Path, value: dict) -> None:
-    """Publish only complete evidence, with the create-only lease of _write_once."""
-    _safe_path(path)
-    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".pending-") as temp:
-        pending = Path(temp) / "record"
-        _write_once(pending, value)
-        os.link(pending, path, follow_symlinks=False)
-        _sync_directory(path.parent)
 
 
 class ImplementationTransfer:
@@ -183,6 +221,10 @@ class ImplementationTransfer:
     def prepare(self) -> TransferResult:
         return self._run(None)
 
+    def observe(self) -> TransferResult:
+        """Reobserve an existing outcome without creating another checkout."""
+        return self._run(None, prepare=False)
+
     def checkpoint_resolution(
         self, authorization: ResolutionAuthorization,
     ) -> TransferResult:
@@ -204,7 +246,34 @@ class ImplementationTransfer:
         self._check_conflict(conflict)
         return self._staged_tree(conflict.path)
 
-    def _run(self, authorization: ResolutionAuthorization | None) -> TransferResult:
+    def stage_source_resolution(self, conflict: TransferConflict) -> str:
+        """Stage a source-only edit after deliberate owner admission."""
+        self._require_owner()
+        self._check_conflict(conflict)
+        path = conflict.path
+        unmerged = self._command(path, "ls-files", "--unmerged", "-z")
+        for record in filter(None, unmerged.split("\0")):
+            if record.startswith("160000 "):
+                raise _Unsafe("source edits cannot select an unresolved gitlink")
+        self._status(path)  # Reject hidden index entries before staging.
+        self._command(path, "add", "-A", "--", ".")
+        tree = self._staged_tree(path)
+        changed = self._command(
+            path, "diff-tree", "--no-renames", "--diff-filter=AMT", "--name-only",
+            "-r", "-z", f"{conflict.parent}^{{tree}}", tree,
+        ).split("\0")
+        for name in filter(None, changed):
+            markers = self._git(
+                path, "--literal-pathspecs", "grep", "-I", "-l", "-E",
+                r"^(<{3,}|>{3,}|\|{3,})( |$)", tree, "--", name,
+            )
+            if markers.returncode != 1:
+                raise _Unsafe(f"cannot exclude unresolved conflict markers in {name}")
+        return tree
+
+    def _run(
+        self, authorization: ResolutionAuthorization | None, *, prepare: bool = True,
+    ) -> TransferResult:
         self._require_owner()
         try:
             if authorization is not None:
@@ -214,13 +283,17 @@ class ImplementationTransfer:
                     not authorization.justification.strip()
                     or "\0" in authorization.justification
                     or self._staged_tree(conflict.path) != authorization.tree
+                    or (authorization.source_digest is not None
+                        and source_resolution_digest(conflict.path)
+                        != authorization.source_digest)
                 ):
                     raise _Unsafe("resolution authorization differs from staged tree")
                 _publish(receipt, {
                     "tree": authorization.tree,
                     "justification": authorization.justification,
+                    "source_digest": authorization.source_digest,
                 })
-            return self._observe(prepare=True)[0]
+            return self._observe(prepare=prepare)[0]
         except _Interrupted as error:
             return TransferInterrupted(self.identity, str(error))
         except (ExecutionWorkspaceError, GitObservationError, GitAncestryError, OSError,
@@ -537,6 +610,9 @@ class ImplementationTransfer:
                 or not isinstance(justification, str) or not justification.strip()):
             raise _Unsafe("invalid resolution authorization evidence")
         self._require_authorized_tree(conflict.path, tree)
+        source = plan.get("source_digest")
+        if source is not None and source_resolution_digest(conflict.path) != source:
+            raise _Interrupted("authorized source changed; candidate retained")
         content = (
             f"tree {tree}\nparent {conflict.parent}\n"
             "author Devlegate Transfer <transfer@devlegate.invalid> 0 +0000\n"

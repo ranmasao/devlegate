@@ -18,6 +18,7 @@ import re
 import secrets
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import TypedDict
 
@@ -116,6 +117,16 @@ def _read(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ExecutionWorkspaceError(f"invalid resource evidence: {path}")
     return value
+
+
+def _publish_once(path: Path, value: dict) -> None:
+    """Atomically publish complete, exclusive evidence."""
+    _safe_path(path)
+    with tempfile.TemporaryDirectory(dir=path.parent, prefix=".pending-") as temp:
+        pending = Path(temp) / "record"
+        _write_once(pending, value)
+        os.link(pending, path, follow_symlinks=False)
+        _sync_directory(path.parent)
 
 
 def _identity(path: Path) -> list[int]:
@@ -273,6 +284,14 @@ class ResourceBinding:
         _safe_path(self.directory)
         self.directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         _sync_directory(self.directory.parent.parent)
+        if self.intent.get("rework_origin") is not None:
+            self.directory.mkdir(mode=0o700, exist_ok=True)
+            _sync_directory(self.directory.parent)
+            if any(not p.name.startswith(".pending-")
+                   for p in self.directory.iterdir()):
+                raise ExecutionWorkspaceError("rework generation intent is not empty")
+            _publish_once(self.directory / "intent.json", self.intent)
+            return
         self.directory.mkdir(mode=0o700)
         _sync_directory(self.directory.parent)
         _write_once(self.directory / "intent.json", self.intent)
@@ -450,7 +469,9 @@ class ResourceBinding:
         name = operation if not any(item[1] == operation for item in attempts) else (
             f"{operation}.{sequence:08d}"
         )
-        _write_once(self.directory / f"{name}-intent.json", {
+        writer = (_publish_once if operation == "predecessor-publication"
+                  else _write_once)
+        writer(self.directory / f"{name}-intent.json", {
             **details, "generation": self.intent["generation"],
             "sequence": sequence, "operation": operation,
         })
@@ -489,7 +510,9 @@ class ResourceBinding:
                 )
         if any(details[key] != intent[key] for key in details.keys() & intent.keys()):
             raise ExecutionWorkspaceError("operation result differs from its intent")
-        _write_once(path.with_name(path.name.replace("-intent", "-receipt")), {
+        writer = (_publish_once if operation == "predecessor-publication"
+                  else _write_once)
+        writer(path.with_name(path.name.replace("-intent", "-receipt")), {
             **intent, **details,
         })
 
@@ -709,7 +732,7 @@ class ResourceBinding:
     def _record_creation(
         self, workspace: ExecutionWorkspace, *,
         expected_identity: list[int] | None = None,
-        clean: bool = True,
+        clean: bool = True, replay: bool = False,
     ) -> None:
         manager = self.manager
         if expected_identity is None:
@@ -718,13 +741,20 @@ class ResourceBinding:
             raise ExecutionWorkspaceError("reserved worktree directory was replaced")
         admin = self._admin()
         marker = admin / "devlegate-generation.json"
-        _write_once(marker, self.intent)
+        writer = _publish_once if replay else _write_once
+        if replay and marker.exists():
+            if _read(marker) != self.intent:
+                raise ExecutionWorkspaceError("creation generation marker differs")
+        else:
+            writer(marker, self.intent)
         targets = self._targets(admin)
         for name, target in targets.items():
             _safe_path(target)
             witness = self.directory / f"witness-{name}"
             if witness.exists():
-                if name != "reflog" or _identity(target) != _identity(witness):
+                if (not replay and name != "reflog") or (
+                    _identity(target) != _identity(witness)
+                ):
                     raise ExecutionWorkspaceError(
                         "branch generation witness was replaced"
                     )
@@ -736,7 +766,7 @@ class ResourceBinding:
         _sync_directory(manager.path)
         _sync_directory(self.directory)
         reflog = targets["reflog"].read_bytes()
-        _write_once(self.directory / "receipt.json", {
+        writer(self.directory / "receipt.json", {
             "generation": self.intent["generation"],
             "head": workspace.head,
             "path_identity": expected_identity,
@@ -746,77 +776,150 @@ class ResourceBinding:
             "reflog_size": len(reflog),
             "reflog_prefix_sha256": hashlib.sha256(reflog).hexdigest(),
         })
-        self.require_local(clean=clean)
+        if not replay:
+            self.require_local(clean=clean)
 
-    def prepare_rework(
+    def install_rework(
         self, predecessor: ResourceBinding, previous_base: str, checkpoint: str,
-        *, remote_head: str | None,
+        candidate: str, *, require_current,
     ) -> ExecutionWorkspace:
-        """An explicit reviewed handoff, never an implicit generation transfer."""
+        """Install an exact candidate under an independently journaled handoff."""
         self._validate_intent()
-        if (self.directory / "receipt.json").exists():
-            return self.prepare(remote_head=remote_head)
-        if (self.directory / "rework-started.json").exists():
-            raise ExecutionWorkspaceError(
-                "interrupted generation handoff has no creation receipt"
-            )
-        if (
-            predecessor.intent["execution_id"] == self.intent["execution_id"]
-            or predecessor.manager.path != self.manager.path
-            or predecessor.intent["common"] != self.intent["common"]
-        ):
-            raise ExecutionWorkspaceError("reviewed generation identity differs")
-        if predecessor.rework_source_absent(previous_base, checkpoint):
-            # An ordinary zero-delta retirement left no resource to hand off.
-            # This admission must create fresh resources, not adopt the old SHA.
-            return self.prepare(remote_head=remote_head)
-        predecessor.require_local(clean=True)
-        if (
-            predecessor.intent["execution_id"] == self.intent["execution_id"]
-            or predecessor.manager.path != self.manager.path
-            or remote_head != self.intent["prior_remote"]
-            or self.intent["prior_local"] != checkpoint
-        ):
-            raise ExecutionWorkspaceError(
-                "reviewed generation handoff precondition differs"
-            )
-        _write_once(self.directory / "rework-started.json", {
-            "predecessor": predecessor.intent["generation"], "checkpoint": checkpoint,
-        })
-        reflog = predecessor._targets(predecessor._admin())["reflog"]
-        os.link(reflog, self.directory / "witness-reflog", follow_symlinks=False)
-        _sync_directory(self.directory)
-        descriptors: list[int] = []
-
-        def create(base: str) -> ExecutionWorkspace:
-            self.manager.path.mkdir(mode=0o700)
-            _sync_directory(self.manager.path.parent)
-            descriptor = os.open(
-                self.manager.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            )
-            descriptors.append(descriptor)
-            reserved = os.fstat(descriptor)
-            _write_once(self.directory / "reservation.json", {
-                "identity": [reserved.st_dev, reserved.st_ino],
-            })
-            return self.manager.create_reserved(base)
-
-        try:
-            workspace = self.manager.prepare_rework(
-                str(self.intent["base"]), previous_base, checkpoint, creator=create,
-            )
-            if len(descriptors) != 1:
-                raise ExecutionWorkspaceError(
-                    "rework did not create one reserved worktree"
+        predecessor.require_worker_retirement()
+        manager = self.manager
+        ref = str(self.intent["ref"])
+        common = Path(str(self.intent["common"]))
+        log = common / "logs" / ref
+        _safe_path(log)
+        before = self.intent["prior_local"]
+        record = self.directory / "rework-started.json"
+        details = {"predecessor": predecessor.intent["generation"],
+                   "checkpoint": checkpoint, "candidate": candidate}
+        if not record.exists():
+            absent = predecessor.rework_source_absent(previous_base, checkpoint)
+            if before != (None if absent else checkpoint) or (
+                self.intent["prior_registration"]
+                != manager._registrations().get(manager.path)
+            ):
+                raise ExecutionWorkspaceError("reviewed source changed before install")
+            if absent and log.exists():
+                raise ExecutionWorkspaceError("unexpected reflog for retired source")
+            original = b"" if absent else log.read_bytes()
+            require_current()
+            _publish_once(record, {**details, "log_size": len(original),
+                                   "log_digest": hashlib.sha256(original).hexdigest()})
+        evidence = _read(record)
+        if any(evidence.get(key) != value for key, value in details.items()):
+            raise ExecutionWorkspaceError("candidate installation identity differs")
+        reservation = self.directory / "rework-reservation.json"
+        receipt = self.directory / "receipt.json"
+        label = f"devlegate rework {self.intent['generation']}"
+        if not receipt.exists():
+            registrations = manager._registrations()
+            if any(p != manager.path and item.get("branch") == manager.branch
+                   for p, item in registrations.items()):
+                raise ExecutionWorkspaceError("rework branch registered elsewhere")
+            if not reservation.exists() and manager.path in registrations:
+                source = predecessor.require_local(clean=True)
+                digest = hashlib.sha256(log.read_bytes()).hexdigest()
+                if source.head != checkpoint or digest != evidence["log_digest"]:
+                    raise ExecutionWorkspaceError("reviewed source changed")
+                require_current()
+                manager.retire(source, checkpoint)
+            if not reservation.exists() and (
+                manager.path.exists() or manager.path in manager._registrations()
+            ):
+                raise ExecutionWorkspaceError("rework source retirement is ambiguous")
+            if before is not None:
+                witness = predecessor.directory / "witness-reflog"
+                if _identity(log) != _identity(witness):
+                    raise ExecutionWorkspaceError("rework source ref witness changed")
+            content = log.read_bytes() if log.exists() else b""
+            size = evidence["log_size"]
+            if hashlib.sha256(content[:size]).hexdigest() != evidence["log_digest"]:
+                raise ExecutionWorkspaceError("rework source reflog changed")
+            suffix = content[size:]
+            current = resolve_ref_commit(manager.repo, ref, runner=manager._runner)
+            if current is not None and manager._runner(
+                manager.repo, "symbolic-ref", "-q", ref, check=False,
+            ).returncode != 1:
+                raise ExecutionWorkspaceError("rework branch is not a direct ref")
+            if current == before and before != candidate and not suffix:
+                require_current()
+                manager._runner(
+                    manager.repo, "update-ref", "--no-deref", "--create-reflog", "-m",
+                    label, ref, candidate, before or "", check=False,
                 )
-            reserved = os.fstat(descriptors[0])
-            self._record_creation(
-                workspace, expected_identity=[reserved.st_dev, reserved.st_ino],
+                current = resolve_ref_commit(manager.repo, ref, runner=manager._runner)
+                suffix = log.read_bytes()[size:] if log.exists() else b""
+            prefix = f"{before or '0' * 40} {candidate} ".encode()
+            if current != candidate or (before == candidate and suffix) or (
+                before != candidate and (len(suffix.splitlines()) != 1
+                    or not suffix.startswith(prefix)
+                    or not suffix.endswith(f"\t{label}\n".encode()))
+            ):
+                raise ExecutionWorkspaceError("rework branch CAS is unproved")
+            if manager._runner(manager.repo, "symbolic-ref", "-q", ref,
+                               check=False).returncode != 1:
+                raise ExecutionWorkspaceError("rework branch is not a direct ref")
+            require_current()
+            workspace, identity = self._register_rework(candidate, label, reservation)
+            require_current()
+            self._record_creation(workspace, expected_identity=identity, replay=True)
+        locked = self._validate_local_identity() / "locked"
+        _safe_path(locked)
+        if locked.exists():
+            if locked.read_text().strip() != label:
+                raise ExecutionWorkspaceError("installed rework lock differs")
+            require_current()
+            manager._runner(manager.repo, "worktree", "unlock", str(manager.path))
+        workspace = self._observe_local(clean=True)
+        if workspace.head != candidate or self._expected_head() != candidate:
+            raise ExecutionWorkspaceError("installed rework checkpoint differs")
+        return workspace
+
+    def _register_rework(self, candidate, label, reservation):
+        manager = self.manager
+        if not reservation.exists():
+            manager.path.parent.mkdir(parents=True, exist_ok=True)
+            scratch = Path(tempfile.mkdtemp(dir=manager.path.parent, prefix=".rework-"))
+            _sync_directory(scratch.parent)
+            _publish_once(reservation, {
+                "name": scratch.name, "identity": _identity(scratch),
+            })
+        reserved = _read(reservation)
+        identity = reserved["identity"]
+        name = reserved["name"]
+        if not isinstance(name, str) or not re.fullmatch(r"\.rework-[a-z0-9_]+", name):
+            raise ExecutionWorkspaceError("invalid rework reservation")
+        scratch = manager.path.parent / name
+        _safe_path(manager.path)
+        if not manager.path.exists():
+            if _identity(scratch) != identity or any(scratch.iterdir()):
+                raise ExecutionWorkspaceError("rework reservation changed")
+            scratch.rename(manager.path)
+            _sync_directory(scratch.parent)
+        if _identity(manager.path) != identity or scratch.exists():
+            raise ExecutionWorkspaceError("rework reserved checkout was replaced")
+        if manager.path not in manager._registrations():
+            if any(manager.path.iterdir()):
+                raise ExecutionWorkspaceError("foreign files in rework reservation")
+            manager._runner(
+                manager.repo, "-c", "core.hooksPath=/dev/null", "worktree", "add",
+                "--lock", "--reason", label, str(manager.path), manager.branch,
+                check=False,
             )
-            return workspace
-        finally:
-            for descriptor in descriptors:
-                os.close(descriptor)
+        if _identity(manager.path) != identity or (
+            self._admin() / "locked"
+        ).read_text().strip() != label:
+            raise ExecutionWorkspaceError("rework registration witness differs")
+        workspace = manager._validate_existing(
+            manager._registrations().get(manager.path), str(self.intent["base"]),
+        )
+        if workspace.head != candidate or workspace.dirty:
+            raise ExecutionWorkspaceError("rework checkout differs from candidate")
+        manager._prepare_submodules(manager.path)
+        return workspace, identity
 
     def rework_source_absent(self, previous_base: str, checkpoint: str) -> bool:
         """Recognize only a proven, ordinarily retired zero-delta predecessor."""

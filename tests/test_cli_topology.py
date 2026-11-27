@@ -1469,13 +1469,15 @@ def test_publisher_index_is_independent_of_active_control_commit(git_fixture):
     assert not lock.exists()
 
 
+@pytest.mark.parametrize("rework", ["same-base", "advanced", "conflict"])
 def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, rework,
 ):
     monkeypatch.chdir(git_fixture["working"])
     worker = git_fixture["tmp"] / "auto-resume-worker.py"
     pid_file = git_fixture["tmp"] / "auto-resume-worker.pid"
     attempts = git_fixture["tmp"] / "auto-resume-attempts.txt"
+    prompts = git_fixture["tmp"] / "auto-resume-prompt.txt"
     worker.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, pathlib, sys, time\n"
@@ -1489,7 +1491,8 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         "ack = os.environ.get('DEVLEGATE_TEST_IDENTITY_ACK')\n"
         "while ack and not pathlib.Path(ack).exists():\n"
         "    time.sleep(.01)\n"
-        "sys.stdin.buffer.read()\n"
+        "prompt = sys.stdin.read()\n"
+        "(attempts.parent / 'auto-resume-prompt.txt').write_text(prompt)\n"
         "if count == 0:\n"
         "    while True:\n"
         "        time.sleep(1)\n"
@@ -1584,20 +1587,105 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         review.rename(publisher / "kanban/todo/T-1.md")
         git(publisher, "add", "-A")
         git(publisher, "commit", "-m", "return T-1 to todo")
+        control_head = git(publisher, "rev-parse", "HEAD").stdout.strip()
+        product = git_fixture["working"]
+        if rework != "same-base":
+            # Separate publisher; don't touch the active product checkout.
+            publisher_product = git_fixture["tmp"] / "rework-product-publisher"
+            git(product, "clone", str(product), str(publisher_product))
+            git(publisher_product, "config", "user.name", "Product Publisher")
+            git(publisher_product, "config", "user.email", "product@example.test")
+            path = "process-worker.txt" if rework == "conflict" else "advance.txt"
+            (publisher_product / path).write_text("product change\n")
+            git(publisher_product, "add", path)
+            git(publisher_product, "commit", "-m", "advance product")
+            base = git(publisher_product, "rev-parse", "HEAD").stdout.strip()
+            upstream = git(product, "remote", "get-url", "origin").stdout.strip()
+            git(publisher_product, "push", upstream, "HEAD:main")
+        else:
+            base = report.code_base_head
         git(
             publisher,
             "push",
             "origin",
             "HEAD:refs/heads/devlegate/control",
         )
+        if rework == "conflict":
+            def waiting():
+                origin = _disk_state(config).get("rework_provenance") or {}
+                return origin.get("conflict")
+
+            service.wait_for(waiting, timeout=30)
+            conflict = waiting()
+            candidate = Path(conflict["path"])
+            source = Path(report.execution_path)
+            attempt = _disk_state(config)["execution_id"]
+            def published_wait():
+                result = service.cli("status", "--json")
+                if not result.stdout:
+                    return False
+                plan = json.loads(result.stdout)["plan"]
+                return plan["action"] == "blocked" and str(candidate) in plan["reason"]
+
+            service.wait_for(published_wait, timeout=30)
+            inspection = service.cli("inspect", "ticket", "T-1", "--json")
+            assert inspection.returncode == 0, inspection.stderr
+            assert json.loads(inspection.stdout)["observation"]["rework_conflict"] == (
+                conflict
+            )
+            assert conflict["identity"]["target"] == base
+            assert conflict["identity"]["checkpoint"] == report.workspace_head
+            assert git(source, "rev-parse", "HEAD").stdout.strip() == (
+                report.workspace_head
+            )
+            assert len(attempts.read_text().splitlines()) == 2
+            service.stop()
+            service.start()
+            service.wait_ready()
+            assert waiting() == conflict
+            foreign = service.cli(
+                "reconcile", "resume", "T-1", "--resolve-candidate", str(publisher),
+            )
+            assert foreign.returncode != 0 and "candidate" in foreign.stderr
+            response = service.cli(
+                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
+            )
+            assert response.returncode != 0 and "conflict markers" in response.stderr
+            (candidate / "process-worker.txt").write_text("product and worker\n")
+            (candidate / "resolution.txt").write_text("addition from resolver\n")
+            service.stop()
+            service.start()
+            service.wait_ready()
+            assert waiting() == conflict
+            assert _disk_state(config)["execution_id"] == attempt
+            assert len(attempts.read_text().splitlines()) == 2
+            response = service.cli(
+                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
+            )
+            assert response.returncode == 0, response.stderr
         service.wait_for(
             lambda: (
-                (engine.control_worktree / "kanban/review/T-1.md").is_file()
+                _disk_state(config)["phase"] == "idle"
+                and (engine.control_worktree / "kanban/review/T-1.md").is_file()
                 and attempts.read_text().splitlines()
                 == ["attempt", "attempt", "attempt"]
             ),
             timeout=30,
         )
+        reports = ExecutionReportStore(engine.control_worktree).list("T-1")
+        assert len(reports) == 2 and report in reports
+        reworked = next(item for item in reports if item != report)
+        assert reworked.code_base_head == base and reworked.control_head == control_head
+        assert reworked.resource_generation != report.resource_generation
+        assert "Re-run the recovered generation" in prompts.read_text()
+        pin = f"refs/devlegate/recovery/workspace/T-1/{report.execution_id}"
+        assert git(product, "ls-remote", "origin", pin).stdout.split()[0] == (
+            report.workspace_head
+        )
+        assert "REWORK" in prompts.read_text()
+        if rework == "conflict":
+            assert reworked.execution_id == attempt
+            assert (Path(reworked.execution_path) / "resolution.txt").is_file()
         assert service.process is not None and service.process.poll() is None
     finally:
         if service.process is not None and service.process.poll() is None:

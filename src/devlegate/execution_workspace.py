@@ -8,7 +8,6 @@ from __future__ import annotations
 import dataclasses
 import re
 import subprocess
-from collections.abc import Callable
 from pathlib import Path
 
 from devlegate.commit_messages import checkpoint_message
@@ -17,7 +16,6 @@ from devlegate.git import (
     GitObservationError,
     GitRunner,
     is_ancestor,
-    patch_equivalence,
     ref_exists,
     resolve_commit,
     run_git,
@@ -190,174 +188,6 @@ class ExecutionWorkspaceManager:
         )
         self._prepare_submodules(workspace.path)
         return workspace
-
-    def prepare_rework(
-        self, base_head: str, previous_base: str, previous_checkpoint: str,
-        *, creator: Callable[[str], ExecutionWorkspace] | None = None,
-    ) -> ExecutionWorkspace:
-        """Port a proven linear worker delta onto a newly admitted product base.
-
-        A rework transition can be interrupted after the ticket branch has
-        moved but before the cherry-pick completes.  Replay accepts only the
-        empty target base or an exact-size, patch-equivalent linear port; an
-        arbitrary descendant is never evidence that the old code survived.
-        """
-        self._validate_base(base_head)
-        self._validate_base(previous_base)
-        self._validate_base(previous_checkpoint)
-        branch_ref = f"refs/heads/{self.branch}"
-        current = self._runner(
-            self.repo,
-            "for-each-ref",
-            "--format=%(objectname)",
-            branch_ref,
-            check=False,
-        )
-        if current.returncode == 0 and not current.stdout.strip():
-            if previous_checkpoint != previous_base:
-                raise ExecutionWorkspaceConflict("previous execution branch is missing")
-            # A completed no-op may not have published a ticket branch. There
-            # is no implementation delta to carry, so create this generation's
-            # ordinary branch from its admitted base.
-            return self.prepare(base_head) if creator is None else creator(base_head)
-        if current.returncode or len(current.stdout.splitlines()) != 1:
-            raise ExecutionWorkspaceError(
-                "cannot observe previous execution branch: "
-                f"{current.stderr.strip() or 'unknown git error'}"
-            )
-        current_head = current.stdout.strip()
-        try:
-            predecessor = is_ancestor(
-                self.repo, previous_base, previous_checkpoint, runner=self._runner
-            )
-        except GitAncestryError as error:
-            raise ExecutionWorkspaceError(
-                f"cannot prove previous execution ancestry: {error}"
-            ) from error
-        if not predecessor:
-            raise ExecutionWorkspaceConflict(
-                "rework preparation conflict: previous checkpoint is not descended "
-                "from its reported base"
-            )
-        commits = self._runner(
-            self.repo,
-            "rev-list",
-            "--reverse",
-            f"{previous_base}..{previous_checkpoint}",
-            check=False,
-        )
-        if commits.returncode:
-            raise ExecutionWorkspaceError("cannot inspect previous execution delta")
-        delta = [commit for commit in commits.stdout.splitlines() if commit]
-        merges = self._runner(
-            self.repo,
-            "rev-list",
-            "--merges",
-            f"{previous_base}..{previous_checkpoint}",
-            check=False,
-        )
-        if merges.returncode or merges.stdout.strip():
-            raise ExecutionWorkspaceConflict(
-                "rework preparation conflict: previous implementation is not a "
-                "linear worker delta"
-            )
-        try:
-            already_integrated = is_ancestor(
-                self.repo, previous_checkpoint, base_head, runner=self._runner
-            )
-        except GitAncestryError as error:
-            raise ExecutionWorkspaceError(
-                "cannot prove whether the previous implementation is integrated: "
-                f"{error}"
-            ) from error
-        if current_head == previous_checkpoint:
-            registrations = self._registrations()
-            registration = registrations.get(self.path.resolve())
-            if registration is None:
-                raise ExecutionWorkspaceConflict(
-                    "previous execution worktree is missing"
-                )
-            workspace = self._validate_existing(registration, previous_base)
-            if workspace.head != previous_checkpoint or workspace.dirty:
-                raise ExecutionWorkspaceConflict(
-                    "previous execution worktree is not clean at its reported "
-                    "checkpoint"
-                )
-            self.retire(workspace, previous_checkpoint)
-            moved = self._runner(
-                self.repo,
-                "update-ref",
-                branch_ref,
-                base_head,
-                previous_checkpoint,
-                check=False,
-            )
-            if moved.returncode:
-                raise ExecutionWorkspaceConflict(
-                    "execution branch changed during rework preparation"
-                )
-        elif current_head != base_head:
-            # A completed replay must contain exactly the old patch series and
-            # nothing else.  This rejects a foreign descendant after a crash.
-            try:
-                replay_ancestry = is_ancestor(
-                    self.repo, base_head, current_head, runner=self._runner
-                )
-            except GitAncestryError as error:
-                raise ExecutionWorkspaceError(
-                    f"cannot prove replay ancestry: {error}"
-                ) from error
-            if not replay_ancestry:
-                raise ExecutionWorkspaceConflict(
-                    "execution branch changed during rework preparation"
-                )
-            replay = self._runner(
-                self.repo,
-                "rev-list",
-                "--reverse",
-                f"{base_head}..{current_head}",
-                check=False,
-            )
-            replay_delta = [commit for commit in replay.stdout.splitlines() if commit]
-            try:
-                equivalent = patch_equivalence(
-                    self.repo,
-                    previous_checkpoint,
-                    current_head,
-                    base_head,
-                    runner=self._runner,
-                )
-            except GitObservationError as error:
-                raise ExecutionWorkspaceError(
-                    f"cannot prove replay patch equivalence: {error}"
-                ) from error
-            if (
-                replay.returncode
-                or len(replay_delta) != len(delta)
-                or equivalent != ("-",) * len(delta)
-            ):
-                raise ExecutionWorkspaceConflict(
-                    "rework preparation conflict: execution branch is not the exact "
-                    "proven transplanted implementation"
-                )
-        prepared = self.prepare(base_head) if creator is None else creator(base_head)
-        if delta and not already_integrated and prepared.head == base_head:
-            transplanted = self._runner(
-                prepared.path, "cherry-pick", "--no-edit", *delta, check=False
-            )
-            if transplanted.returncode:
-                self._runner(prepared.path, "cherry-pick", "--abort", check=False)
-                raise ExecutionWorkspaceConflict(
-                    "rework preparation conflict: previous checkpoint cannot be "
-                    "applied to the new product base"
-                )
-            registration = self._registrations().get(self.path.resolve())
-            prepared = self._validate_existing(registration, base_head)
-        if delta and not already_integrated and prepared.head == base_head:
-            raise ExecutionWorkspaceConflict(
-                "rework preparation conflict: previous implementation was not ported"
-            )
-        return prepared
 
     def inspect(
         self, base_head: str, expected_head: str | None = None

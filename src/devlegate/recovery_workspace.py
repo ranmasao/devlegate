@@ -79,6 +79,17 @@ def inspect_bound_workspace(
             if intent.get("execution_id") != execution_id:
                 raise ExecutionWorkspaceError("generation intent has wrong execution")
             binding = ResourceBinding(manager, intent)
+            rework = state.get("rework_provenance")
+            if (
+                state.get("phase") == "agent_pending"
+                and state.get("worker_identity") is None
+                and isinstance(rework, dict)
+                and rework.get("preparation_stage") == "admitted"
+                and not intent.get("predecessor_execution")
+            ):
+                # Only the REWORK transaction can prove and complete its effects.
+                # This is permission to route to preparation, not to launch.
+                return WorkspaceInspection("REUSABLE", "REWORK preparation is pending")
             if binding.creation_pending():
                 return WorkspaceInspection(
                     "REUSABLE", "generation intent is untouched; creation is pending"

@@ -1022,8 +1022,20 @@ def _reconcile_daemon(
 
 
 def _reconcile_resume_daemon(
-    env_file: Path, ticket_id: str, output_format: str = "table"
+    env_file: Path, ticket_id: str, output_format: str = "table", *,
+    resolve_candidate: str | None = None,
 ) -> int:
+    payload = {"ticket_id": ticket_id}
+    if resolve_candidate is not None:
+        from devlegate.execution_workspace import ExecutionWorkspaceError
+        from devlegate.implementation_transfer import source_resolution_digest
+
+        path = Path(resolve_candidate).absolute()
+        try:
+            payload["candidate_digest"] = source_resolution_digest(path)
+        except (OSError, ExecutionWorkspaceError) as error:
+            raise DevlegateError(str(error)) from error
+        payload["resolve_candidate"] = str(path)
     try:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
@@ -1033,7 +1045,7 @@ def _reconcile_resume_daemon(
         result = request(
             locator.socket_path,
             "reconcile-resume",
-            {"ticket_id": ticket_id},
+            payload,
             mutable=True,
         )
         decode_reconcile_resume_ack(result, ticket_id)
@@ -3372,6 +3384,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     resume_parser.add_argument("ticket_id", help="ticket execution to resume")
+    resume_parser.add_argument(
+        "--resolve-candidate", metavar="PATH",
+        help="confirm the current source edits in the named waiting REWORK candidate",
+    )
     add_output_arguments(resume_parser)
     add_output_arguments(update_base_parser)
     control_reconcile_parser = reconcile_commands.add_parser(
@@ -3840,6 +3856,11 @@ def _main() -> int:
                     env_file, args.from_head, args.to_head, args.output_format
                 )
             if args.reconcile_command == "resume":
+                if args.resolve_candidate is not None:
+                    return _reconcile_resume_daemon(
+                        env_file, args.ticket_id, args.output_format,
+                        resolve_candidate=args.resolve_candidate,
+                    )
                 if args.output_format == "table":
                     return _reconcile_resume_daemon(env_file, args.ticket_id)
                 return _reconcile_resume_daemon(

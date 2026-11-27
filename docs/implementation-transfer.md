@@ -93,17 +93,37 @@ the lifecycle has taken durable custody of C and any still-needed source
 evidence. Abandoned scratch is retained for explicit disposition; it does not
 prevent a fresh private computation or the downstream handoff of a proved C.
 
-## Next lifecycle integrations
+## Reviewed continuation (REWORK)
 
-- **TASK-199 (REWORK):** Keep predecessor review/report and generation
-  admission, `ResourceBinding.require_worker_retirement` and the live
-  predecessor or evidence-ref proof. Use `_assert_repository_owner` and
-  `_git_runtime`. Replace `ExecutionWorkspaceManager.prepare_rework`'s
-  ancestry/delta port, `patch_equivalence`/count-based replay and its
-  cherry-pick/abort after retirement. Split `ResourceBinding.prepare_rework`
-  so `rework_source_absent` and the `rework-started` retirement effect are no
-  longer used to prepare a candidate. Retain retirement, generation creation
-  and publication receipts/CAS as effects of downstream handoff after ready.
+The new execution's resource generation is its transfer attempt. The reviewed
+report, exact review binding and admitted control are recorded separately from
+transfer progress. The owner retains the source worktree and work ref until a
+candidate is ready. The candidate location, A/B/H and conflict step appear in
+the service's blocked status and logs. Restart reopens the same candidate.
+
+Edit the source files at the displayed candidate path, including any necessary
+new files. Do not stage, commit or change Git administration. To confirm the
+edits to the running owner, use:
+
+```sh
+devlegate reconcile resume T-1 --resolve-candidate /absolute/candidate/path
+```
+
+The CLI captures the current source bytes and the owner re-observes them before
+authorizing the exact staged tree. A subsequent conflict needs its own
+confirmation. A stale target or assignment blocks handoff and keeps the
+candidate. A successful technical resolution still launches an ordinary REWORK
+worker to revalidate the implementation against the assignment and feedback.
+
+Before local installation, the owner pins H locally and publishes immutable
+evidence. The handoff journal binds C to the old generation and ref witness;
+the new registration uses an inode-bound reservation and a generation-specific
+Git registration lock until its creation receipt is durable. A remote
+predecessor replacement is lease guarded. Replay can settle an exact observed
+remote outcome only with the corresponding independent publication intent.
+
+## Next lifecycle integration
+
 - **TASK-200 (active reconciliation):** Keep `admit_update_base`,
   `reconciliation_workspace_binding`, `reconciliation_evidence_matches`, the
   `ResourceBinding` proof, and product/topology/publication authority. Replace

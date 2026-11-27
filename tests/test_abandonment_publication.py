@@ -366,7 +366,9 @@ def test_receipted_remote_and_pins_retire_independently_and_replay(
             remote="origin", remote_head=head,
         )
         successor.record_intent()
-        workspace = successor.prepare_rework(binding, head, head, remote_head=head)
+        workspace = successor.install_rework(
+            binding, head, head, advanced, require_current=lambda: None,
+        )
         successor.begin_operation("predecessor-publication",
                                   {"before": head, "after": advanced})
         git(engine.repo, "push", f"--force-with-lease={ref}:{head}", "origin",

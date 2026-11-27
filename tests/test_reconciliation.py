@@ -420,57 +420,6 @@ def test_admitted_checkpoint_stop_during_ambiguous_push_reobserves(
 
 
 @pytest.mark.parametrize("shutdown", [False, True])
-def test_rework_pin_refuses_git_before_first_observation(
-    tmp_path, monkeypatch, shutdown
-):
-    engine = ServiceEngine.__new__(ServiceEngine)
-    engine.repo = tmp_path
-    engine._host_owner_thread_id = None if shutdown else -1
-    engine._stop_event = threading.Event()
-    if shutdown:
-        engine._stop_event.set()
-    monkeypatch.setattr(
-        runtime, "_git", lambda *args, **kwargs: pytest.fail("Git spawned")
-    )
-    with pytest.raises(ShutdownInterrupted if shutdown else DevlegateError):
-        engine._pin_rework_evidence("T-1", "exec", "checkpoint")
-
-
-def test_rework_pin_replays_after_stop_following_ref_creation(tmp_path, monkeypatch):
-    def git(*args):
-        return subprocess.run(
-            ["git", "-C", str(tmp_path), *args],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-
-    git("init")
-    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
-        "commit", "--allow-empty", "-m", "base")
-    checkpoint = git("rev-parse", "HEAD")
-    engine = ServiceEngine.__new__(ServiceEngine)
-    engine.repo = tmp_path
-    engine.execution_worktree_root = tmp_path / "resources"
-    engine.control_worktree = tmp_path / "control"
-    engine._host_owner_thread_id = None
-    engine._stop_event = threading.Event()
-    original = runtime._git
-
-    def stop_after_create(repo, *args, **kwargs):
-        result = original(repo, *args, **kwargs)
-        if args[0] == "update-ref":
-            engine._stop_event.set()
-        return result
-
-    monkeypatch.setattr(runtime, "_git", stop_after_create)
-    with pytest.raises(ShutdownInterrupted):
-        engine._pin_rework_evidence("T-1", "exec", checkpoint)
-    evidence = engine._workspace_recovery_ref("T-1", "exec")
-    assert git("rev-parse", evidence) == checkpoint
-    engine._stop_event.clear()
-    assert engine._pin_rework_evidence("T-1", "exec", checkpoint) == evidence
-
-
-@pytest.mark.parametrize("shutdown", [False, True])
 def test_checkpoint_initial_observation_rejects_unowned_or_stopped_git(
     tmp_path, monkeypatch, shutdown
 ):

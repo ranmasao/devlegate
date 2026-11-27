@@ -337,6 +337,22 @@ def admit(owner, ticket_id):
     binding = copy.deepcopy(owner._state.get("execution_resource_binding")) if (
         current
     ) else None
+    rework = owner._state.get("rework_provenance")
+    if (binding is not None and binding.get("rework_origin") is not None
+            and owner._state["phase"] == "agent_pending"
+            and owner._state.get("worker_identity") is None):
+        from devlegate.rework_transfer import ReworkTransfer
+
+        transaction = ReworkTransfer(
+            owner, ResourceBinding(_manager(owner, ticket_id), binding), rework,
+        )
+        if not transaction.installed:
+            if transaction.installation_started:
+                raise ValueError("reset blocked while REWORK installation is settling")
+            # The unlaunched attempt has no managed checkout of its own. Reset
+            # may discard its exact reviewed source, not adopt arbitrary material.
+            transaction.require_source(transaction.identity)
+            binding = copy.deepcopy(transaction.source.intent)
     if binding is None and not current:
         candidates = []
         manager = _manager(owner, ticket_id)
@@ -528,7 +544,11 @@ def advance(owner):
                     binding = ResourceBinding(_manager(owner, intent["ticket_id"]),
                                               intent["binding"])
                     binding._validate_intent()
-                    if prior.get("phase") == "agent_pending" and not any(
+                    if binding.intent["execution_id"] != execution_id:
+                        # Waiting REWORK targets the retired reviewed generation.
+                        # Its own pending execution never reached worker admission.
+                        binding.require_worker_retirement()
+                    elif prior.get("phase") == "agent_pending" and not any(
                         operation == "worker"
                         for _sequence, operation, _path in binding._attempts()
                     ):
