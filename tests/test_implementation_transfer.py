@@ -105,7 +105,7 @@ def test_multicommit_transfer_preserves_trees_sources_and_remote(repo, owner, tm
         source, "diff", "--binary", "-M", a, h,
     )
     assert git(result.path, "show", "HEAD:upstream") == "retained"
-    assert git(result.path, "rev-parse", "refs/devlegate/transfer/h") == h
+    assert git(result.path, "rev-parse", f"{h}^{{commit}}") == h
     assert git(result.path, "rev-parse", f"{one}^{{commit}}") == one
     assert git(product, "show-ref") == refs
     assert git(remote, "show-ref") == remote_refs
@@ -116,6 +116,11 @@ def test_multicommit_transfer_preserves_trees_sources_and_remote(repo, owner, tm
     assert str(result.path) not in git(product, "worktree", "list", "--porcelain")
     git(product, "worktree", "prune", "--expire=now")
     assert owner(h, b).prepare() == result
+    # Downstream can import the exact detached candidate into the original
+    # object store without first installing any branch or publishing a report.
+    git(product, "fetch", "--no-tags", "--no-write-fetch-head", result.path, "HEAD")
+    assert git(product, "rev-parse", f"{result.head}^{{tree}}") == result.tree
+    assert git(product, "show-ref") == refs
 
 
 @pytest.mark.parametrize(("case", "effect"), [
@@ -151,7 +156,8 @@ def test_classifies_incorporation_and_retains_exact_history(repo, owner, case, e
             (product / "worker").write_text("worker\n")
         commit(product, "target")
     b = git(product, "rev-parse", "HEAD")
-    result = owner(h, b).prepare()
+    transfer = owner(h, b)
+    result = transfer.prepare()
     assert isinstance(result, TransferReady), result
     assert result.effect == effect
     if case == "same":
@@ -164,7 +170,10 @@ def test_classifies_incorporation_and_retains_exact_history(repo, owner, case, e
     elif case == "partial":
         assert git(result.path, "rev-list", "--count", f"{b}..HEAD") == "2"
         assert git(result.path, "show", "HEAD:more") == "second"
-    assert git(result.path, "rev-parse", "refs/devlegate/transfer/h") == h
+    if case in {"same", "empty", "canceled", "ancestor"}:
+        assert result.path is None
+        assert list(transfer.root.iterdir()) == [transfer.intent]
+    assert git(result.path or product, "rev-parse", f"{h}^{{commit}}") == h
 
 
 def test_gitlink_transfer_keeps_submodule_checkouts_unchanged(repo, owner, tmp_path):
@@ -205,10 +214,9 @@ def conflict_input(repo):
     return h, b, first
 
 
-def stage_resolution(conflict):
+def edit_resolution(conflict):
     (conflict.path / "common").write_text("resolved\n")
     (conflict.path / "explanation").write_text("additional justified change\n")
-    git(conflict.path, "add", "common", "explanation")
 
 
 def test_explicit_resolution_is_exact_and_attributed(repo, owner, conflict_input):
@@ -223,8 +231,9 @@ def test_explicit_resolution_is_exact_and_attributed(repo, owner, conflict_input
     assert isinstance(transfer.checkpoint_resolution(ResolutionAuthorization(
         conflict, "1" * 40, "attempt while unresolved",
     )), TransferUnavailable)
-    stage_resolution(conflict)
-    tree = transfer.resolution_tree(conflict)
+    edit_resolution(conflict)
+    tree = transfer.stage_resolution(conflict, ("common", "explanation"))
+    assert transfer.resolution_tree(conflict) == tree
     auth = ResolutionAuthorization(conflict, tree, "reason for the extra path")
     other = replace(transfer.identity, attempt="c" * 64)
     assert isinstance(transfer.checkpoint_resolution(replace(
@@ -243,79 +252,80 @@ def test_explicit_resolution_is_exact_and_attributed(repo, owner, conflict_input
     assert git(result.path, "rev-parse", "HEAD^^{tree}") == tree
     assert git(result.path, "show", "HEAD:explanation") == "additional justified change"
     assert git(result.path, "show", "HEAD:follow-up") == "later edit"
-    assert git(result.path, "rev-parse", "refs/devlegate/transfer/h") == h
+    assert git(result.path, "rev-parse", f"{h}^{{commit}}") == h
     assert git(product, "rev-parse", "HEAD") == b
     assert git(source, "rev-parse", "HEAD") == h
     assert isinstance(transfer.checkpoint_resolution(auth), TransferUnavailable)
     assert owner(h, b).prepare() == result
+    transfer.release(result, require_consumed=lambda _: None)
+    assert not result.path.exists() and not conflict.path.exists()
 
 
 class Crash(Exception):
     pass
 
 
-@pytest.mark.parametrize(("boundary", "after", "expected"), [
-    ("root-intent", False, TransferReady),
-    ("root-intent", True, TransferReady),
-    ("directory", False, TransferInterrupted),
-    ("directory", True, TransferReady),
-    ("repository", False, TransferInterrupted),
-    ("repository", True, TransferReady),
-    ("fetch", False, TransferReady),
-    ("fetch", True, TransferReady),
-    ("pin", False, TransferReady),
-    ("pin", True, TransferInterrupted),
-    ("materialized", False, TransferInterrupted),
-    ("materialized", True, TransferReady),
-    ("cherry-pick", False, TransferReady),
-    ("cherry-pick", True, TransferInterrupted),
-    ("0-done", False, TransferInterrupted),
-    ("0-done", True, TransferReady),
+@pytest.mark.parametrize("after", [False, True])
+@pytest.mark.parametrize("boundary", [
+    "intent", "init", "checkout", "cherry-pick", "outcome",
 ])
-def test_reopen_boundaries(repo, owner, monkeypatch, boundary, after, expected):
+def test_reopen_boundaries(repo, owner, monkeypatch, boundary, after):
     product, source, _ = repo
     (source / "work").write_text("implementation\n")
     h = commit(source, "worker edit")
     (product / "upstream").write_text("advance\n")
     b = commit(product, "advance")
-    write = module._write_once
+    refs = git(product, "show-ref")
+    publish = module._publish
+    first_path = None
 
     def interrupted_write(path, data):
-        stem = path.stem.removeprefix("b" * 64).lstrip(".") or "root-intent"
-        if boundary != stem or after:
-            write(path, data)
-        if boundary == stem:
+        kind = "outcome" if path.name.endswith(".outcome.json") else "intent"
+        if boundary != kind or after:
+            publish(path, data)
+        if boundary == kind:
             raise Crash
 
     def interrupted_git(cwd, *args, **kwargs):
-        cmd = "update-ref" if boundary == "pin" else boundary
-        if boundary in {"fetch", "pin", "cherry-pick"} and cmd in args:
+        nonlocal first_path
+        if "init" in args:
+            first_path = cwd
+        if boundary in {"init", "checkout", "cherry-pick"} and boundary in args:
             if after:
                 run_git(cwd, *args, **kwargs)
             raise Crash
         return run_git(cwd, *args, **kwargs)
 
     with monkeypatch.context() as patch:
-        patch.setattr(module, "_write_once", interrupted_write)
+        patch.setattr(module, "_publish", interrupted_write)
         with pytest.raises(Crash):
             owner(h, b, runner=interrupted_git).prepare()
     result = owner(h, b).prepare()
-    assert isinstance(result, expected), result
+    assert isinstance(result, TransferReady), result
+    assert result.identity == owner(h, b).identity
+    assert git(result.path, "show", "HEAD:work") == "implementation"
+    assert git(result.path, "show", "HEAD:upstream") == "advance"
+    assert git(result.path, "rev-parse", "HEAD^") == b
+    if first_path is not None:
+        assert (result.path == first_path) == (boundary == "outcome" and after)
+        assert first_path.is_dir()
+    assert owner(h, b).prepare() == result
     assert git(source, "rev-parse", "HEAD") == h
     assert git(product, "rev-parse", "HEAD") == b
+    assert git(product, "show-ref") == refs
 
 
 @pytest.mark.parametrize(("command", "after"), [
     ("hash-object", False), ("hash-object", True),
-    ("update-ref", False), ("update-ref", True), ("--quit", True),
+    ("checkout", True), ("cherry-pick", True),
 ])
 def test_replay_resolution_checkpoint(repo, owner, conflict_input, command, after):
     h, b, _ = conflict_input
     transfer = owner(h, b)
     conflict = transfer.prepare()
     assert isinstance(conflict, TransferConflict), conflict
-    stage_resolution(conflict)
-    tree = transfer.resolution_tree(conflict)
+    edit_resolution(conflict)
+    tree = transfer.stage_resolution(conflict, ("common", "explanation"))
 
     def interrupt(cwd, *args, **kwargs):
         if command in args and (command != "hash-object" or "-w" in args):
@@ -337,10 +347,11 @@ def test_replay_resolution_checkpoint(repo, owner, conflict_input, command, afte
 def test_foreign_path_and_same_sha_ref_are_not_adopted(owner, conflict_input):
     h, b, _ = conflict_input
     transfer = owner(h, b)
-    transfer.directory.mkdir(parents=True)
+    transfer.root.mkdir(parents=True)
+    transfer.intent.write_text("{}")
     result = transfer.prepare()
-    assert isinstance(result, TransferUnavailable) and "foreign" in result.reason
-    transfer.directory.rmdir()
+    assert isinstance(result, TransferUnavailable) and "identity" in result.reason
+    transfer.intent.unlink()
     conflict = transfer.prepare()
     assert isinstance(conflict, TransferConflict), conflict
     git(conflict.path, "update-ref", "refs/heads/foreign", b)
@@ -348,26 +359,33 @@ def test_foreign_path_and_same_sha_ref_are_not_adopted(owner, conflict_input):
     git(conflict.path, "update-ref", "-d", "refs/heads/foreign", b)
     original = conflict.path.with_name("original-candidate")
     conflict.path.rename(original)
-    git(conflict.path.parent, "clone", "--no-hardlinks", original, conflict.path)
+    git(conflict.path.parent, "clone", "--no-local", original, conflict.path)
     git(conflict.path, "checkout", "--detach", b)
     assert isinstance(owner(h, b).prepare(), TransferUnavailable)
 
 
 def test_missing_proof_and_release_require_owner_custody(repo, owner):
-    product, source, a = repo
+    product, source, _ = repo
+    (source / "work").write_text("worker edit\n")
+    h = commit(source, "work")
+    (product / "upstream").write_text("advance\n")
+    b = commit(product, "advance")
 
     def unavailable(_):
         raise ExecutionWorkspaceError("source checkpoint receipt unavailable")
 
-    transfer = owner(a, a, require_source=unavailable)
+    transfer = owner(h, b, require_source=unavailable)
     result = transfer.prepare()
     assert isinstance(result, TransferUnavailable)
     assert "receipt unavailable" in result.reason
-    assert not transfer.path.exists()
-    result = owner(a, a).prepare()
+    assert not transfer.root.exists()
+    result = owner(h, b).prepare()
     assert isinstance(result, TransferReady), result
-    # Reopening only needs the independently imported pins after materialization.
-    assert transfer.prepare() == result
+    # Borrowed objects alone do not prove the admitted generation on reopening.
+    refused = transfer.prepare()
+    assert isinstance(refused, TransferUnavailable)
+    assert "receipt unavailable" in refused.reason
+    transfer = owner(h, b)
     with pytest.raises(ExecutionWorkspaceError, match="receipt unavailable"):
         transfer.release(result, require_consumed=unavailable)
     assert transfer.prepare() == result
@@ -380,7 +398,8 @@ def test_missing_proof_and_release_require_owner_custody(repo, owner):
     transfer.release(result, require_consumed=unavailable)
     assert not result.path.exists()
     assert isinstance(transfer.prepare(), TransferUnavailable)
-    assert git(source, "rev-parse", "HEAD") == git(product, "rev-parse", "HEAD") == a
+    assert git(source, "rev-parse", "HEAD") == h
+    assert git(product, "rev-parse", "HEAD") == b
 
 
 def test_owner_and_canonical_path_are_checked_before_reservation(repo, tmp_path):
@@ -407,6 +426,70 @@ def test_owner_and_canonical_path_are_checked_before_reservation(repo, tmp_path)
     assert not transfer.root.exists()
 
 
+def test_replay_from_independent_packed_source_evidence(repo, owner, conflict_input):
+    product, source, _ = repo
+    h, b, _ = conflict_input
+    pin = "refs/devlegate/evidence/retained-h"
+    git(product, "update-ref", pin, h)
+    # Simulate an origin that has already retained H under its own proof.
+    git(product, "worktree", "remove", source)
+    git(product, "branch", "-D", "devlegate/work/T-1")
+    git(product, "gc", "--prune=now")
+    refs = git(product, "show-ref")
+
+    def prove_pin(identity):
+        if git(product, "rev-parse", pin) != identity.checkpoint:
+            raise ExecutionWorkspaceError("retained source pin changed")
+
+    result = owner(h, b, require_source=prove_pin).prepare()
+    assert isinstance(result, TransferConflict), result
+    assert git(result.path, "rev-parse", f"{h}^{{commit}}") == h
+    assert git(product, "show-ref") == refs
+    git(product, "update-ref", pin, b, h)
+    refused = owner(h, b, require_source=prove_pin).prepare()
+    assert isinstance(refused, TransferUnavailable) and "pin changed" in refused.reason
+    assert "<<<<<<<" in (result.path / "common").read_text()
+
+
+def test_each_conflict_in_a_series_needs_its_own_approval(repo, owner):
+    product, source, _ = repo
+    (source / "prefix").write_text("applied before the first conflict\n")
+    commit(source, "clean prefix")
+    (source / "common").write_text("first conflict\n")
+    first = commit(source, "first")
+    (source / "gone").write_text("second conflict\n")
+    h = commit(source, "second")
+    (product / "common").write_text("product common\n")
+    (product / "gone").write_text("product gone\n")
+    b = commit(product, "product")
+    transfer = owner(h, b)
+    conflict = transfer.prepare()
+    assert isinstance(conflict, TransferConflict), conflict
+    assert (conflict.step, conflict.source_commit) == (1, first)
+    (conflict.path / "common").write_text("first resolution\n")
+    tree = transfer.stage_resolution(conflict, ("common",))
+    first_auth = ResolutionAuthorization(conflict, tree, "first decision")
+    second = transfer.checkpoint_resolution(first_auth)
+    assert isinstance(second, TransferConflict), second
+    assert (second.step, second.source_commit) == (2, h)
+    assert second.path != conflict.path
+    assert (second.path / "common").read_text() == "first resolution\n"
+    transfer = owner(h, b)
+    assert isinstance(transfer.checkpoint_resolution(first_auth), TransferUnavailable)
+    assert transfer.prepare() == second
+    (second.path / "gone").unlink()
+    tree = transfer.stage_resolution(second, ("gone",))
+    ready = transfer.checkpoint_resolution(
+        ResolutionAuthorization(second, tree, "remove the obsolete path"),
+    )
+    assert isinstance(ready, TransferReady) and ready.externally_resolved
+    assert not (ready.path / "gone").exists()
+    assert (ready.path / "prefix").read_text() == "applied before the first conflict\n"
+    assert git(ready.path, "rev-list", "--count", f"{b}..HEAD") == "3"
+    assert git(source, "rev-parse", "HEAD") == h
+    assert git(product, "rev-parse", "HEAD") == b
+
+
 def test_source_non_linear_and_missing_input_are_unavailable(repo, owner):
     product, source, a = repo
     (product / "upstream").write_text("advance\n")
@@ -421,7 +504,7 @@ def test_source_non_linear_and_missing_input_are_unavailable(repo, owner):
     assert git(source, "rev-parse", "HEAD") == h
     missing = TransferIdentity("owner", "T-1", "a" * 64, "c" * 64, a, h, "1" * 40)
     result = owner(h, b, identity=missing).prepare()
-    assert isinstance(result, TransferUnavailable) and "fetch failed" in result.reason
+    assert isinstance(result, TransferUnavailable) and missing.target in result.reason
 
 
 def test_concurrent_checkout_change_is_never_a_mechanical_result(repo, owner):
@@ -431,20 +514,28 @@ def test_concurrent_checkout_change_is_never_a_mechanical_result(repo, owner):
     (product / "upstream").write_text("advance\n")
     b = commit(product, "advance")
 
+    foreign = None
+
     def replace_child(cwd, *args, **kwargs):
+        nonlocal foreign
         result = run_git(cwd, *args, **kwargs)
         if "cherry-pick" in args:
             assert result.returncode == 0
             git(cwd, "reset", "--hard", b)
             (cwd / "foreign").write_text("foreign edit\n")
             commit(cwd, "concurrent foreign child of B")
+            foreign = cwd
         return result
 
     transfer = owner(h, b, runner=replace_child)
     result = transfer.prepare()
     assert isinstance(result, TransferInterrupted) and "attributable" in result.reason
-    assert isinstance(owner(h, b).prepare(), TransferInterrupted)
-    assert git(transfer.path, "show", "HEAD:foreign") == "foreign edit"
+    clean = owner(h, b).prepare()
+    assert isinstance(clean, TransferReady) and clean.path != foreign
+    assert git(clean.path, "show", "HEAD:work") == "worker edit"
+    assert not (clean.path / "foreign").exists()
+    transfer.release(clean, require_consumed=lambda _: None)
+    assert git(foreign, "show", "HEAD:foreign") == "foreign edit"
     assert git(source, "rev-parse", "HEAD") == h
 
 
@@ -453,25 +544,35 @@ def test_uncertain_conflict_and_post_authorization_edits_are_preserved(
 ):
     h, b, _ = conflict_input
 
+    abandoned = None
+
     def interrupt_pick(cwd, *args, **kwargs):
+        nonlocal abandoned
         result = run_git(cwd, *args, **kwargs)
         if "cherry-pick" in args:
             assert result.returncode != 0
+            abandoned = cwd
             raise Crash
         return result
 
     transfer = owner(h, b, runner=interrupt_pick)
     with pytest.raises(Crash):
         transfer.prepare()
-    assert "<<<<<<<" in (transfer.path / "common").read_text()
-    assert isinstance(owner(h, b).prepare(), TransferInterrupted)
+    assert "<<<<<<<" in (abandoned / "common").read_text()
+    (abandoned / "common").write_text("external edits to abandoned conflict\n")
+    published = owner(h, b).prepare()
+    assert isinstance(published, TransferConflict) and published.path != abandoned
+    assert "<<<<<<<" in (published.path / "common").read_text()
+    assert (abandoned / "common").read_text() == (
+        "external edits to abandoned conflict\n"
+    )
 
     identity = replace(transfer.identity, attempt="c" * 64)
     transfer = owner(h, b, identity=identity)
     conflict = transfer.prepare()
     assert isinstance(conflict, TransferConflict), conflict
-    stage_resolution(conflict)
-    tree = transfer.resolution_tree(conflict)
+    edit_resolution(conflict)
+    tree = transfer.stage_resolution(conflict, ("common", "explanation"))
 
     def interrupt_checkpoint(cwd, *args, **kwargs):
         if "hash-object" in args and "-w" in args:
