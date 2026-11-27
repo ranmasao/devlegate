@@ -1,0 +1,30 @@
+{
+  "code_base_head": "06a0ce600956db4547467f363c24cc822873a00a",
+  "conclusion": "completed",
+  "control_head": "1171c24cb4bcb58e51a668a6eeca1617c80850cf",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-199",
+  "execution_id": "b80243290a5845c58f8f2cf7a8ec1e09",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-199",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-199/b80243290a5845c58f8f2cf7a8ec1e09.md",
+  "report_sha256": "3bf384a2235bf104e6126fc24110b1f3cab813729d34286efca2d8cf1cc62d39",
+  "resource_generation": "f370adcfa2b5aeacda60b3049a7cf6e44d9306e7df7e1e9693e380553a611a14",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-199",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused real-service, Git and SQLite handoff, lost-acknowledgement, retirement, provenance, retry/reset, and Change Explorer checks passed, as did ./dev lint and git diff --check. Hosted exact-checkpoint CI was not run by the worker.",
+    "summary": "Ordinary REWORK now prepares an isolated candidate, preserves the reviewed generation during conflicts, and accepts an explicit source-only resolution tied to the observed candidate. The owner installs and publishes the new generation through replayable Git and resource receipts while preserving review, prompt, retry, and reset provenance."
+  },
+  "workspace_head": "24955843cc0d40a07ba73dedce3944e34ceeb8fa"
+}
