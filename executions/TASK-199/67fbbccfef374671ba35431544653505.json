@@ -1,0 +1,30 @@
+{
+  "code_base_head": "06a0ce600956db4547467f363c24cc822873a00a",
+  "conclusion": "completed",
+  "control_head": "955d0f3b748e75519fd2fe671a4911c84a8fa706",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-199",
+  "execution_id": "67fbbccfef374671ba35431544653505",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-199",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-199/67fbbccfef374671ba35431544653505.md",
+  "report_sha256": "f25ebf6da3688a8bda5ebf8e7cd4e6f9a8c6b35c8ff9ca4dd7c22550d604fe4e",
+  "resource_generation": "63f9b7e687fc8b32bb985c3604dff10e89eba5588b79ecbbd2ab1f147ec83232",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-199",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused disposable-Git, real IPC, handoff and lost-ack replay, stop/reset, review provenance, prompt, and Change Explorer regressions passed. ./dev lint and git diff --check passed. Hosted exact-checkpoint CI is an integration gate and was not run in this worker workspace.",
+    "summary": "REWORK conflict confirmation now records the exact source decision with its request receipt, then lets the repository owner validate and continue outside the admission lock. Marker checks use the original Git conflict paths, preserving valid doctest text and providing an explicit reset disposition for gitlink conflicts."
+  },
+  "workspace_head": "6d4388c5c9934627bb21dbb34b6b3c2a9ba22513"
+}
