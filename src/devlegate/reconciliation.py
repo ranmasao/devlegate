@@ -100,12 +100,3 @@ def same_parent_replacement(
         and len(target_parents) == 1
         and original_parents[0] == target_parents[0]
     )
-
-
-def rewrite_is_authorized(
-    *, published_head: str | None, lineage: LineageProof, rewrite_published: bool
-) -> bool:
-    """Require explicit authorization for changing an already published tip."""
-    if not lineage.valid:
-        return False
-    return published_head is None or rewrite_published

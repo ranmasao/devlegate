@@ -244,7 +244,7 @@ worker, or persistent state.
 | Checkpoint, publication, report, and lifecycle replay | persisted stage identifiers and `recovery_workflow` | `ServiceEngine` capabilities supplied to `recovery_workflow` |
 | Accepted integration replay | accepted-integration WAL state and fresh control/product observations | `recovery_workflow` through `ServiceEngine` integration capabilities |
 | Same-base resume and product-base eligibility | `reconciliation` lineage proofs plus fresh Git observations | `ServiceEngine` with CAS/lease checks |
-| Published lineage rewrite and displaced evidence | `reconciliation` rewrite authorization proof | `ServiceEngine` ref publication and evidence pinning |
+| Implementation transfer and displaced evidence | Exact A/H/B, source generation, and origin-specific authority | `TransferTransaction` and `ResourceBinding.install_transfer` |
 
 Recovery transaction phases are `pre-checkpoint`, `checkpoint-publication`,
 `lifecycle`, and `reconciliation`. A clean exact observation can resume; a
@@ -259,14 +259,13 @@ stranded-worker normalization, pre-worker workspace inspection/repair, and
 checkpoint/lifecycle/accepted-integration replay.
 They repeat admission or ownership observations, preserve displaced evidence
 before a ref move, and refuse live, dirty, occupied, or uncertain ownership.
-Product-lineage rewrite remains ServiceEngine-coordinated because its lease,
-CAS, rebase, and displaced-history operations share the existing reconciliation
-state machine and must remain under the single owner lock.
-
-Reconciliation receives detached pending-state snapshots from the engine.
-Local-pending intent precedes rebase, and remote-pending intent precedes evidence
-pinning and leased publication. The execution base changes only on resolution;
-replay re-observes workspace, refs, and exact heads before resolving or aborting.
+Active update-base and REWORK share the [owner-held transfer contract](implementation-transfer.md).
+The owner prepares and proves an isolated candidate, retains the source
+checkpoint, and hands off to a separately bound generation by local CAS and
+leased upstream publication. Replay observes the same custody and publication
+journals. Active update-base continues as RESUME on the installed base; reviewed
+continuation uses the original feedback as REWORK. Same-base checkpoint replay
+does not create a transfer.
 
 ### Git Command Authority
 

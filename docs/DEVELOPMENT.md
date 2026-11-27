@@ -79,8 +79,8 @@ regression proof: hosted exact-checkpoint CI runs the complete configured suite
 with coverage and lint and is required for independent review and integration.
 
 The internal [implementation transfer contract](implementation-transfer.md)
-documents the isolated preparation and replay boundary shared by upcoming
-REWORK and active-reconciliation integrations.
+documents the isolated preparation, installation and replay boundary shared by
+REWORK and active reconciliation.
 
 The real-service auto-resume topology test publishes its rework review from an
 independent clone of the remote control branch. A `none` scheduler plan at the

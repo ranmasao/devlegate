@@ -301,18 +301,6 @@ def _pending_resume_fixture(tmp_path, monkeypatch):
     (working / "dirty-product.txt").unlink()
     return devlegate, working, state
 
-def fixture_checkpoint(engine, path, message):
-    """Model an additional owner checkpoint with independent effect evidence."""
-    with engine._lock():
-        binding = engine._execution_generation_binding()
-        workspace = binding.require_local(clean=False)
-        binding.begin_operation("checkpoint", {"before": workspace.head})
-        git(path, "add", "-A")
-        git(path, "commit", "-m", message)
-        binding.finish_operation("checkpoint", {
-            "after": git(path, "rev-parse", "HEAD").stdout.strip(),
-        })
-
 
 def fixture_publication(engine, path, head):
     """Model an acknowledged owner publication, rather than SHA-only adoption."""
@@ -324,43 +312,6 @@ def fixture_publication(engine, path, head):
         git(path, "push", "origin", f"{head}:{binding.intent['remote_ref']}")
         binding.finish_operation("publication", {})
 
-
-def _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-
-    def worker(workspace, _prompt, **_kwargs):
-        (workspace.path / "first.txt").write_text("first\n")
-        (working / "dirty-product.txt").write_text("product\n")
-        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
-
-    monkeypatch.setattr(devlegate._workers, "run", worker)
-    assert run_test_iteration(devlegate) == 1
-    reconciliation = dict(devlegate._state["reconciliation"])
-    execution = next((state / "worktrees").glob("*/work/T-1"))
-    git(execution, "config", "user.email", "test@example.com")
-    git(execution, "config", "user.name", "Test User")
-    (execution / "second.txt").write_text("second\n")
-    fixture_checkpoint(devlegate, execution, "second checkpoint")
-    second = git(execution, "rev-parse", "HEAD").stdout.strip()
-    first = git(execution, "rev-parse", "HEAD^").stdout.strip()
-    git(working, "add", "dirty-product.txt")
-    git(working, "commit", "-m", "advance product")
-    git(working, "push", "origin", "HEAD:main")
-    target = git(working, "rev-parse", "HEAD").stdout.strip()
-    git(execution, "update-ref", reconciliation["evidence_ref"], second)
-    operation = {
-        **reconciliation,
-        "worker_checkpoint": second,
-        "execution_report": {
-            **reconciliation["execution_report"],
-            "workspace_head": second,
-        },
-    }
-    devlegate._save_state("idle", reconciliation=operation)
-    return devlegate, working, state, execution, operation, first, second, target
 
 def fixture_workspace(engine, base, execution_id):
     """Admit fresh fixture resources before their first filesystem/Git effect."""

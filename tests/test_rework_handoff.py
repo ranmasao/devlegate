@@ -18,13 +18,13 @@ from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.implementation_transfer import source_resolution_digest
 from devlegate.resource_binding import ResourceBinding
-from devlegate.rework_transfer import ReworkTransfer
 from devlegate.runtime import (
     DevlegateError,
     OperatorCommand,
     WorkflowBlockedError,
     WorkspacePreparationBlockedError,
 )
+from devlegate.transfer_transaction import ReworkTransfer
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import _capture_worker_identity
 
@@ -82,6 +82,145 @@ def advance_product(repo):
     git(repo, "commit", "-m", "advance product")
     git(repo, "push", "origin", "HEAD:main")
     return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+@pytest.mark.parametrize("boundary", [
+    "candidate", "cas", "publication", "remote", "control", "product",
+    "generation", "incorporated",
+])
+def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boundary):
+    from devlegate import implementation_transfer, runtime
+
+    owner, config, published = multi_commit_rework
+    repo = owner.repo
+
+    def drift(workspace, _prompt, **_kwargs):
+        (workspace.path / "third.txt").write_text("active checkpoint\n")
+        if boundary == "incorporated":
+            (repo / "first.txt").write_text((workspace.path / "first.txt").read_text())
+            git(repo, "add", "first.txt")
+        advance_product(repo)
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", drift)
+    assert run_test_iteration(owner) == 1
+    source = owner._state["reconciliation"]
+    target, head = source["observed_product"], source["worker_checkpoint"]
+    ref = f"refs/heads/{source['execution_branch']}"
+    path = Path(source["execution_path"])
+    assert source["execution_remote_head"] == published.workspace_head
+    count = git(path, "rev-list", "--count", f"{source['original_base']}..HEAD").stdout
+    assert count == "3\n"
+    reports = ExecutionReportStore(owner.control_worktree).list("T-1")
+    with pytest.raises(DevlegateError, match="--rewrite-published"):
+        owner.reconcile_update_base("T-1", target)
+
+    if boundary == "incorporated":
+        with pytest.raises(DevlegateError, match="execution lineage is invalid"):
+            owner.reconcile_update_base("T-1", target, rewrite_published=True)
+        assert git(path, "rev-parse", "HEAD").stdout.strip() == head
+        assert git(repo, "ls-remote", "origin", ref).stdout.split()[0] == (
+            published.workspace_head
+        )
+        assert owner._state["reconciliation"] == source
+        return
+
+    if boundary == "generation":
+        wrong = dict(owner._state["execution_resource_binding"], generation="f" * 64)
+        owner._save_state("idle", execution_resource_binding=wrong)
+        with pytest.raises(DevlegateError, match="source or admission differs"):
+            owner.reconcile_update_base("T-1", target, rewrite_published=True)
+        assert owner._state.get("transfer_progress") is None
+        assert git(path, "rev-parse", "HEAD").stdout.strip() == head
+        return
+
+    original_git = runtime._git
+    original_publish = implementation_transfer._publish
+    effects = []
+    fired = False
+
+    def interrupt_record(path, value):
+        nonlocal fired
+        original_publish(path, value)
+        if boundary == "candidate" and path.name == "0.outcome.json" and not fired:
+            fired = True
+            raise ProcessLoss()
+
+    def interrupt_git(cwd, *args, **kwargs):
+        nonlocal fired
+        cas = args[:1] == ("update-ref",) and ref in args
+        push = f"--force-with-lease={ref}:{published.workspace_head}" in args
+        if push and boundary == "remote" and not fired:
+            git(repo, "push", "--force", "origin", f"{head}:{ref}")
+            fired = True
+        result = original_git(cwd, *args, **kwargs)
+        if cas or push:
+            effects.append(("cas" if cas else "publication", result.returncode))
+        if not fired and ((cas and boundary in {"cas", "control", "product"})
+                          or (push and boundary == "publication")):
+            fired = True
+            assert result.returncode == 0
+            raise ProcessLoss()
+        return result
+
+    monkeypatch.setattr(runtime, "_git", interrupt_git)
+    monkeypatch.setattr(implementation_transfer, "_publish", interrupt_record)
+    expected = DevlegateError if boundary == "remote" else ProcessLoss
+    with pytest.raises(expected):
+        owner.reconcile_update_base("T-1", target, rewrite_published=True)
+    assert fired
+    assert owner._state["reconciliation"] == source
+    assert ExecutionReportStore(owner.control_worktree).list("T-1") == reports
+    intent = owner._state["transfer_progress"]["active_binding"]
+    assert git(repo, "rev-parse", source["evidence_ref"]).stdout.strip() == head
+    if boundary != "candidate":
+        pinned = git(repo, "ls-remote", "origin", source["evidence_ref"]).stdout
+        assert pinned.split()[0] == head
+
+    if boundary == "control":
+        control = owner.control_worktree
+        git(control, "commit", "--allow-empty", "-m", "move the control authority")
+        git(control, "push", "origin", "devlegate/control")
+    elif boundary == "product":
+        (repo / "later.txt").write_text("C\n")
+        git(repo, "add", "later.txt")
+        git(repo, "commit", "-m", "move the product authority")
+        git(repo, "push", "origin", "HEAD:main")
+
+    restarted = Devlegate(config)
+    launches = []
+
+    def worker(workspace, prompt, *, execution_id, revisions, **_kwargs):
+        launches.append(execution_id)
+        assert workspace.base_head == target
+        assert "Continue the existing implementation" in prompt
+        assert "Keep both implementation commits" not in prompt
+        assert revisions.namespace.resolve("HEAD").identity == head
+        assert [item["path"] for item in revisions.explorer.changes(
+            "BASE", "WORKTREE",
+        )["records"]] == ["first.txt", "second.txt", "third.txt"]
+        return completed()
+
+    monkeypatch.setattr(restarted._workers, "run", worker)
+    if boundary in {"control", "product", "remote"}:
+        with pytest.raises(WorkspacePreparationBlockedError):
+            run_test_iteration(restarted)
+        assert not launches
+        assert restarted._state["reconciliation"] == source
+        assert restarted._state["transfer_progress"]["active_binding"] == intent
+        assert ExecutionReportStore(restarted.control_worktree).list("T-1") == reports
+        assert sum(name == "cas" for name, _ in effects) == 1
+        return
+    assert run_test_iteration(restarted) == 0
+    assert not launches
+    assert run_test_iteration(restarted) == 0
+    assert launches == [intent["execution_id"]]
+    assert effects.count(("cas", 0)) == effects.count(("publication", 0)) == 1
+    new_reports = ExecutionReportStore(restarted.control_worktree).list("T-1")
+    assert published in new_reports
+    assert {report.execution_id for report in new_reports} - {
+        report.execution_id for report in reports
+    } == set(launches)
 
 
 @pytest.mark.parametrize("source_kind", ["no-op", "retired-no-op", "incorporated"])
@@ -145,7 +284,7 @@ def test_waiting_rework_refuses_stale_or_unowned_handoff(
     monkeypatch.setattr(owner._workers, "run", no_launch)
     with pytest.raises(WorkspacePreparationBlockedError, match="waiting for source"):
         run_test_iteration(owner)
-    pending = owner._state["rework_provenance"]
+    pending = owner._state["transfer_progress"]
     reports = ExecutionReportStore(owner.control_worktree).list("T-1")
     path = Path(pending["conflict"]["path"])
     original = Path(source.execution_path)
@@ -216,7 +355,7 @@ def test_reset_discards_waiting_rework_without_using_candidate(
     monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: pytest.fail("launch"))
     with pytest.raises(WorkspacePreparationBlockedError, match="waiting for source"):
         run_test_iteration(owner)
-    candidate = Path(owner._state["rework_provenance"]["conflict"]["path"])
+    candidate = Path(owner._state["transfer_progress"]["conflict"]["path"])
     (candidate / "first.txt").write_text("unapproved edit\n")
     with owner._lock():
         if confirmation_recorded:
@@ -734,9 +873,10 @@ def interrupted_rework(tmp_path, monkeypatch):
         run_test_iteration(owner)
     prior = owner._execution_generation_binding()
     assert owner._state["phase"] == "agent_running"
-    assert owner._state["rework_provenance"]["preparation_stage"] == (
-        "remote_predecessor_installed"
+    assert prior.latest_remote(prior.intent["prior_remote"]) == (
+        owner._state["execution_start_head"]
     )
+    assert owner._state["transfer_progress"] is None
     assert not list(prior.directory.glob("worker-retired.*.json"))
     return owner, config, prior, copy.deepcopy(owner._state["rework_provenance"])
 

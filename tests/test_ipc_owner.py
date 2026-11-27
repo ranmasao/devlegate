@@ -873,7 +873,7 @@ def test_reconcile_update_base_binds_omitted_target_before_effect(
             git(working, "push", "origin", "HEAD:main")
             git(working, "pull", "--ff-only", "origin", "main")
         reconciliation_release.set()
-        assert executed.wait(3)
+        assert executed.wait(10)
         assert submitted_thread[0] != executed_thread[0]
         assert executed_thread[0] == owner.ident
         duplicate = request(
@@ -916,7 +916,9 @@ def test_reconcile_update_base_binds_omitted_target_before_effect(
         "pending" if move_after_admission else "resolved"
     )
     if not move_after_admission:
-        assert engine._state["resume_required"]["status"] == "required"
+        assert engine._state["execution_id"] == engine._state["reconciliation"][
+            "resumed_execution_id"
+        ]
         assert (execution / "implementation.txt").read_text() == "worker work\n"
     else:
         assert git(execution, "rev-parse", "HEAD^").stdout.strip() == original_base

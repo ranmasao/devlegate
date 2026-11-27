@@ -281,8 +281,18 @@ rewrite. Unknown or ambiguous state is not automatically recovered. The legacy
 diagnostics and compatibility. `--onto` asserts the exact current product HEAD;
 it does not select the algorithm. Supply it as a full SHA or a unique hexadecimal
 commit prefix of at least 4 characters; Devlegate records the resolved full ID.
-`--rewrite-published` is a compatibility option, not required for the canonical
-service-proven published-lineage path.
+Explicit `reconcile update-base` requires `--rewrite-published` if it would
+replace a published execution ref. The canonical `reconcile <ticket-id>` form
+retains its existing service-proven published-lineage policy.
+
+If an update-base or REWORK transfer reports a conflict, edit source files only
+at the candidate path named in status or the service log. Then confirm the
+exact edits with `devlegate reconcile resume "$TICKET_ID" --resolve-candidate
+/absolute/candidate/path` (on one line). Confirmation records the decision;
+status shows whether the owner completed the handoff or found another blocker.
+Restart retains the same attempt. Do not rebase, reset, or force-push the
+execution checkout to finish the handoff. See the [transfer contract](implementation-transfer.md)
+for the clean upgrade boundary.
 
 Ticket IDs start with an ASCII letter or digit and may also contain ASCII
 letters, digits, underscores, and hyphens. Thus `reconcile update` selects the
