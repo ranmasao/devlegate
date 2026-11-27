@@ -84,7 +84,7 @@ def inspect_bound_workspace(
                 state.get("phase") == "agent_pending"
                 and state.get("worker_identity") is None
                 and isinstance(rework, dict)
-                and rework.get("preparation_stage") == "admitted"
+                and not (state.get("transfer_progress") or {}).get("candidate")
                 and not intent.get("predecessor_execution")
             ):
                 # Only the REWORK transaction can prove and complete its effects.
@@ -116,8 +116,8 @@ def inspect_bound_workspace(
         and state.get("phase") == "agent_pending"
         and state.get("worker_identity") is None
         and isinstance(state.get("rework_provenance"), dict)
-        and state["rework_provenance"].get("preparation_stage")
-        == "remote_predecessor_installed"
+        and ((state.get("transfer_progress") or {}).get("candidate") is not None
+             or isinstance(intent, dict) and intent.get("predecessor_execution"))
     ):
         expected_remote = state.get("execution_remote_head")
         if not isinstance(expected_remote, str) or not expected_remote:

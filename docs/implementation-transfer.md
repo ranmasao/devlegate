@@ -93,13 +93,17 @@ the lifecycle has taken durable custody of C and any still-needed source
 evidence. Abandoned scratch is retained for explicit disposition; it does not
 prevent a fresh private computation or the downstream handoff of a proved C.
 
-## Reviewed continuation (REWORK)
+## Shared lifecycle transaction
 
-The new execution's resource generation is its transfer attempt. The reviewed
-report, exact review binding and admitted control are recorded separately from
-transfer progress. The owner retains the source worktree and work ref until a
-candidate is ready. The candidate location, A/B/H and conflict step appear in
-the service's blocked status and logs. Restart reopens the same candidate.
+Both active update-base and reviewed REWORK use `TransferTransaction` and
+`ResourceBinding.install_transfer`. The new execution's resource generation is
+its transfer attempt. SQLite `transfer_progress` owns the pending decision and
+the installed result used for release; the candidate and binding journals prove
+the individual effects. The old checkpoint, report, control admission and, for
+REWORK, review binding remain origin evidence. The owner retains the original
+worktree and work ref until a candidate is ready. The candidate location, A/B/H
+and conflict step appear in the service's blocked status and logs. Restart
+reopens the same candidate and installation generation.
 
 Edit the source files at the displayed candidate path, including any necessary
 new files. Do not stage, commit or change Git administration. To confirm the
@@ -121,7 +125,10 @@ again if the owner reports unresolved markers or changed content. A subsequent
 conflict needs its own confirmation. A stale target or assignment blocks handoff
 and keeps the candidate. A gitlink conflict cannot be resolved by source edits;
 `devlegate reset T-1` explicitly discards that REWORK attempt. A successful
-technical resolution launches an ordinary REWORK worker for semantic validation.
+technical resolution requires worker validation: REWORK injects the bound
+review, while active update-base admits RESUME on B with a fresh execution ID.
+The source report is not published as a successful report on B. Change Explorer
+can show the displaced H against A and the installed contribution against B.
 
 Before local installation, the owner pins H locally and publishes immutable
 evidence. The handoff journal binds C to the old generation and ref witness;
@@ -130,24 +137,17 @@ Git registration lock until its creation receipt is durable. A remote
 predecessor replacement is lease guarded. Replay can settle an exact observed
 remote outcome only with the corresponding independent publication intent.
 
-The confirmation admission itself runs no Git commands. In the continuation,
-each assignment gate uses one control `ls-remote` and one product `fetch`;
-the pre-install gate adds one work-ref `ls-remote` and, after the journal starts,
-one immutable-evidence `ls-remote`. Candidate observations also recheck the
-source (work-ref `ls-remote` before the journal, local pin afterward). These
-network round trips are outside the admission budget. Predecessor publication
-shares one fresh assignment gate with its candidate and remote-ref checks
-before the lease-guarded push; the post-push observation proves its result.
+Same-base active reconciliation retakes the existing checkpoint/publication
+path. The zero-delta automatic retry retains its independent retirement and
+admission path. Active transfer admission retains the existing eligible-target
+and published rewrite policy; a mechanical replay cannot omit a contributing
+commit merely because its change already exists in B.
 
-## Next lifecycle integration
+### Clean upgrade boundary
 
-- **TASK-200 (active reconciliation):** Keep `admit_update_base`,
-  `reconciliation_workspace_binding`, `reconciliation_evidence_matches`, the
-  `ResourceBinding` proof, and product/topology/publication authority. Replace
-  the in-place rebase/abort in `start_fresh_rewrite` and the transform inference,
-  abort and restoration in `recover_local_pending`. Narrow
-  `recover_remote_pending` to downstream local/remote publication receipt
-  replay from exact C, rather than proving an in-place transform from mutable
-  workspace state. Keep displaced/rewritten evidence pins, remote lease/CAS,
-  and `_resolve` downstream. Both origins persist the same transfer attempt in
-  their existing WAL and hand off only from the proved result.
+Stop the owner at a quiescent boundary. Settle any old in-place update-base
+rewrite, pending REWORK, or worker/lifecycle recovery with the runtime that
+admitted it before upgrading. Do not delete journals, repair native rebase
+state, or recreate bindings by hand. The new owner does not migrate or resume
+old transfer progress. Immutable reports and evidence pins remain historical
+facts.

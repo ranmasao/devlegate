@@ -8,7 +8,6 @@ import json
 import pytest
 from _control_support import (
     Devlegate,
-    _multi_checkpoint_update_base_fixture,
     control_fixture,
     git,
     invoke,
@@ -270,69 +269,3 @@ def test_admission_preserves_archived_branch_worktree_and_evidence(engine):
     assert git(owner.repo, "rev-parse", branch).stdout.strip() == head
     assert git(owner.repo, "rev-parse", evidence).stdout.strip() == head
     assert git(owner.repo, "ls-remote", "origin", evidence).stdout.split()[0] == head
-
-
-def test_native_conflict_abort_and_second_rewrite_keep_generation(
-    tmp_path, monkeypatch
-):
-    owner, repo, _state, execution, _reconciliation, _first, second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    generation = owner._state["execution_resource_binding"]["generation"]
-    (repo / "first.txt").write_text("conflicting target\n")
-    git(repo, "add", "first.txt")
-    git(repo, "commit", "-m", "conflicting product")
-    git(repo, "push", "origin", "HEAD:main")
-    target = git(repo, "rev-parse", "HEAD").stdout.strip()
-    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
-        owner.reconcile_update_base("T-1", target)
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
-    assert not git(execution, "status", "--porcelain").stdout
-    (repo / "first.txt").unlink()
-    git(repo, "commit", "-am", "remove conflicting product file")
-    git(repo, "push", "origin", "HEAD:main")
-    target = git(repo, "rev-parse", "HEAD").stdout.strip()
-    restarted = Devlegate(owner.env_file)
-    assert restarted.reconcile_update_base("T-1", target) == 0
-    binding = restarted._execution_generation_binding()
-    rewrites = [path for _, operation, path in binding._attempts()
-                if operation == "rewrite"]
-    assert len(rewrites) == 3  # conflict, acknowledged abort, second attempt
-    assert binding.intent["generation"] == generation
-    assert binding.require_local(clean=True).head == git(
-        execution, "rev-parse", "HEAD"
-    ).stdout.strip()
-    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target
-
-
-def test_native_continue_after_receipted_conflict_and_restart(tmp_path, monkeypatch):
-    owner, repo, _state, execution, _reconciliation, _first, _second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    (repo / "first.txt").write_text("conflicting target\n")
-    git(repo, "add", "first.txt")
-    git(repo, "commit", "-m", "conflicting product")
-    git(repo, "push", "origin", "HEAD:main")
-    target = git(repo, "rev-parse", "HEAD").stdout.strip()
-    original = owner.reconciliation_git
-
-    def interrupted(cwd, *args, **kwargs):
-        result = original(cwd, *args, **kwargs)
-        if args[0] == "rebase" and result.returncode:
-            raise InjectedCrash()
-        return result
-
-    monkeypatch.setattr(owner, "reconciliation_git", interrupted)
-    with pytest.raises(InjectedCrash):
-        owner.reconcile_update_base("T-1", target)
-    restarted = Devlegate(owner.env_file)
-    (execution / "first.txt").write_text("first\n")
-    git(execution, "add", "first.txt")
-    git(execution, "config", "core.editor", "true")
-    with restarted._lock():
-        assert restarted.reconciliation_git(
-            execution, "rebase", "--continue"
-        ).returncode == 0
-        workspace = restarted._execution_generation_binding().require_local(clean=True)
-    assert workspace.head == git(execution, "rev-parse", "HEAD").stdout.strip()
-    assert git(execution, "rev-parse", "HEAD~2").stdout.strip() == target

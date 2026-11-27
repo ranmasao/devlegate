@@ -366,7 +366,7 @@ def test_receipted_remote_and_pins_retire_independently_and_replay(
             remote="origin", remote_head=head,
         )
         successor.record_intent()
-        workspace = successor.install_rework(
+        workspace = successor.install_transfer(
             binding, head, head, advanced, require_current=lambda: None,
         )
         successor.begin_operation("predecessor-publication",
