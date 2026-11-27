@@ -1,0 +1,30 @@
+{
+  "code_base_head": "6d4388c5c9934627bb21dbb34b6b3c2a9ba22513",
+  "conclusion": "completed",
+  "control_head": "74193150cd6efd92daa4ed5417bf3067a3d77519",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-200",
+  "execution_id": "6c116fdcc7a5486c851316f39346a871",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-200",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-200/6c116fdcc7a5486c851316f39346a871.md",
+  "report_sha256": "2a57d37f9cf06f258e3cc9c9fe6346064ed91939f850c648bc13fad3070fc8d6",
+  "resource_generation": "4533b4a11c7bae99af73e306cc4de35b22212e6b37ea579363b1700783fec23a",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-200",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "All four topology variants passed twice after the final edit with subprocess coverage and four work-stealing workers (37.58 s and 36.88 s). The focused local runs covered 112 distinct cases, including the five previously fixed nodes, shared candidate and install replay, lost acknowledgement, source/generation and authority refusals, same-base replay, zero-delta retry, and separate real active RESUME and reviewed REWORK. ./dev lint and git diff --check passed. Hosted full CI at the exact successor remains unverified and is Devlegate's outer gate. Admitted base to worktree: tracked Python LOC src 42,869\u219242,329 and tests 58,087\u219257,459; collected cases 2,758\u21922,737. The cumulative refactor removed reconciliation_transactions.py, replaced the separate rework_transfer.py with transfer_transaction.py, and removed 28 obsolete test functions for in-place rewriting, native conflict abort/continue, rewrite-stage recovery and legacy binding/fault hooks; retained proof is at the shared transaction and distinct origin boundaries. This rework changed only two test files and did not change collection.",
+    "summary": "The real-service reconciliation test now publishes product revisions from an independent clone and installs the exact target on the serialized owner path after checkpointing. The test verifies the admitted base, original checkpoint and observed target, and releases the worker before service teardown even on exceptional exits."
+  },
+  "workspace_head": "e574453876c09f6928d7d24d2c9ae17df6b3f595"
+}
