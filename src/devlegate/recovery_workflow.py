@@ -26,6 +26,8 @@ class WorkflowRecoveryCapabilities(Protocol):
     def recovery_report_matches_binding(self, report: ExecutionReport) -> None: ...
     def recovery_report_matches_state(self, report: ExecutionReport) -> None: ...
     def recovery_workspace(self) -> Any: ...
+    def recovery_has_pending_publication(self) -> bool: ...
+    def recovery_has_recorded_publication(self) -> bool: ...
     def recovery_product(self, base: str) -> dict[str, object]: ...
     def recovery_prove_product(self) -> None: ...
     def recovery_zero_delta(
@@ -80,6 +82,15 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         ) from error
     owner.recovery_report_matches_binding(report)
     workspace = owner.recovery_workspace()
+    expected = state.get("execution_remote_head")
+    if expected is not None and not isinstance(expected, str):
+        raise WorkflowRecoveryError("execution remote identity is invalid")
+    if owner.recovery_has_pending_publication():
+        if not report.workspace_head:
+            raise WorkflowRecoveryError("pending publication checkpoint is missing")
+        owner.recovery_publish_execution(workspace, report.workspace_head, expected)
+        owner.recovery_save_state("agent_running", execution_stage="post-publication")
+        stage = "post-publication"
     start_head = state.get("execution_start_head")
     if not isinstance(start_head, str) or not start_head:
         raise WorkflowRecoveryError("execution start HEAD is unavailable")
@@ -143,8 +154,17 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
         )
         return
     if classification != "stable":
+        remote = expected
+        if stage == "post-publication" or (
+            stage == "publishing"
+            and owner.recovery_has_recorded_publication()
+            and owner.recovery_execution_remote(report.execution_branch)
+            == report.workspace_head
+        ):
+            owner.recovery_publication_proved(str(report.workspace_head))
+            remote = report.workspace_head
         owner.recovery_persist_reconciliation(
-            report, product, state.get("execution_remote_head")
+            report, product, remote,
         )
         raise WorkflowRecoveryError(
             "product generation changed; reconciliation required"
@@ -159,10 +179,11 @@ def recover_checkpoint_publication(owner: WorkflowRecoveryCapabilities) -> None:
                 "execution worktree is dirty after the proven checkpoint"
             )
         remote = owner.recovery_execution_remote(report.execution_branch)
-        expected = state.get("execution_remote_head")
-        if expected is not None and not isinstance(expected, str):
-            raise WorkflowRecoveryError("execution remote identity is invalid")
-        if remote == expected:
+        if remote == expected and not (
+            stage == "publishing" and owner.recovery_has_recorded_publication()
+        ):
+            if stage == "post-checkpoint":
+                owner.recovery_save_state("agent_running", execution_stage="publishing")
             owner.recovery_publish_execution(workspace, report.workspace_head, expected)
             remote = owner.recovery_execution_remote(report.execution_branch)
         if remote != report.workspace_head:

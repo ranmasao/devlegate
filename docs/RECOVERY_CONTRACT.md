@@ -54,9 +54,10 @@ observed state. They do not authorize a mutation. A blocked lifecycle execution
 can be isolated with `devlegate drop <ticket-id>` only when the exact execution,
 checkpoint, report, and absent worker ownership are proven. Drop pins evidence,
 records a durable disposition, retires only proven clean resources, and returns
-the service to `idle`; future eligible tickets can then proceed. Pending product
-reconciliation remains explicit through `devlegate reconcile <ticket-id>`.
-Neither path is a force bypass.
+the service to `idle`; future eligible tickets can then proceed. The owner
+automatically advances proved same-base and linear product reconciliation.
+Unsafe or ambiguous evidence stays blocked; explicit reconciliation cannot
+bypass ownership checks.
 
 The recovery matrix and crash-boundary test coverage are maintained in
 `tests/RECOVERY_MATRIX.md`. Runtime gates are centralized in

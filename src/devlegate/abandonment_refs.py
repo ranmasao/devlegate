@@ -14,7 +14,13 @@ import os
 from pathlib import Path
 
 from devlegate.abandonment_evidence import EvidenceError
-from devlegate.git import push_refs, remote_ref, resolve_ref_commit
+from devlegate.git import (
+    GitObservationError,
+    _is_object_id,
+    push_refs,
+    remote_ref,
+    resolve_ref_commit,
+)
 from devlegate.resource_binding import (
     ResourceBinding,
     _identity,
@@ -29,7 +35,7 @@ from devlegate.resource_binding import (
 def prefixes(target: str) -> tuple[str, ...]:
     return tuple(f"refs/devlegate/{kind}/{target}/" for kind in (
         "executions", "reconciliation", "recovery/workspace",
-        "recovery/force-retry", "recovery/operator",
+        "recovery/force-retry", "recovery/operator", "publication",
     ))
 
 
@@ -196,3 +202,66 @@ def require_pin(binding: ResourceBinding, pin: dict) -> dict:
         ):
             raise EvidenceError("pin local generation witness changed")
     return receipt
+
+
+def publish_checkpoint(binding, head, predecessor):
+    """Publish an owned checkpoint and its generation acknowledgement atomically."""
+    binding.require_checkpoint_for_publication(head)
+    intent = binding.intent
+    ref = intent["remote_ref"]
+    ticket = binding.manager.ticket_id
+    marker = f"refs/devlegate/publication/{ticket}/{intent['execution_id']}"
+    create_pin(binding, marker, head, replay=True)
+    directory = _directory(binding, marker)
+    runner, repo = binding.manager._runner, binding.manager.repo
+    remote = intent["remote"]
+    remote_intent = {"generation": intent["generation"], "ref": marker,
+                     "before": None, "after": head}
+    marker_intent = directory / "remote-intent.json"
+    details = {"before": predecessor, "after": head, "acknowledgement": marker}
+
+    def observe():
+        result = runner(repo, "ls-remote", remote, ref, marker, check=False)
+        if result.returncode:
+            raise GitObservationError(
+                "cannot observe remote refs for checkpoint publication: "
+                f"{result.stderr.strip() or 'unknown Git error'}"
+            )
+        heads = {}
+        for line in result.stdout.splitlines():
+            oid, separator, name = line.partition("\t")
+            if (not separator or name not in {ref, marker} or name in heads
+                    or not _is_object_id(oid)):
+                raise GitObservationError("malformed checkpoint publication refs")
+            heads[name] = oid
+        return heads.get(ref), heads.get(marker)
+
+    current, ack = observe()
+    if binding.operation_pending("publication"):
+        binding.require_pending_operation("publication", details)
+        if _read(marker_intent) != remote_intent:
+            raise EvidenceError("checkpoint publication acknowledgement intent differs")
+    else:
+        if (current != predecessor or ack is not None
+                or binding.latest_remote(intent["prior_remote"]) != predecessor):
+            raise EvidenceError("execution remote changed before publication")
+        _publish_once(marker_intent, remote_intent)
+        binding.begin_operation("publication", details)
+    failure = None
+    if ack is None and current == predecessor:
+        binding.require_checkpoint_for_publication(head)
+        result = push_refs(
+            repo, remote, f"{head}:{ref}", f"{head}:{marker}",
+            options=("--atomic", f"--force-with-lease={ref}:{predecessor or ''}",
+                     f"--force-with-lease={marker}:"), runner=runner,
+        )
+        failure = result.stderr.strip()
+        current, ack = observe()
+    if (current, ack) != (head, head):
+        if current not in {predecessor, head}:
+            raise EvidenceError("execution branch remote changed during publication")
+        raise EvidenceError(
+            failure or "checkpoint publication acknowledgement is unproved"
+        )
+    _publish_once(directory / "remote.json", remote_intent)
+    binding.finish_operation("publication", details)

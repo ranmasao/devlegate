@@ -1004,7 +1004,7 @@ def test_unbound_preworker_state_cannot_adopt_product_descendant(
     assert "execution_product_transition" not in payload
 
 
-def test_running_worker_defers_clean_product_descendant_to_integration(
+def test_running_worker_revalidates_on_clean_product_descendant(
     tmp_path, monkeypatch
 ):
     working, config, state = control_fixture(tmp_path)
@@ -1019,18 +1019,26 @@ def test_running_worker_defers_clean_product_descendant_to_integration(
     git(publisher, "config", "user.email", "test@example.com")
     git(publisher, "config", "user.name", "Test User")
 
+    launches = []
+
     def worker(workspace, _prompt, **_kwargs):
+        launches.append(workspace.base_head)
         (workspace.path / "implementation.txt").write_text("worker\n")
-        (publisher / "parallel.txt").write_text("parallel\n")
-        git(publisher, "add", "parallel.txt")
-        git(publisher, "commit", "-m", "parallel product advance")
-        git(publisher, "push", "origin", "main")
+        if len(launches) == 1:
+            (publisher / "parallel.txt").write_text("parallel\n")
+            git(publisher, "add", "parallel.txt")
+            git(publisher, "commit", "-m", "parallel product advance")
+            git(publisher, "push", "origin", "main")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
 
+    assert run_test_iteration(devlegate) == 1
+    old = state_payload(state)["reconciliation"]
+    assert run_test_iteration(devlegate) == 0
+    assert launches == [admitted_base]
     assert run_test_iteration(devlegate) == 0
 
     payload = state_payload(state)
@@ -1039,9 +1047,13 @@ def test_running_worker_defers_clean_product_descendant_to_integration(
     execution_remote = git(
         working, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
     ).stdout.split()[0]
-    assert payload.get("reconciliation") is None
-    assert payload["execution_base_head"] == admitted_base
-    assert payload["execution_validated_product_head"] != admitted_base
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+    assert launches == [admitted_base, target]
+    assert payload["execution_base_head"] == target
+    assert payload["reconciliation"]["effective_base"] == target
+    assert git(working, "rev-parse", old["evidence_ref"]).stdout.strip() == (
+        old["worker_checkpoint"]
+    )
     assert execution_remote == checkpoint
 
 
@@ -1082,10 +1094,6 @@ def test_interleaved_generations_keep_distinct_admission_provenance(
 
     def first_worker(workspace, _prompt, **_kwargs):
         (workspace.path / "first.txt").write_text("first\n")
-        (publisher / "parallel.txt").write_text("parallel\n")
-        git(publisher, "add", "parallel.txt")
-        git(publisher, "commit", "-m", "advance during first generation")
-        git(publisher, "push", "origin", "main")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
@@ -1095,6 +1103,10 @@ def test_interleaved_generations_keep_distinct_admission_provenance(
     first_state = state_payload(state)
     first_execution = first_state["execution_id"]
     first_base = first_state["execution_base_head"]
+    (publisher / "parallel.txt").write_text("parallel\n")
+    git(publisher, "add", "parallel.txt")
+    git(publisher, "commit", "-m", "advance between generations")
+    git(publisher, "push", "origin", "main")
     first_control = first_state["execution_control_head"]
     advanced_product = git(publisher, "rev-parse", "HEAD").stdout.strip()
     assert first_base != advanced_product
@@ -1144,16 +1156,16 @@ def test_descendant_integration_replays_interrupted_product_merge(
 
     def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker\n")
-        (publisher / "parallel.txt").write_text("parallel\n")
-        git(publisher, "add", "parallel.txt")
-        git(publisher, "commit", "-m", "parallel product advance")
-        git(publisher, "push", "origin", "main")
         return WorkerRunResult(
             0, None, WorkerClaim("completed", "implemented", (), ()), None
         )
 
     monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 0
+    (publisher / "parallel.txt").write_text("parallel\n")
+    git(publisher, "add", "parallel.txt")
+    git(publisher, "commit", "-m", "parallel product advance after review admission")
+    git(publisher, "push", "origin", "main")
     control = next((state / "worktrees").glob("*/control"))
     (control / "kanban/review/T-1.md").rename(control / "kanban/accepted/T-1.md")
     git(control, "add", "-A")

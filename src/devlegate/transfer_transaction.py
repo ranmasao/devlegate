@@ -11,8 +11,16 @@ from subprocess import CalledProcessError
 
 from devlegate.abandonment_evidence import EvidenceError
 from devlegate.abandonment_refs import create_pin, publish_pin, require_pin
+from devlegate.execution_result import new_execution_id
 from devlegate.execution_workspace import ExecutionWorkspaceError
-from devlegate.git import GitObservationError, push_refs, resolve_ref_commit
+from devlegate.git import (
+    GitObservationError,
+    commit_parents,
+    commit_range,
+    is_ancestor,
+    push_refs,
+    resolve_ref_commit,
+)
 from devlegate.implementation_transfer import (
     ImplementationTransfer,
     ResolutionAuthorization,
@@ -50,6 +58,60 @@ def waiting_message(conflict, origin="REWORK"):
         f"edit source files, then run reconcile resume {identity['ticket']} "
         "--resolve-candidate with the candidate path"
     )
+
+
+def automatic_target(owner, base, product):
+    """Select only a clean, forward product observation; never authorize a rewrite."""
+    if not product["target_eligible"]:
+        raise ExecutionWorkspaceError(str(product["reason"]))
+    local, target = product["local_head"], product["remote_head"]
+
+    def git(repo, *args, **kwargs):
+        return owner._git_runtime(repo, "--no-replace-objects", *args, **kwargs)
+
+    previous = base
+    commits = commit_range(owner.repo, f"{base}..{target}", reverse=True, runner=git)
+    for commit in commits:
+        if commit_parents(owner.repo, commit, runner=git) != (previous,):
+            break
+        previous = commit
+    if previous != target:
+        raise ExecutionWorkspaceError(
+            "product remote is not a linear descendant; explicit reconciliation needed"
+        )
+    if (not is_ancestor(owner.repo, base, local, runner=git)
+            or not is_ancestor(owner.repo, local, target, runner=git)):
+        raise ExecutionWorkspaceError(
+            "local product is not on the observed forward path; synchronize explicitly"
+        )
+    return target
+
+
+def require_unlaunched_install(binding, checkpoint):
+    binding._validate_intent()
+    binding._require_settled()
+    if (not (binding.directory / "transfer-started.json").exists()
+            or binding._expected_head() != checkpoint
+            or any(operation == "worker" for _, operation, _ in binding._attempts())):
+        raise ExecutionWorkspaceError("installed transfer launch absence is unproved")
+
+
+def synchronize_target(owner, product, target):
+    local = product["local_head"]
+    if local == target:
+        return
+    if owner._stop_before_admission():
+        raise ExecutionWorkspaceError("product fast-forward paused for shutdown")
+    if owner._execution_remote_head(owner.remote_branch) != target:
+        raise ExecutionWorkspaceError("product target changed before fast-forward")
+    owner._assert_product_checkout_unchanged(owner.current_branch, local)
+    merge = owner._merge_fast_forward_runtime(
+        owner.repo, f"{owner.remote_name}/{owner.remote_branch}", local, target,
+    )
+    if merge.returncode:
+        raise ExecutionWorkspaceError(
+            f"product fast-forward failed: {merge.stderr.strip()}"
+        )
 
 
 class TransferTransaction:
@@ -91,10 +153,13 @@ class TransferTransaction:
             raise ExecutionWorkspaceError("transfer paused for service shutdown")
         self.binding._validate_intent()
         self.source._validate_intent()
+        self.require_source_retirement()
+
+    def require_source_retirement(self):
         self.source.require_worker_retirement()
 
     def require_source(self, identity):
-        self.source.require_worker_retirement()
+        self.require_source_retirement()
         if self.installation_started:
             self.require_pin()
         else:
@@ -116,6 +181,19 @@ class TransferTransaction:
     def require_published_pin(self):
         if self.owner._execution_remote_head(self.evidence) != self.identity.checkpoint:
             raise ExecutionWorkspaceError("remote transfer evidence changed")
+
+    def require_supersedable(self):
+        """Retain any exposed conflict or materially ambiguous candidate."""
+        self.require_source(self.identity)
+        if (self.progress.get("conflict") or self.progress.get("confirmation")
+                or self.transfer.intent.exists() and not self._untouched_ready()):
+            raise ExecutionWorkspaceError(
+                "stale candidate retained; explicitly decide how to preserve its edits"
+            )
+
+    def _untouched_ready(self):
+        result = self.transfer.observe()
+        return isinstance(result, TransferReady) and not result.externally_resolved
 
     def prepare(self):
         try:
@@ -209,6 +287,7 @@ class TransferTransaction:
         workspace = binding.install_transfer(
             self.source, identity.original_base, identity.checkpoint, result.head,
             require_current=require_current,
+            require_source_retirement=self.require_source_retirement,
         )
         require_current()
         self.require_published_pin()
@@ -302,16 +381,28 @@ class ReworkTransfer(TransferTransaction):
 
     def __init__(self, owner, binding, provenance):
         previous = provenance["previous_execution_id"]
-        source = ResourceBinding.for_execution(binding.manager, previous)
+        installed = provenance.get("installed_source")
+        execution = installed["execution"] if installed else previous
+        source = ResourceBinding.for_execution(binding.manager, execution)
         super().__init__(
             owner, binding, source,
-            provenance["previous_base_head"], provenance["previous_report_checkpoint"],
-            owner._workspace_recovery_ref(binding.manager.ticket_id, previous),
+            installed["base"] if installed else provenance["previous_base_head"],
+            installed["checkpoint"] if installed
+            else provenance["previous_report_checkpoint"],
+            owner._workspace_recovery_ref(binding.manager.ticket_id, execution),
         )
+        self.installed_source = installed
+        self.replaying_stale_install = False
         if (
             binding.intent.get("transfer_origin") != origin_digest(provenance)
-            or source.intent["generation"] != provenance.get("previous_generation")
-            or source.intent["control"] != provenance["previous_control_head"]
+            or source.intent["generation"] != (
+                installed["generation"] if installed
+                else provenance.get("previous_generation")
+            )
+            or source.intent["control"] != (
+                provenance["admitted_control_head"] if installed
+                else provenance["previous_control_head"]
+            )
             or binding.intent["base"] != provenance["admitted_base_head"]
             or binding.intent["control"] != provenance["admitted_control_head"]
         ):
@@ -319,6 +410,16 @@ class ReworkTransfer(TransferTransaction):
 
     def require_assignment(self):
         super().require_assignment()
+        self.require_control_assignment()
+        product = self.owner._observe_product_generation(self.identity.target)
+        if not product["stable"]:
+            if not self.replaying_stale_install:
+                raise ExecutionWorkspaceError(
+                    f"stale REWORK target: {product['reason']}"
+                )
+            automatic_target(self.owner, self.identity.target, product)
+
+    def require_control_assignment(self):
         owner, identity = self.owner, self.identity
         control = self.binding.intent["control"]
         current = owner._resolve_commit_runtime(owner.control_worktree, "HEAD")
@@ -338,9 +439,12 @@ class ReworkTransfer(TransferTransaction):
         )
         if reason is not None:
             raise ExecutionWorkspaceError(reason)
-        product = owner._observe_product_generation(identity.target)
-        if not product["stable"]:
-            raise ExecutionWorkspaceError(f"stale REWORK target: {product['reason']}")
+
+    def require_source_retirement(self):
+        if self.installed_source:
+            require_unlaunched_install(self.source, self.identity.checkpoint)
+        else:
+            super().require_source_retirement()
 
     def require_source(self, identity):
         before = self.binding.intent["prior_remote"]
@@ -349,9 +453,12 @@ class ReworkTransfer(TransferTransaction):
         retired_noop = noop and self.binding.intent["prior_local"] is None
         if (
             before != latest and not (retired_noop and before is None)
-            or before != identity.checkpoint and not (noop and before is None)
+            or (not self.installed_source and before != identity.checkpoint
+                and not (noop and before is None))
         ):
             raise ExecutionWorkspaceError("reviewed upstream predecessor is unproven")
+        if self.installed_source:
+            self.require_pin()
         super().require_source(identity)
 
     def save_installed(self, candidate):
@@ -359,4 +466,62 @@ class ReworkTransfer(TransferTransaction):
         self.owner._save_state(
             "agent_pending", transfer_progress=self.progress,
             execution_remote_head=self.binding.latest_remote(self.binding.intent["prior_remote"]),
+        )
+
+    def advance_stale(self, provenance, product):
+        """Settle admitted effects, or attribute a fresh attempt to the same review."""
+        owner, binding, identity = self.owner, self.binding, self.identity
+        if owner._stop_before_admission():
+            return
+        target = automatic_target(owner, identity.target, product)
+        self.require_control_assignment()
+        if owner._resolve_commit_runtime(owner.control_worktree, "HEAD") != (
+            binding.intent["control"]
+        ):
+            raise ExecutionWorkspaceError("stale REWORK control; candidate retained")
+        installed = provenance.get("installed_source")
+        if self.installation_started:
+            self.replaying_stale_install = True
+            if not self.installed:
+                self.prepare()
+                return
+            if self.progress["candidate"]["resolved"]:
+                raise ExecutionWorkspaceError(
+                    "installed human REWORK resolution retained; decide how to continue"
+                )
+            workspace = self.prepare()
+            require_unlaunched_install(binding, workspace.head)
+            remote = binding.latest_remote(binding.intent["prior_remote"])
+            evidence = owner._workspace_recovery_ref(
+                identity.ticket, binding.intent["execution_id"],
+            )
+            create_pin(binding, evidence, workspace.head, replay=True)
+            installed = {
+                "execution": binding.intent["execution_id"], "base": identity.target,
+                "checkpoint": workspace.head,
+                "generation": binding.intent["generation"],
+                "prior": installed,
+            }
+        else:
+            self.require_supersedable()
+            remote = binding.intent["prior_remote"]
+        synchronize_target(owner, product, target)
+        provenance = {**provenance, "admitted_base_head": target}
+        if installed:
+            provenance["installed_source"] = installed
+        intent = ResourceBinding.plan(
+            self.manager, execution_id=new_execution_id(), base=target,
+            control=binding.intent["control"],
+            ticket_blob=binding.intent["ticket_blob"],
+            remote=owner.remote_name, remote_head=remote,
+        ).intent
+        intent["transfer_origin"] = origin_digest(provenance)
+        owner._save_state(
+            "agent_pending", clear_pre_worker_generation=True, transfer_progress=None,
+            local_head=target, remote_head=target,
+            rework_provenance=provenance, execution_id=intent["execution_id"],
+            execution_base_head=target, execution_admitted_base_head=target,
+            execution_validated_product_head=target,
+            execution_resource_binding=intent, execution_remote_head=remote,
+            worker_identity=None,
         )
