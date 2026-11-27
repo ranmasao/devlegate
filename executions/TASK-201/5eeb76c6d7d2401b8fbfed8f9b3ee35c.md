@@ -1,0 +1,1 @@
+Final focused runs passed: 23 real-service reconciliation and publication recovery scenarios, plus 8 transfer, REWORK, and owner recovery scenarios. ./dev lint and git diff --check passed. Hosted exact-checkpoint CI remains Devlegate-owned and was not run here.

@@ -1,0 +1,30 @@
+{
+  "code_base_head": "e574453876c09f6928d7d24d2c9ae17df6b3f595",
+  "conclusion": "completed",
+  "control_head": "1415527e20d86c698605b30fb2308f4438bd25fa",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-201",
+  "execution_id": "5eeb76c6d7d2401b8fbfed8f9b3ee35c",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-201",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-201/5eeb76c6d7d2401b8fbfed8f9b3ee35c.md",
+  "report_sha256": "ba43b88f1371aa6267662e5b8fd1b93fa6776c668ba8360ea5ee0e6c78becde0",
+  "resource_generation": "7d07625fc46d8dfd80d20f172ec7f57d92d63b2b711c49d86e2d776d02dccfc4",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-201",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Final focused runs passed: 23 real-service reconciliation and publication recovery scenarios, plus 8 transfer, REWORK, and owner recovery scenarios. ./dev lint and git diff --check passed. Hosted exact-checkpoint CI remains Devlegate-owned and was not run here.",
+    "summary": "The service owner now automatically resumes proved checkpoint publication and advances eligible active and reviewed transfers to the exact current product base. It preserves stale human candidates for explicit decisions, finishes admitted effects under their original lease, and recovers lost publication acknowledgements from independent Git evidence."
+  },
+  "workspace_head": "342aec718c7e505d3558922de2de15994285c472"
+}
