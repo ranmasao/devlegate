@@ -1,0 +1,34 @@
+{
+  "code_base_head": "6d4388c5c9934627bb21dbb34b6b3c2a9ba22513",
+  "conclusion": "blocked",
+  "control_head": "479f72675ff29db5a0ce8bab18fffb5c38b8b5bc",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-200",
+  "execution_id": "991c732c08ba481bac4ce628586d741f",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-200",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [
+    "Can Devlegate checkpoint these edits and run mandatory hosted CI, including the complete suite, coverage, and lint, at that exact successor checkpoint?"
+  ],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-200/991c732c08ba481bac4ce628586d741f.md",
+  "report_sha256": "eaf444efa4ee07a97c42e07d922743eee09c785c1b2cb71f38a61e5a339b77a3",
+  "resource_generation": "5b684b8870dc619bfca09ef947523fd008dc1b04bcd507f0409944f9cd370769",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-200",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "blocked",
+    "questions": [
+      "Can Devlegate checkpoint these edits and run mandatory hosted CI, including the complete suite, coverage, and lint, at that exact successor checkpoint?"
+    ],
+    "remaining": [],
+    "report": "All five reviewed failures passed (5.29 s). Both touched modules passed (186 tests), as did 73 focused candidate/reconciliation/recovery tests, 10 shared active/REWORK replay checks, and all four real-service reconciliation topology variants on an isolated rerun. Lint and git diff --check passed. Broader supplemental batches exceeded the local tool deadline and are not counted as passing. No production edits or new production defect established. Relative to TASK-199's admitted base (6d4388c), tracked Python LOC changed from 42,869 to 42,329 in src and 58,087 to 57,415 in tests; collection changed from 2,758 to 2,737 cases. The same five logical regression nodes took 8.68 s on the base and 5.29 s on the successor, with different fixture work and run conditions. The cumulative refactor replaces reconciliation_transactions.py and the separate rework_transfer.py, removing old in-place rebase, local/remote pending rewrite, native abort/continue, and implementation-only mock/fault tests. Retained coverage includes Git lineage/authorization, immutable evidence, conflict confirmation, replay after candidate/install/publication effects, authority refusals, same-base replay, zero-delta retry, and distinct continuation semantics.",
+    "summary": "Reconciliation classification tests now use real Git observations of unchanged and advanced product generations, including a published execution ref. The topology tests import the relocated helper directly and retain their Git assertions."
+  },
+  "workspace_head": "113f6635a250a1af6e1c4487b08703b7470893de"
+}
