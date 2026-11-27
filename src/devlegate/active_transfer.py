@@ -7,8 +7,10 @@ from devlegate.abandonment_refs import create_pin
 from devlegate.execution_result import new_execution_id
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.implementation_transfer import TransferEffect
-from devlegate.reconciliation import rewritten_evidence_ref
+from devlegate.git import GitObservationError, commit_parents
+from devlegate.reconciliation import rewritten_evidence_ref, same_parent_replacement
 from devlegate.resource_binding import ResourceBinding
+from devlegate.runtime_state_validation import DevlegateError
 from devlegate.transfer_transaction import TransferTransaction, origin_digest
 
 
@@ -148,6 +150,33 @@ def require_control(owner, control, ticket_id):
     return ticket
 
 
+def is_same_parent_replacement(repo, original, target, *, runner):
+    """Prove that two distinct commits are single-parent replacements."""
+    parent_map = {}
+    for commit in (original, target):
+        try:
+            parents = commit_parents(repo, commit, runner=runner)
+        except GitObservationError:
+            return False
+        if parents is None:
+            return False
+        parent_map[commit] = parents
+    return same_parent_replacement(original, target, parent_map)
+
+
+def require_target_lineage(owner, base, target):
+    # A failed observation is not evidence of non-ancestry and must not reach
+    # the same-parent exception. This policy applies only to explicit requests.
+    if not (base == target or owner._is_ancestor_runtime(owner.repo, base, target)
+            or is_same_parent_replacement(
+                owner.repo, base, target, runner=owner._git_runtime,
+            )):
+        raise DevlegateError(
+            "requested reconciliation target is not a descendant of the original "
+            "base or a proven same-parent replacement"
+        )
+
+
 def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False):
     owner._assert_repository_owner()
     if owner._stop_before_admission():
@@ -195,11 +224,7 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
             raise ExecutionWorkspaceError(
                 "requested reconciliation target is not the fresh product remote HEAD"
             )
-        if not product["target_eligible"]:
-            raise ExecutionWorkspaceError(
-                "requested reconciliation target is not a descendant of the original "
-                "base or a proven same-parent replacement"
-            )
+        require_target_lineage(owner, base, target)
         if target == base:
             return owner._reconcile_resume_owned(ticket_id)
         control = value["control_head"]

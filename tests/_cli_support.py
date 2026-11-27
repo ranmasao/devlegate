@@ -85,7 +85,6 @@ from devlegate.runtime import (
     ExecutionPlan,
     GitObservation,
     StatusSnapshot,
-    _is_same_parent_replacement,
     _todo_fingerprint,
 )
 

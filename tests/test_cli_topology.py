@@ -1616,8 +1616,8 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         )
         if conflicting:
             def waiting():
-                origin = _disk_state(config).get("rework_provenance") or {}
-                return origin.get("conflict")
+                progress = _disk_state(config).get("transfer_progress") or {}
+                return progress.get("conflict")
 
             service.wait_for(waiting, timeout=30)
             conflict = waiting()
@@ -1668,7 +1668,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             response = confirm_cli(candidate)
             assert response.returncode == 0, response.stderr
             service.wait_for(lambda: "conflict markers" in (
-                _disk_state(config)["rework_provenance"].get("resolution_error") or ""
+                _disk_state(config)["transfer_progress"].get("resolution_error") or ""
             ))
             assert git(source, "rev-parse", "HEAD").stdout.strip() == (
                 report.workspace_head
@@ -1716,7 +1716,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                     confirm()
                 _wait_process_death(service)
                 crashed = _disk_state(config)
-                assert crashed["rework_provenance"]["confirmation"] == {
+                assert crashed["transfer_progress"]["confirmation"] == {
                     "request_id": "confirm-rework",
                     "source_digest": payload["candidate_digest"],
                 }
@@ -1737,8 +1737,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                     assert response.returncode == 0, response.stderr
                     assert "confirmation recorded" in response.stdout
                     service.wait_for(gate.with_suffix(".waiting").exists)
-                    rework_state = _disk_state(config)["rework_provenance"]
-                    confirmation = rework_state["confirmation"]
+                    confirmation = _disk_state(config)["transfer_progress"]["confirmation"]
                     assert ipc_request(
                         service.locator.socket_path, "reconcile-resume", {
                             "ticket_id": "T-1", "resolve_candidate": str(candidate),
