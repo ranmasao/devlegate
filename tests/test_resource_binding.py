@@ -616,7 +616,7 @@ def test_zero_delta_rework_after_ordinary_retirement(
         monkeypatch.setattr(module, "_publish_once", receipt)
 
     def install():
-        return current.install_rework(
+        return current.install_transfer(
             previous, workspace.head, workspace.head, workspace.head,
             require_current=lambda: None,
         )
@@ -634,38 +634,17 @@ def test_zero_delta_rework_after_ordinary_retirement(
 def test_repeatable_operations_do_not_reuse_uncertain_attempts(resources):
     binding = resources
     workspace = binding.prepare(remote_head=None)
-    for operation in ("rewrite", "rollback", "rewrite", "rewrite", "rollback"):
+    for _ in range(3):
         binding.require_local(clean=True)
-        binding.begin_operation(operation, {"before": workspace.head})
-        binding.finish_operation(operation, {"after": workspace.head})
+        binding.begin_operation("checkpoint", {"before": workspace.head})
+        binding.finish_operation("checkpoint", {"after": workspace.head})
         binding = ResourceBinding.for_execution(binding.manager, "execution-one")
-    assert [item[1] for item in binding._attempts()] == [
-        "rewrite", "rollback", "rewrite", "rewrite", "rollback",
-    ]
+    assert [item[1] for item in binding._attempts()] == ["checkpoint"] * 3
     assert proof(binding).local_state == "proved"
-    binding.begin_operation("rewrite", {"before": workspace.head})
+    binding.begin_operation("checkpoint", {"before": workspace.head})
     before = snapshot(binding.manager.root.parent)
     restarted = ResourceBinding.for_execution(binding.manager, "execution-one")
     with pytest.raises(ExecutionWorkspaceError, match="receipt missing"):
-        restarted.begin_operation("rewrite", {"before": workspace.head})
+        restarted.begin_operation("checkpoint", {"before": workspace.head})
     assert "receipt missing" in proof(restarted).reason
-    assert snapshot(binding.manager.root.parent) == before
-
-
-def test_failed_rebase_cannot_receipt_an_unexpected_branch_change(resources):
-    binding = resources
-    workspace = binding.prepare(remote_head=None)
-    binding.begin_operation("rewrite", {"before": workspace.head})
-    repo = binding.manager.repo
-    tree = run_git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
-    foreign = run_git(
-        repo, "commit-tree", tree, "-p", workspace.head, input_text="foreign\n",
-    ).stdout.strip()
-    run_git(repo, "update-ref", str(binding.intent["ref"]), foreign, workspace.head)
-    before = snapshot(binding.manager.root.parent)
-    with pytest.raises(ExecutionWorkspaceError, match="failed rebase changed"):
-        binding.finish_operation("rewrite", {
-            "after": foreign, "returncode": 1, "rebase_state": {},
-        })
-    assert not (binding.directory / "rewrite-receipt.json").exists()
     assert snapshot(binding.manager.root.parent) == before

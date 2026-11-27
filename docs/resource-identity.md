@@ -105,9 +105,9 @@ even if the base, ticket branch and checkout path are identical.
 
 `rework_provenance` preserves the reviewed execution, reviewed checkpoint and
 curator feedback. These describe the review origin across every subsequent
-worker attempt. Its `preparation_stage` describes the initial reviewed rework
-preparation; an inherited `remote_predecessor_installed` does not establish that
-a newly admitted resource generation has been prepared.
+worker attempt. Transfer progress belongs to the initial transfer generation in
+`transfer_progress` and is consumed before worker launch. Review provenance
+never establishes that a newly admitted resource generation has been prepared.
 
 Preparation selects the operation from the current independent admission:
 
@@ -120,7 +120,7 @@ Preparation selects the operation from the current independent admission:
   preparation protocol. The reviewed execution is not an implicit retry owner.
   Its clean checkpoint, review binding and remote evidence remain required.
 
-The independent generation journal, not the inherited review stage, determines
+The independent generation journal, not the inherited review origin, determines
 whether a retry is pending, prepared, or uncertain:
 
 | Interruption boundary | Restart behavior |

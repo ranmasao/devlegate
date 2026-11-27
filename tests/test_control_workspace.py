@@ -2991,201 +2991,6 @@ def test_zero_delta_ticket_state_change_skips_fresh_execution(tmp_path, monkeypa
     )
 
 
-def test_update_base_transplants_multiple_unpublished_checkpoints(
-    tmp_path, monkeypatch
-):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-
-    def worker(workspace, _prompt, **_kwargs):
-        (workspace.path / "first.txt").write_text("first\n")
-        (working / "dirty-product.txt").write_text("product\n")
-        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
-
-    monkeypatch.setattr(devlegate._workers, "run", worker)
-    assert run_test_iteration(devlegate) == 1
-    reconciliation = dict(devlegate._state["reconciliation"])
-    execution = next((state / "worktrees").glob("*/work/T-1"))
-    git(execution, "config", "user.email", "test@example.com")
-    git(execution, "config", "user.name", "Test User")
-    (execution / "second.txt").write_text("second\n")
-    fixture_checkpoint(devlegate, execution, "second checkpoint")
-    second = git(execution, "rev-parse", "HEAD").stdout.strip()
-    git(working, "add", "dirty-product.txt")
-    git(working, "commit", "-m", "advance product")
-    git(working, "push", "origin", "HEAD:main")
-    target = git(working, "rev-parse", "HEAD").stdout.strip()
-    git(working, "update-ref", reconciliation["evidence_ref"], second)
-    operation = {
-        **reconciliation,
-        "worker_checkpoint": second,
-        "execution_report": {
-            **reconciliation["execution_report"],
-            "workspace_head": second,
-        },
-    }
-    devlegate._save_state("idle", reconciliation=operation)
-
-    assert devlegate.reconcile_update_base("T-1", target) == 0
-    rewritten = git(
-        execution, "rev-list", "--reverse", f"{target}..HEAD"
-    ).stdout.splitlines()
-    assert len(rewritten) == 2
-    assert git(execution, "rev-parse", f"{rewritten[0]}^").stdout.strip() == target
-
-
-def test_update_base_rejects_published_execution_outside_lineage(tmp_path, monkeypatch):
-    devlegate, working, _state, execution, reconciliation, _first, second, target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    tree = git(execution, "rev-parse", f"{second}^{{tree}}").stdout.strip()
-    outside = subprocess.run(
-        ["git", "commit-tree", tree, "-p", second],
-        cwd=execution,
-        input="outside execution\n",
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-    git(
-        execution,
-        "push",
-        "origin",
-        f"{outside}:refs/heads/{reconciliation['execution_branch']}",
-    )
-    operation = {**reconciliation, "execution_remote_head": outside}
-    devlegate._save_state("idle", reconciliation=operation)
-    with pytest.raises(DevlegateError, match="outside the proven execution lineage"):
-        devlegate.reconcile_update_base("T-1", target, rewrite_published=True)
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
-    assert git(working, "rev-parse", "HEAD").stdout.strip() == target
-    assert second != outside
-
-
-def test_update_base_rejects_merge_execution_lineage(tmp_path, monkeypatch):
-    devlegate, _working, _state, execution, reconciliation, first, _second, target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    binding = devlegate._execution_generation_binding()
-    binding.begin_operation("checkpoint", {"before": _second})
-    (execution / "side.txt").write_text("side\n")
-    git(execution, "add", "side.txt")
-    git(execution, "commit", "-m", "side checkpoint")
-    side = git(execution, "rev-parse", "HEAD").stdout.strip()
-    tree = git(execution, "rev-parse", f"{side}^{{tree}}").stdout.strip()
-    merge = subprocess.run(
-        ["git", "commit-tree", tree, "-p", first, "-p", side],
-        cwd=execution,
-        input="merge checkpoint\n",
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-    git(execution, "reset", "--hard", merge)
-    binding.finish_operation("checkpoint", {"after": merge})
-    git(execution, "update-ref", reconciliation["evidence_ref"], merge)
-    operation = {
-        **reconciliation,
-        "worker_checkpoint": merge,
-        "execution_report": {
-            **reconciliation["execution_report"],
-            "workspace_head": merge,
-        },
-    }
-    devlegate._save_state("idle", reconciliation=operation)
-    with pytest.raises(DevlegateError, match="merge, side branch, or unrelated"):
-        devlegate.reconcile_update_base("T-1", target)
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == merge
-
-
-def test_update_base_conflict_restores_multi_checkpoint_workspace(
-    tmp_path, monkeypatch
-):
-    devlegate, working, _state, execution, reconciliation, _first, second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    (working / "first.txt").write_text("target\n")
-    git(working, "add", "first.txt")
-    git(working, "commit", "-m", "conflicting product target")
-    git(working, "push", "origin", "HEAD:main")
-    target = git(working, "rev-parse", "HEAD").stdout.strip()
-    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
-        devlegate.reconcile_update_base("T-1", target)
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
-    assert not git(execution, "status", "--porcelain").stdout
-    assert (
-        git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
-        == second
-    )
-
-
-def test_update_base_rejects_dropped_execution_commit(tmp_path, monkeypatch):
-    devlegate, working, _state, execution, reconciliation, first, second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    (working / "first.txt").write_text("first\n")
-    git(working, "add", "first.txt")
-    git(working, "commit", "-m", "product contains first checkpoint")
-    git(working, "push", "origin", "HEAD:main")
-    target = git(working, "rev-parse", "HEAD").stdout.strip()
-    with pytest.raises(DevlegateError, match="reconciled execution lineage is invalid"):
-        devlegate.reconcile_update_base("T-1", target)
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
-    assert git(execution, "rev-parse", "HEAD^").stdout.strip() == first
-
-
-def test_reconciliation_git_rejects_nonowner_mutation_before_git(tmp_path, monkeypatch):
-    devlegate, _working, _state, execution, _reconciliation, _first, second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    calls = []
-    original_git = runtime_module._git
-
-    def trace(repo, *args, check=True):
-        calls.append((repo, args))
-        return original_git(repo, *args, check=check)
-
-    monkeypatch.setattr(runtime_module, "_git", trace)
-    devlegate.begin_hosted_owner()
-    errors = []
-
-    def mutate_from_nonowner():
-        try:
-            devlegate.reconciliation_git(execution, "reset", "--hard", "HEAD^")
-        except DevlegateError as error:
-            errors.append(str(error))
-
-    worker = threading.Thread(target=mutate_from_nonowner)
-    worker.start()
-    worker.join()
-
-    assert errors == ["hosted repository access is restricted to the owner thread"]
-    assert calls == []
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
-
-
-def test_reconciliation_git_rejects_shutdown_before_mutation(tmp_path, monkeypatch):
-    devlegate, _working, _state, execution, _reconciliation, _first, second, _target = (
-        _multi_checkpoint_update_base_fixture(tmp_path, monkeypatch)
-    )
-    calls = []
-    original_git = runtime_module._git
-
-    def trace(repo, *args, check=True):
-        calls.append((repo, args))
-        return original_git(repo, *args, check=check)
-
-    monkeypatch.setattr(runtime_module, "_git", trace)
-    stop = threading.Event()
-    stop.set()
-    with devlegate._stop_context(stop):
-        with pytest.raises(runtime_module.ShutdownInterrupted):
-            devlegate.reconciliation_git(execution, "rebase", "--abort")
-
-    assert calls == []
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == second
 
 
 def test_product_checkout_mutation_stops_lifecycle_before_checkpoint(
@@ -3798,7 +3603,7 @@ def test_review_backlog_deferral_preserves_feedback_binding(
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     tmp_path, monkeypatch
 ):
-    import devlegate.rework_transfer as transaction
+    import devlegate.transfer_transaction as transaction
 
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -3864,9 +3669,7 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == previous
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == previous
     assert devlegate._state["phase"] == "agent_pending"
-    assert devlegate._state["rework_provenance"]["preparation_stage"] == (
-        "admitted"
-    )
+    assert not (devlegate._state.get("transfer_progress") or {}).get("candidate")
 
 
 def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeypatch):
@@ -3917,7 +3720,7 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
 
     def install_then_crash(*args, **kwargs):
         original_save(*args, **kwargs)
-        if (kwargs.get("rework_provenance") or {}).get("candidate"):
+        if (kwargs.get("transfer_progress") or {}).get("candidate"):
             raise RuntimeError("simulated process loss after predecessor publication")
 
     monkeypatch.setattr(
@@ -3925,8 +3728,8 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
     )
     with pytest.raises(RuntimeError, match="simulated process loss"):
         run_test_iteration(devlegate)
-    assert devlegate._state["rework_provenance"]["preparation_stage"] == (
-        "remote_predecessor_installed"
+    assert devlegate._state["transfer_progress"]["candidate"]["head"] == (
+        devlegate._state["execution_remote_head"]
     )
     execution = Path(devlegate._state["execution_path"])
     predecessor = devlegate._state["execution_remote_head"]
@@ -4033,7 +3836,8 @@ def test_dirty_published_rework_workspace_is_reusable_before_worker_launch(
         "execution_path": str(workspace.path),
         "execution_remote_head": workspace.head,
         "worker_identity": None,
-        "rework_provenance": {"preparation_stage": "remote_predecessor_installed"},
+        "rework_provenance": {},
+        "transfer_progress": {"candidate": {"head": workspace.head}},
     }
 
     inspection = recovery_workspace.inspect_bound_workspace(devlegate, bound)
