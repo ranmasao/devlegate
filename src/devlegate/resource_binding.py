@@ -527,6 +527,31 @@ class ResourceBinding:
             attempts[-1].name.replace("-intent", "-receipt")
         ).exists()
 
+    def require_pending_operation(self, operation, details):
+        if not self.operation_pending(operation):
+            raise ExecutionWorkspaceError(f"{operation} has no pending intent")
+        attempts = self._attempts()
+        sequence, name, path = attempts[-1]
+        if name != operation or _read(path) != {
+            **details, "operation": name, "sequence": sequence,
+            "generation": self.intent["generation"],
+        }:
+            raise ExecutionWorkspaceError(f"{operation} pending intent differs")
+        for _, _, prior in attempts[:-1]:
+            self._receipt(prior)
+
+    def require_checkpoint_for_publication(self, head):
+        """A pending upstream effect does not relax the independent local proof."""
+        if self.operation_pending("publication"):
+            workspace = self._observe_local(clean=True)
+            if workspace.head != head or self._expected_head() != head:
+                raise ExecutionWorkspaceError("checkpoint changed during publication")
+            return workspace
+        workspace = self.require_local(clean=True)
+        if workspace.head != head:
+            raise ExecutionWorkspaceError("checkpoint changed before publication")
+        return workspace
+
     def record_worker_retirement(self) -> None:
         """Record the supervisor's observed group retirement before post-worker."""
         receipt = self.operation_receipt("worker")
@@ -776,11 +801,11 @@ class ResourceBinding:
 
     def install_transfer(
         self, predecessor: ResourceBinding, previous_base: str, checkpoint: str,
-        candidate: str, *, require_current,
+        candidate: str, *, require_current, require_source_retirement=None,
     ) -> ExecutionWorkspace:
         """Install an exact candidate under an independently journaled handoff."""
         self._validate_intent()
-        predecessor.require_worker_retirement()
+        (require_source_retirement or predecessor.require_worker_retirement)()
         manager = self.manager
         ref = str(self.intent["ref"])
         common = Path(str(self.intent["common"]))

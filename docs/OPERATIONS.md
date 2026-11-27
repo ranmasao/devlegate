@@ -274,11 +274,17 @@ devlegate reconcile "$TICKET_ID"
 `retry` requests a new attempt after a failed execution. `drop` retires a
 blocked execution only when its exact execution record, checkpoint, report, and
 absent worker ownership are proven; it preserves the record and does not rewrite the
-ticket. `reconcile <ticket-id>` observes the pending state and selects resume, an
-eligible update-base transplant, or the proven lease-guarded published-lineage
-rewrite. Unknown or ambiguous state is not automatically recovered. The legacy
-`reconcile resume` and `reconcile update-base` forms remain available for explicit
-diagnostics and compatibility. `--onto` asserts the exact current product HEAD;
+ticket. The service automatically resumes a proved same-base checkpoint and
+transfers an eligible checkpoint when the product advances linearly. It can
+fast-forward the clean local product checkout, retain the old checkpoint, and
+replace the exact owned execution ref under its recorded lease. It then runs
+worker validation before returning the ticket for review. Reviewed requeues
+likewise carry their original review into the next worker. Check status for
+the current blocker; network failures retry at the normal polling interval.
+
+The explicit `reconcile`, `reconcile resume`, and `reconcile update-base` forms
+remain available for exceptional requests. `--onto` asserts the exact current
+product HEAD;
 it does not select the algorithm. Supply it as a full SHA or a unique hexadecimal
 commit prefix of at least 4 characters; Devlegate records the resolved full ID.
 Explicit `reconcile update-base` requires `--rewrite-published` if it would
@@ -290,7 +296,9 @@ at the candidate path named in status or the service log. Then confirm the
 exact edits with `devlegate reconcile resume "$TICKET_ID" --resolve-candidate
 /absolute/candidate/path` (on one line). Confirmation records the decision;
 status shows whether the owner completed the handoff or found another blocker.
-Restart retains the same attempt. Do not rebase, reset, or force-push the
+Restart retains a waiting conflict. If the product advances again, status may
+ask for a decision about the stale edited candidate instead of carrying those
+edits onto a different target. Do not rebase, reset, or force-push the
 execution checkout to finish the handoff. Source-only confirmation cannot select
 a gitlink commit. To discard a waiting transfer, use `devlegate reset "$TICKET_ID"`
 before installation, if the owner can still prove the exact source is safe to

@@ -162,6 +162,44 @@ def main() -> int:
             return result
 
         ExecutionWorkspaceManager.checkpoint = checkpoint
+    elif point == "publication_ack_lost":
+        original_git = engine._git_runtime
+
+        def git(repo, *git_args, check=True):
+            result = original_git(repo, *git_args, check=check)
+            if git_args[:2] == ("push", "--atomic") and result.returncode == 0:
+                crash()
+            return result
+
+        engine._git_runtime = git
+    elif point == "transfer_candidate":
+        from devlegate import implementation_transfer
+
+        original_outcome = implementation_transfer._publish
+
+        def outcome(path, value):
+            original_outcome(path, value)
+            if path.name.endswith(".outcome.json"):
+                crash()
+
+        implementation_transfer._publish = outcome
+    elif point in {"transfer_install_intent", "transfer_creation", "transfer_receipt"}:
+        from devlegate import resource_binding
+
+        filename = {
+            "transfer_install_intent": "transfer-started.json",
+            "transfer_creation": "receipt.json",
+            "transfer_receipt": "predecessor-publication-receipt.json",
+        }[point]
+        original_record = resource_binding._publish_once
+
+        def record(path, value):
+            original_record(path, value)
+            progress = engine._state.get("transfer_progress") or {}
+            if path.name == filename and progress.get("active_binding"):
+                crash()
+
+        resource_binding._publish_once = record
     elif point == "publication_after_effect":
         original_publish = engine._publish_execution_branch
 

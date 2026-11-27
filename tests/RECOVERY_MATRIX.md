@@ -16,12 +16,12 @@ repositories, and worktrees.
 | post-worker | Worker retired; result not durable | Normalize as lost outcome, then explicit/automatic RESUME | No | One RESUME | Never fabricate a worker report |
 | checkpointing | Report plus independent generation/effect journal | Checkpoint only before any attempt, or recognize a receipted exact checkpoint | Yes | No | Missing receipt after an attempted effect blocks; SHA/parent equality is insufficient |
 | post-checkpoint | Report and exact H durable | Re-observe product and continue publication | Yes | No | Product movement triggers reconciliation |
-| publishing before push | H and expected remote R durable | Observe R, push H, verify H | Yes | No | Unexpected remote history blocks |
-| publishing after push | Stage says publishing; independent publication receipt; remote is H | Revalidate receipt and continue | Yes | No | Missing receipt or remote mismatch blocks; matching remote SHA does not prove continuity |
+| publishing before push | H and expected remote R durable | Atomically push H and its exclusive acknowledgement | Yes | No | Unexpected remote history blocks |
+| publishing after push | Exact publication intent, remote H and its atomic acknowledgement | Settle the effect and continue | Yes | No | Matching branch SHA without the acknowledgement is insufficient |
 | post-publication | Remote equals exact H | Re-prove H and enter lifecycle | Yes | No | Remote drift blocks |
 | lifecycle before side effect | Report and lifecycle binding durable | Apply one exact lifecycle commit | Yes | No | Invalid report/control lineage blocks |
 | lifecycle after side effect | Exact lifecycle commit exists locally/remotely | Observe and reuse the existing commit | Yes | No | Contradictory control history blocks |
-| pending reconciliation | A/B/H and evidence ref durable | Preserve pending state; remain operator-visible | N/A | No | No automatic resolution |
+| pending reconciliation | A/H and independent source evidence durable | Resume same-base publication or transfer to the exact observed linear B | For same base | Only after transfer | Ambiguous ownership, stale edits and unauthorized history changes block |
 | resolved reconciliation | Effective B and resume_required durable | Preserve RESUME requirement | Future new execution | No during restart | Stale H is never published as normal work |
 | accepted integration before effect | ticket + H + R durable; local=R, remote=R | Derive and prove exact C from R, then integrate | N/A | No | Missing evidence or intervening control generation blocks |
 | accepted product effect | ticket + H + R durable; product effect is published/proven | Re-prove control lineage from R independently | N/A | No | Product success never weakens control-lineage proof |

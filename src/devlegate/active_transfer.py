@@ -3,49 +3,83 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Active reconciliation admission and RESUME continuation."""
 
-from devlegate.abandonment_refs import create_pin
+from devlegate.abandonment_refs import create_pin, require_pin
 from devlegate.execution_result import new_execution_id
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.git import GitObservationError, commit_parents
 from devlegate.implementation_transfer import TransferEffect
-from devlegate.reconciliation import rewritten_evidence_ref, same_parent_replacement
+from devlegate.reconciliation import (
+    reconciliation_evidence_ref,
+    rewritten_evidence_ref,
+    same_parent_replacement,
+)
 from devlegate.resource_binding import ResourceBinding
 from devlegate.runtime_state_validation import DevlegateError
-from devlegate.transfer_transaction import TransferTransaction, origin_digest
+from devlegate.transfer_transaction import (
+    TransferTransaction,
+    automatic_target,
+    origin_digest,
+    require_unlaunched_install,
+    synchronize_target,
+    waiting_message,
+)
 
 
-def _origin(reconciliation, rewrite_published):
-    return origin_digest({
+def _origin(reconciliation, rewrite_published, automatic=False):
+    authority = {
         "ticket": reconciliation["ticket_id"],
         "report": reconciliation.get("execution_report"),
         "evidence": reconciliation["evidence_ref"],
         "rewrite_published": rewrite_published,
-    })
+    }
+    if automatic:
+        authority["policy"] = "owned-linear-transfer"
+    if "installed_source" in reconciliation:
+        authority["installed_source"] = reconciliation["installed_source"]
+    return origin_digest(authority)
 
 
 class ActiveTransfer(TransferTransaction):
     origin = "update-base"
 
-    def __init__(self, owner, binding, source, reconciliation, rewrite_published):
+    def __init__(self, owner, binding, source, reconciliation, rewrite_published,
+                 automatic=False):
         self.reconciliation = reconciliation
+        self.automatic = automatic
         super().__init__(
             owner, binding, source, reconciliation["original_base"],
             reconciliation["worker_checkpoint"], reconciliation["evidence_ref"],
         )
         report = reconciliation.get("execution_report")
+        installed = reconciliation.get("installed_source")
+        if installed is None:
+            source_identity = (
+                isinstance(report, dict)
+                and report.get("execution_id") == source.intent["execution_id"]
+                and report.get("resource_generation") == source.intent["generation"]
+                and report.get("workspace_head") == self.identity.checkpoint
+                and report.get("code_base_head") == self.identity.original_base
+            )
+        else:
+            source_identity = (
+                automatic and installed.get("status") == "resolved"
+                and installed.get("resumed_execution_id")
+                == source.intent["execution_id"]
+                and installed.get("effective_base") == self.identity.original_base
+                and installed.get("worker_checkpoint") == self.identity.checkpoint
+                and installed.get("execution_remote_head")
+                == binding.intent["prior_remote"]
+                and installed.get("externally_resolved") is False
+            )
         if (
-            not isinstance(report, dict)
-            or report.get("execution_id") != source.intent["execution_id"]
-            or report.get("resource_generation") != source.intent["generation"]
-            or report.get("workspace_head") != self.identity.checkpoint
-            or report.get("code_base_head") != self.identity.original_base
+            not source_identity
             or source.intent["execution_id"] != reconciliation["execution_id"]
             or source.intent["control"] != reconciliation["control_head"]
             or binding.intent["control"] != source.intent["control"]
             or binding.intent["prior_local"] != self.identity.checkpoint
             or binding.intent["prior_remote"] != reconciliation["execution_remote_head"]
             or binding.intent.get("transfer_origin") != _origin(
-                reconciliation, rewrite_published,
+                reconciliation, rewrite_published, automatic,
             )
         ):
             raise ExecutionWorkspaceError("active transfer source or admission differs")
@@ -58,10 +92,20 @@ class ActiveTransfer(TransferTransaction):
         owner, identity = self.owner, self.identity
         product = owner._observe_product_generation(identity.target)
         if not product["stable"]:
-            raise ExecutionWorkspaceError(
-                f"stale update-base target: {product['reason']}"
-            )
+            if not (self.automatic and self.installation_started):
+                raise ExecutionWorkspaceError(
+                    f"stale update-base target: {product['reason']}"
+                )
+            # Finish the admitted C and its exact lease before considering any
+            # new target. This does not authorize a worker against stale B.
+            automatic_target(owner, identity.target, product)
         return require_control(owner, self.binding.intent["control"], identity.ticket)
+
+    def require_source_retirement(self):
+        if self.reconciliation.get("installed_source") is None:
+            super().require_source_retirement()
+        else:
+            require_unlaunched_install(self.source, self.identity.checkpoint)
 
     def require_source(self, identity):
         if not self.installation_started:
@@ -69,7 +113,10 @@ class ActiveTransfer(TransferTransaction):
         super().require_source(identity)
 
     def require_eligible_result(self, result):
-        if result.externally_resolved:
+        if result.externally_resolved or (
+            self.automatic and result.effect == TransferEffect.SOURCE_EMPTY
+            and self.identity.original_base == self.identity.checkpoint
+        ):
             return
         if result.effect == TransferEffect.CHANGED and result.path is not None:
             def trees(path, base, head):
@@ -105,6 +152,10 @@ class ActiveTransfer(TransferTransaction):
         # Pin installed C separately; the original report and H retain the
         # source execution identity even when an upstream predecessor moved.
         create_pin(self.source, evidence, checkpoint, replay=True)
+        if self.automatic and not self.progress["candidate"]["resolved"]:
+            create_pin(binding, reconciliation_evidence_ref(
+                identity.ticket, binding.intent["execution_id"],
+            ), checkpoint, replay=True)
         owner._save_state(
             "agent_pending", clear_execution=True, clear_pre_worker_generation=True,
             transfer_progress=None, rework_provenance=None,
@@ -118,6 +169,7 @@ class ActiveTransfer(TransferTransaction):
                 "displaced_checkpoint": identity.checkpoint,
                 "resumed_execution_id": binding.intent["execution_id"],
                 "externally_resolved": self.progress["candidate"]["resolved"],
+                **({"automatic": True} if self.automatic else {}),
             },
             local_head=target, remote_head=target, changed_paths="",
             control_head=binding.intent["control"],
@@ -177,7 +229,103 @@ def require_target_lineage(owner, base, target):
         )
 
 
-def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False):
+def retain_stale_install(owner, value):
+    """Turn a proved completed, unlaunched mechanical C into the next source."""
+    base, checkpoint = value["effective_base"], value["worker_checkpoint"]
+    product = owner._observe_product_generation(base)
+    if product["stable"]:
+        return False
+    target = automatic_target(owner, base, product)
+    if value.get("externally_resolved"):
+        raise ExecutionWorkspaceError(
+            "installed human resolution retained; decide explicitly how to continue"
+        )
+    ticket = value["ticket_id"]
+    require_control(owner, value["control_head"], ticket)
+    binding = owner._execution_generation_binding()
+    require_unlaunched_install(binding, checkpoint)
+    if binding.require_local(clean=True).head != checkpoint:
+        raise ExecutionWorkspaceError("installed checkpoint changed before reuse")
+    execution = binding.intent["execution_id"]
+    evidence = reconciliation_evidence_ref(ticket, execution)
+    require_pin(binding, {"location": "local", "ref": evidence, "head": checkpoint})
+    pending = {
+        **value, "status": "pending", "resolution": None, "execution_id": execution,
+        "original_base": base, "evidence_ref": evidence, "observed_product": target,
+        "installed_source": value,
+        "product_remote_head": target,
+    }
+    pending.pop("resumed_execution_id")
+    owner._save_state("idle", reconciliation=pending)
+    return True
+
+
+def advance_pending(owner):
+    """One owner pass over pending active reconciliation, including stale attempts."""
+    value = owner.reconciliation_pending()
+    ticket, base = value["ticket_id"], value["original_base"]
+    progress = owner._state.get("transfer_progress") or {}
+    intent = progress.get("active_binding")
+    source = owner._execution_generation_binding()
+    if intent:
+        binding = ResourceBinding(source.manager, intent)
+        transaction = ActiveTransfer(
+            owner, binding, source, value, progress["rewrite_published"],
+            progress.get("automatic", False),
+        )
+        if transaction.installation_started or not transaction.automatic:
+            if progress.get("conflict") and not progress.get("confirmation"):
+                transaction.require_authority()
+                raise ExecutionWorkspaceError(_waiting(progress))
+            return update_base(owner, ticket, intent["base"], replay=True)
+    if (owner._state.get("manual_retry_required") or value.get("interruption_kind")):
+        raise ExecutionWorkspaceError(
+            "interrupted execution retained; explicit recovery is required"
+        )
+    product = owner._observe_product_generation(base)
+    target = automatic_target(owner, base, product)
+    if target == base and value.get("installed_source") is not None:
+        raise ExecutionWorkspaceError("product rolled back; installed source retained")
+    if intent and intent["base"] != target:
+        if target == base or not owner._is_ancestor_runtime(
+            owner.repo, intent["base"], target,
+        ):
+            raise ExecutionWorkspaceError("admitted target lost forward lineage")
+        transaction.require_supersedable()
+    elif progress.get("conflict") and not progress.get("confirmation"):
+        transaction.require_authority()
+        raise ExecutionWorkspaceError(_waiting(progress))
+    require_control(owner, value["control_head"], ticket)
+    if value.get("installed_source") is None:
+        source.require_worker_retirement()
+    else:
+        require_unlaunched_install(source, value["worker_checkpoint"])
+    require_pin(source, {
+        "location": "local", "ref": value["evidence_ref"],
+        "head": value["worker_checkpoint"],
+    })
+    workspace = source.require_local(clean=True)
+    if workspace.head != value["worker_checkpoint"] or (
+        owner._execution_remote_head(value["execution_branch"])
+        != value["execution_remote_head"]
+    ):
+        raise ExecutionWorkspaceError("execution checkpoint or upstream changed")
+    synchronize_target(owner, product, target)
+    if intent and intent["base"] != target:
+        # Keep the old attempt and H on disk. A new generation cannot consume its
+        # confirmation, even if a client submits the old candidate path again.
+        owner._save_state("idle", transfer_progress=None)
+    return update_base(owner, ticket, target, automatic=True, replay=bool(intent))
+
+
+def _waiting(progress):
+    message = waiting_message(progress["conflict"], "update-base")
+    error = progress.get("resolution_error")
+    return f"{error}; {message}" if error else message
+
+
+def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False,
+                automatic=False):
     owner._assert_repository_owner()
     if owner._stop_before_admission():
         raise ExecutionWorkspaceError("transfer paused for service shutdown")
@@ -199,7 +347,8 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
     if "execution_remote_head" not in value:
         raise ExecutionWorkspaceError("reconciliation lacks execution predecessor")
     before = value["execution_remote_head"]
-    if target != base and before is not None and not rewrite_published and not replay:
+    if (target != base and before is not None
+            and not (rewrite_published or replay or automatic)):
         raise ExecutionWorkspaceError(
             f"published execution ref refs/heads/{manager.branch} requires "
             "--rewrite-published authorization"
@@ -210,6 +359,7 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
             raise ExecutionWorkspaceError("target differs from admitted transfer")
         binding = ResourceBinding(manager, intent)
         rewrite_published = progress["rewrite_published"]
+        automatic = progress.get("automatic", False)
     else:
         product = owner._observe_product_generation(base)
         if product["branch"] != owner.current_branch:
@@ -224,7 +374,11 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
             raise ExecutionWorkspaceError(
                 "requested reconciliation target is not the fresh product remote HEAD"
             )
-        require_target_lineage(owner, base, target)
+        if automatic:
+            automatic_target(owner, base, product)
+            rewrite_published = before is not None
+        else:
+            require_target_lineage(owner, base, target)
         if target == base:
             return owner._reconcile_resume_owned(ticket_id)
         control = value["control_head"]
@@ -232,7 +386,7 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
         if source.latest_remote(source.intent["prior_remote"]) != before:
             raise ExecutionWorkspaceError("active upstream predecessor is unproven")
         if before is not None and (
-            before == base
+            (before == base and not (automatic and before == checkpoint))
             or not owner._is_ancestor_runtime(owner.repo, base, before)
             or not owner._is_ancestor_runtime(owner.repo, before, checkpoint)
         ):
@@ -244,12 +398,15 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
             ticket_blob=source.intent["ticket_blob"], remote=owner.remote_name,
             remote_head=before,
         )
-        binding.intent["transfer_origin"] = _origin(value, rewrite_published)
-    transaction = ActiveTransfer(owner, binding, source, value, rewrite_published)
+        binding.intent["transfer_origin"] = _origin(value, rewrite_published, automatic)
+    transaction = ActiveTransfer(
+        owner, binding, source, value, rewrite_published, automatic,
+    )
     if progress is None:
         transaction.require_source(transaction.identity)
         transaction.save(
             active_binding=binding.intent, rewrite_published=rewrite_published,
+            **({"automatic": True} if automatic else {}),
         )
     if not (binding.directory / "intent.json").exists():
         transaction.require_source(transaction.identity)

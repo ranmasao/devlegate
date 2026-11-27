@@ -106,13 +106,16 @@ def test_settled_task_199_rework_keeps_predecessor_authority(multi_commit_rework
 
 @pytest.mark.parametrize("boundary", [
     "candidate", "cas", "publication", "remote", "control", "product",
-    "generation", "incorporated",
+    "generation", "incorporated", "auto-candidate", "auto-cas", "auto-publication",
+    "auto-supersede", "auto-chain",
 ])
 def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boundary):
     from devlegate import implementation_transfer, runtime
 
     owner, config, published = multi_commit_rework
     repo = owner.repo
+    automatic = boundary.startswith("auto-")
+    boundary = boundary.removeprefix("auto-")
 
     def drift(workspace, _prompt, **_kwargs):
         (workspace.path / "third.txt").write_text("active checkpoint\n")
@@ -162,7 +165,8 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     def interrupt_record(path, value):
         nonlocal fired
         original_publish(path, value)
-        if boundary == "candidate" and path.name == "0.outcome.json" and not fired:
+        if (boundary in {"candidate", "supersede"}
+                and path.name == "0.outcome.json" and not fired):
             fired = True
             raise ProcessLoss()
 
@@ -176,7 +180,7 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         result = original_git(cwd, *args, **kwargs)
         if cas or push:
             effects.append(("cas" if cas else "publication", result.returncode))
-        if not fired and ((cas and boundary in {"cas", "control", "product"})
+        if not fired and ((cas and boundary in {"cas", "control", "product", "chain"})
                           or (push and boundary == "publication")):
             fired = True
             assert result.returncode == 0
@@ -187,13 +191,16 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     monkeypatch.setattr(implementation_transfer, "_publish", interrupt_record)
     expected = DevlegateError if boundary == "remote" else ProcessLoss
     with pytest.raises(expected):
-        owner.reconcile_update_base("T-1", target, rewrite_published=True)
+        if automatic:
+            run_test_iteration(owner)
+        else:
+            owner.reconcile_update_base("T-1", target, rewrite_published=True)
     assert fired
     assert owner._state["reconciliation"] == source
     assert ExecutionReportStore(owner.control_worktree).list("T-1") == reports
     intent = owner._state["transfer_progress"]["active_binding"]
     assert git(repo, "rev-parse", source["evidence_ref"]).stdout.strip() == head
-    if boundary != "candidate":
+    if boundary not in {"candidate", "supersede"}:
         pinned = git(repo, "ls-remote", "origin", source["evidence_ref"]).stdout
         assert pinned.split()[0] == head
 
@@ -201,11 +208,14 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         control = owner.control_worktree
         git(control, "commit", "--allow-empty", "-m", "move the control authority")
         git(control, "push", "origin", "devlegate/control")
-    elif boundary == "product":
+    elif boundary in {"product", "chain", "supersede"}:
         (repo / "later.txt").write_text("C\n")
         git(repo, "add", "later.txt")
         git(repo, "commit", "-m", "move the product authority")
         git(repo, "push", "origin", "HEAD:main")
+
+    final_target = (git(repo, "rev-parse", "HEAD").stdout.strip()
+                    if automatic else target)
 
     restarted = Devlegate(config)
     if boundary == "cas":
@@ -221,10 +231,11 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
 
     def worker(workspace, prompt, *, execution_id, revisions, **_kwargs):
         launches.append(execution_id)
-        assert workspace.base_head == target
+        assert workspace.base_head == final_target
         assert "Continue the existing implementation" in prompt
         assert "Keep both implementation commits" not in prompt
-        assert revisions.namespace.resolve("HEAD").identity == head
+        if boundary != "chain":
+            assert revisions.namespace.resolve("HEAD").identity == head
         assert [item["path"] for item in revisions.explorer.changes(
             "BASE", "WORKTREE",
         )["records"]] == ["first.txt", "second.txt", "third.txt"]
@@ -242,9 +253,19 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         return
     assert run_test_iteration(restarted) == 0
     assert not launches
+    if boundary == "chain":
+        first_install = restarted._state["reconciliation"]
+        assert first_install["effective_base"] == target
+        assert run_test_iteration(restarted) == 0
+        assert restarted._state["reconciliation"]["installed_source"] == first_install
+        assert run_test_iteration(restarted) == 0
+    final_execution = restarted._state["execution_id"]
+    if boundary in {"chain", "supersede"}:
+        assert final_execution != intent["execution_id"]
     assert run_test_iteration(restarted) == 0
-    assert launches == [intent["execution_id"]]
-    assert effects.count(("cas", 0)) == effects.count(("publication", 0)) == 1
+    assert launches == [final_execution]
+    assert effects.count(("cas", 0)) == (2 if boundary == "chain" else 1)
+    assert effects.count(("publication", 0)) == 1
     new_reports = ExecutionReportStore(restarted.control_worktree).list("T-1")
     assert published in new_reports
     assert {report.execution_id for report in new_reports} - {
@@ -527,6 +548,67 @@ def test_rework_effect_replay(multi_commit_rework, monkeypatch, point, timing):
     for reference, head in ((ref, new.workspace_head), (pin, source.workspace_head)):
         remote = git(owner.repo, "ls-remote", "origin", reference).stdout.split()[0]
         assert remote == head
+
+
+@pytest.mark.parametrize("after_installation_intent", [False, True])
+def test_rework_reobserves_advancing_target_without_losing_review(
+    multi_commit_rework, monkeypatch, after_installation_intent,
+):
+    from devlegate import implementation_transfer, resource_binding
+
+    owner, config, reviewed = multi_commit_rework
+    repo = owner.repo
+    first_base = advance_product(repo)
+    original_outcome = implementation_transfer._publish
+    original_record = resource_binding._publish_once
+
+    def outcome(path, value):
+        original_outcome(path, value)
+        if path.name == "0.outcome.json":
+            raise ProcessLoss()
+
+    def record(path, value):
+        original_record(path, value)
+        if path.name == "transfer-started.json":
+            raise ProcessLoss()
+
+    with monkeypatch.context() as fault:
+        if after_installation_intent:
+            fault.setattr(resource_binding, "_publish_once", record)
+        else:
+            fault.setattr(implementation_transfer, "_publish", outcome)
+        with pytest.raises(ProcessLoss):
+            run_test_iteration(owner)
+    first_id = owner._state["execution_id"]
+    git(repo, "commit", "--allow-empty", "-m", "advance with rework transfer in flight")
+    git(repo, "push", "origin", "HEAD:main")
+    final_base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    owner = Devlegate(config)
+    launches = []
+
+    def verify(workspace, prompt, *, execution_id, **_kwargs):
+        launches.append(execution_id)
+        assert workspace.base_head == final_base
+        assert "Keep both implementation commits" in prompt
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", verify)
+    assert run_test_iteration(owner) == 0
+    assert not launches
+    if after_installation_intent:
+        assert owner._state["execution_id"] == first_id
+        assert owner._state["transfer_progress"]["candidate"]["head"]
+        assert run_test_iteration(owner) == 0
+        installed = owner._state["rework_provenance"]["installed_source"]
+        assert installed["execution"] == first_id and installed["base"] == first_base
+    final_id = owner._state["execution_id"]
+    assert final_id != first_id and not launches
+    assert run_test_iteration(owner) == 0
+    assert launches == [final_id]
+    reports = ExecutionReportStore(owner.control_worktree).list("T-1")
+    assert len(reports) == 3 and reviewed in reports
+    final = next(r for r in reports if r.execution_id == final_id)
+    assert final.code_base_head == final_base
 
 
 @pytest.mark.parametrize("change", ["edit", "unrelated", "delete", "move"])
