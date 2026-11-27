@@ -1,0 +1,30 @@
+{
+  "code_base_head": "e574453876c09f6928d7d24d2c9ae17df6b3f595",
+  "conclusion": "completed",
+  "control_head": "90cf7cb1bdac1caa0978312910e77b505dac5a5f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-201",
+  "execution_id": "37838c9ddb5f4b428488ee9c17b50228",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-201",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-201/37838c9ddb5f4b428488ee9c17b50228.md",
+  "report_sha256": "a04ab7b68a6203ba64a1b5079f82674c87889325ed0af66e904072479bb858e1",
+  "resource_generation": "961d21e2be4222a5d6d031afecc101604ab8ac3c1d14e19b28e707092404d6d9",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-201",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Final focused real-service and lifecycle regressions, ./dev lint, and git diff --check passed. Exact-successor hosted CI has not run in this worker; it remains an integration gate after Devlegate checkpoints the patch.",
+    "summary": "Ticket reset now reuses the owner's persisted automatic transfer authority, and reset and abandonment recognize independently proved installed generations that never launched a worker. Same-base recovery now follows the shared checkpoint and transfer path when the product advances again, with actionable diagnostics for retained candidates."
+  },
+  "workspace_head": "c1bbe4bf6fb4908fea7048314a886af217f5bde7"
+}
