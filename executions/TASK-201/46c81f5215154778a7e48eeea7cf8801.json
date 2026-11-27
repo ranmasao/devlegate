@@ -1,0 +1,30 @@
+{
+  "code_base_head": "e574453876c09f6928d7d24d2c9ae17df6b3f595",
+  "conclusion": "completed",
+  "control_head": "1431a5c3492c35ad75e0c0200d6ebe5d2257152f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-201",
+  "execution_id": "46c81f5215154778a7e48eeea7cf8801",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-201",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-201/46c81f5215154778a7e48eeea7cf8801.md",
+  "report_sha256": "a794c3a4dbafebad8ab1c0470fba935eba85d95fb5a24fcac617d5486d35a20a",
+  "resource_generation": "9f53a1f63b23aa7c6b1f89d7207c574e6eee8b973ddc87ee4ac623f5014c147d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-201",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "The eight reviewed failure cases passed with the stale-checkpoint test replaced by exact source and cancellation proofs. All control recovery nodes passed in the combined module run; the daemon recovery module passed on a serial rerun. Focused real-service and transfer replay regressions, ./dev lint, and git diff --check passed. The broader handoff module attempt timed out; selected handoff regressions passed separately. The injected review did not include a final result for successor hosted CI run 46052066237; exact-checkpoint hosted CI remains the integration gate.",
+    "summary": "Restored deduplicated blocked-workflow logging for recoverable execution errors. Updated recovery regressions to prove the original checkpoint remains pinned, stale authority cannot publish it, and only uncancelled executions automatically transfer and revalidate."
+  },
+  "workspace_head": "4aadc2ef200eefcd50113f1d36d9c927fd9f6407"
+}
