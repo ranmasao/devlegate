@@ -38,6 +38,7 @@ _OPERATIONS = (
 _HISTORICAL_OPERATIONS = (
     "rewrite", "rollback", "rewrite-publication",
 )
+_JOURNAL_OPERATIONS = _OPERATIONS + _HISTORICAL_OPERATIONS
 
 
 class UnprovenResource(ExecutionWorkspaceError):
@@ -409,7 +410,7 @@ class ResourceBinding:
         attempts = []
         for path in self.directory.glob("*-intent.json"):
             operation = path.name.removesuffix("-intent.json").split(".")[0]
-            if operation not in _OPERATIONS and operation not in _HISTORICAL_OPERATIONS:
+            if operation not in _JOURNAL_OPERATIONS:
                 continue
             intent = _read(path)
             sequence = intent.get("sequence")
@@ -433,7 +434,7 @@ class ResourceBinding:
             seen.add(operation)
         for path in self.directory.glob("*-receipt.json"):
             operation = path.name.removesuffix("-receipt.json").split(".")[0]
-            if operation in _OPERATIONS and not path.with_name(
+            if operation in _JOURNAL_OPERATIONS and not path.with_name(
                 path.name.replace("-receipt", "-intent")
             ).exists():
                 raise UnprovenResource(
@@ -577,7 +578,7 @@ class ResourceBinding:
         self._require_settled()
         for _sequence, operation, path in reversed(self._attempts()):
             if operation in {
-                "publication", "predecessor-publication",
+                "publication", "predecessor-publication", "rewrite-publication",
             }:
                 value = self._receipt(path).get("after")
                 if not isinstance(value, str):
@@ -629,7 +630,7 @@ class ResourceBinding:
                 raise ExecutionWorkspaceError("remote predecessor receipt differs")
         for _sequence, operation, path in self._attempts():
             if operation in {
-                "publication", "predecessor-publication",
+                "publication", "predecessor-publication", "rewrite-publication",
             }:
                 receipt = self._receipt(path)
                 if receipt.get("before") != current or not isinstance(
@@ -1063,7 +1064,7 @@ class ResourceBinding:
     def _expected_head(self) -> object:
         expected = _read(self.directory / "receipt.json").get("head")
         for _sequence, operation, path in self._attempts():
-            if operation in {"checkpoint", "force-checkpoint"}:
+            if operation in {"checkpoint", "force-checkpoint", "rewrite", "rollback"}:
                 expected = self._receipt(path).get("after")
         return expected
 

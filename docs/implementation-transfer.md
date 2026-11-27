@@ -123,8 +123,12 @@ the owner stops between these writes, it resumes from whichever evidence is
 durable. See service status for the result. Correct the edits and confirm
 again if the owner reports unresolved markers or changed content. A subsequent
 conflict needs its own confirmation. A stale target or assignment blocks handoff
-and keeps the candidate. A gitlink conflict cannot be resolved by source edits;
-`devlegate reset T-1` explicitly discards that REWORK attempt. A successful
+and keeps the candidate. A gitlink conflict cannot be resolved by source edits.
+In either origin, `devlegate reset T-1` can explicitly discard a waiting
+transfer before installation if the exact source generation is safe to retire.
+For active reconciliation this includes an absent upstream or one still at H;
+an upstream at an older checkpoint is not reset authority. Reset refusal leaves
+the conflict and checkpoint available for inspection. A successful
 technical resolution requires worker validation: REWORK injects the bound
 review, while active update-base admits RESUME on B with a fresh execution ID.
 The source report is not published as a successful report on B. Change Explorer
@@ -139,15 +143,19 @@ remote outcome only with the corresponding independent publication intent.
 
 Same-base active reconciliation retakes the existing checkpoint/publication
 path. The zero-delta automatic retry retains its independent retirement and
-admission path. Active transfer admission retains the existing eligible-target
-and published rewrite policy; a mechanical replay cannot omit a contributing
+admission path. Explicit active transfer admission proves an exact descendant
+or single-parent replacement, in addition to clean and agreed local and remote
+product heads and any required published rewrite authorization. Replay is bound
+to that admitted target. A mechanical replay cannot omit a contributing
 commit merely because its change already exists in B.
 
 ### Clean upgrade boundary
 
 Stop the owner at a quiescent boundary. Settle any old in-place update-base
-rewrite, pending REWORK, or worker/lifecycle recovery with the runtime that
-admitted it before upgrading. Do not delete journals, repair native rebase
-state, or recreate bindings by hand. The new owner does not migrate or resume
-old transfer progress. Immutable reports and evidence pins remain historical
-facts.
+rewrite (including its follow-up revalidation), pending REWORK, or worker/lifecycle
+recovery with the runtime that admitted it before upgrading. Do not delete
+journals, repair native rebase state, or recreate bindings by hand. The new owner
+does not migrate or resume
+old transfer progress. Immutable reports, evidence pins, and settled resource
+journals remain usable as historical evidence, including older REWORK predecessor
+records and receipted rewrite, rollback, and rewrite-publication operations.

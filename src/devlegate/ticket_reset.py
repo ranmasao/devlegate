@@ -318,16 +318,37 @@ def admit(owner, ticket_id):
             raise ValueError(f"reset blocked by pending owner transaction: {key}")
     reconciliation = owner._state.get("reconciliation")
     transfer = owner._state.get("transfer_progress") or {}
-    if isinstance(reconciliation, dict) and reconciliation.get("status") == "pending":
+    if reconciliation is not None:
         active_binding = transfer.get("active_binding")
-        if not (isinstance(active_binding, dict) and isinstance(transfer.get("conflict"), dict)):
-            raise ValueError("reset blocked by pending owner transaction: reconciliation")
-        manager = _manager(owner, reconciliation["ticket_id"])
-        binding_dir = manager.resource_dir / str(active_binding["generation"])
-        if (binding_dir / "transfer-started.json").exists() or (
-            binding_dir / "receipt.json"
+        if not (
+            reconciliation.get("status") == "pending"
+            and reconciliation["ticket_id"] == ticket_id
+            and owner._state.get("execution_ticket_id") == ticket_id
+            and isinstance(active_binding, dict)
+            and isinstance(transfer.get("conflict"), dict)
+        ):
+            raise ValueError(
+                "reset blocked by pending owner transaction: reconciliation"
+            )
+        from devlegate.active_transfer import ActiveTransfer
+
+        predecessor = owner._execution_generation_binding()
+        destination = ResourceBinding(predecessor.manager, active_binding)
+        transaction = ActiveTransfer(
+            owner, destination, predecessor, reconciliation,
+            transfer["rewrite_published"],
+        )
+        if transaction.installation_started or (
+            destination.directory / "receipt.json"
         ).exists():
-            raise ValueError("reset blocked while active transfer installation is settling")
+            raise ValueError(
+                "reset blocked while active transfer installation is settling"
+            )
+        transaction.require_source(transaction.identity)
+        if destination.intent["prior_remote"] not in {
+            None, transaction.identity.checkpoint,
+        }:
+            raise ValueError("reset remote ref does not match the exact generation")
     reports = ExecutionReportStore(owner.control_worktree).list(ticket_id)
     current = owner._state.get("execution_ticket_id") == ticket_id
     reopening = owner._ticket_reopening(head, ticket_id)
@@ -340,6 +361,8 @@ def admit(owner, ticket_id):
                 owner.control_worktree, owner._state["execution_control_head"],
                 runner=owner._git_runtime,
             )
+    if reconciliation is not None and not current:
+        raise ValueError("reset cannot discard a reconciliation from a prior opening")
     if ticket.state == "todo" and not reports and not current:
         manager = _manager(owner, ticket_id)
         if _namespace_absent(owner, manager):
@@ -673,6 +696,7 @@ def advance(owner):
             if current:
                 fields["rework_provenance"] = None
                 fields["transfer_progress"] = None
+                fields["reconciliation"] = None
                 fields["automatic_retry"] = None
                 fields["force_retry_authorization"] = None
                 fields["resume_required"] = None

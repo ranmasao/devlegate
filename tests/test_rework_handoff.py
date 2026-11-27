@@ -84,6 +84,26 @@ def advance_product(repo):
     return git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
+def test_settled_task_199_rework_keeps_predecessor_authority(multi_commit_rework):
+    owner, config, report = multi_commit_rework
+    with owner._lock():
+        current = owner._execution_generation_binding()
+        assert current.intent["prior_remote"] is not None
+        # TASK-199 used this name for the same immutable predecessor evidence.
+        record = current.directory / "transfer-started.json"
+        historical = record.with_name("rework-started.json")
+        record.rename(historical)
+        evidence = historical.read_bytes()
+    restarted = Devlegate(config)
+    with restarted._lock():
+        binding = restarted._execution_generation_binding()
+        workspace = binding.require_local(clean=True, read_only=True)
+        assert workspace.head == report.workspace_head
+        assert binding.abandonment_remote_authority() == report.workspace_head
+        assert historical.read_bytes() == evidence
+        assert not record.exists()
+
+
 @pytest.mark.parametrize("boundary", [
     "candidate", "cas", "publication", "remote", "control", "product",
     "generation", "incorporated",
@@ -188,6 +208,15 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         git(repo, "push", "origin", "HEAD:main")
 
     restarted = Devlegate(config)
+    if boundary == "cas":
+        from devlegate.ticket_reset import admit
+
+        with restarted._lock(), pytest.raises(
+            ValueError, match="pending.*reconciliation",
+        ):
+            admit(restarted, "T-1")
+        assert restarted._state["reconciliation"] == source
+        assert restarted._state["transfer_progress"]["active_binding"] == intent
     launches = []
 
     def worker(workspace, prompt, *, execution_id, revisions, **_kwargs):

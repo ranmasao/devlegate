@@ -6,8 +6,8 @@
 from devlegate.abandonment_refs import create_pin
 from devlegate.execution_result import new_execution_id
 from devlegate.execution_workspace import ExecutionWorkspaceError
-from devlegate.implementation_transfer import TransferEffect
 from devlegate.git import GitObservationError, commit_parents
+from devlegate.implementation_transfer import TransferEffect
 from devlegate.reconciliation import rewritten_evidence_ref, same_parent_replacement
 from devlegate.resource_binding import ResourceBinding
 from devlegate.runtime_state_validation import DevlegateError
