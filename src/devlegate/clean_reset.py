@@ -471,6 +471,15 @@ def retire_ticket_generation(owner, binding):
                 owner.repo, str(binding.intent["remote"]),
                 str(binding.intent["remote_ref"]), runner=observe_git,
             )
+            reconciliation = owner._state.get("reconciliation")
+            if reconciliation is not None and (
+                reconciliation["execution_id"] != binding.intent["execution_id"]
+                or reconciliation["worker_checkpoint"] != workspace.head
+                or reconciliation["execution_remote_head"] != upstream
+            ):
+                raise ValueError(
+                    "active reconciliation source changed after reset admission"
+                )
             if upstream not in {None, workspace.head}:
                 raise ValueError("reset remote ref does not match the exact generation")
             journal = {"status": "worktree-pending", "head": workspace.head,

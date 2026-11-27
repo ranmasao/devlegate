@@ -2101,11 +2101,13 @@ def test_reconcile_resume_rejects_malformed_retained_report(tmp_path, monkeypatc
     with pytest.raises(DevlegateError, match="retained reconciliation report"):
         runtime.ServiceEngine._validate_state_invariant(payload)
 
+@pytest.mark.parametrize("disposition", ["resume", "reset"])
 def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, disposition,
 ):
     from devlegate.implementation_transfer import source_resolution_digest
     from devlegate.runtime import OperatorCommand
+    from devlegate.ticket_reset import admit
 
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2157,6 +2159,20 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     candidate = Path(devlegate._state["transfer_progress"]["conflict"]["path"])
     (candidate / "shared.txt").write_text("explicit resolution\n")
     restarted = Devlegate(config)
+    reports = ExecutionReportStore(restarted.control_worktree).list("T-1")
+    if disposition == "reset":
+        # A foreign upstream is not disposal authority even before installation.
+        ref = f"refs/heads/{reconciliation['execution_branch']}"
+        git(working, "push", "origin", f"{original_head}:{ref}")
+        with restarted._lock(), pytest.raises(
+            ExecutionWorkspaceError, match="upstream predecessor changed",
+        ):
+            admit(restarted, "T-1")
+        assert not restarted._state.get("ticket_reset")
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
+        assert (candidate / "shared.txt").read_text() == "explicit resolution\n"
+        git(working, "push", "origin", f":{ref}")
+
     with restarted._lock():
         restarted._admit_operator_command(OperatorCommand(
             request_id="resolution", fingerprint="resolution",
@@ -2164,6 +2180,41 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
             ticket_id="T-1", onto=str(candidate),
             plan_digest=source_resolution_digest(candidate),
         ))
+        if disposition == "reset":
+            assert admit(restarted, "T-1")["accepted"]
+    if disposition == "reset":
+        restarted = Devlegate(config)
+        git(working, "push", "origin", f"{original_head}:{ref}")
+        with pytest.raises(WorkflowBlockedError, match="source changed after reset"):
+            run_test_iteration(restarted)
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
+        assert (candidate / "shared.txt").read_text() == "explicit resolution\n"
+        git(working, "push", "origin", f":{ref}")
+        restarted = Devlegate(config)
+        assert run_test_iteration(restarted) == 0
+        assert restarted._state["ticket_reset"]["status"] == "queued"
+        assert restarted._state.get("reconciliation") is None
+        assert restarted._state.get("transfer_progress") is None
+        assert not execution.exists()
+        pin = git(working, "rev-parse", reconciliation["evidence_ref"])
+        assert pin.stdout.strip() == original_head
+        assert not list(candidate.parent.glob("*.approval.json"))
+        assert (candidate / "shared.txt").read_text() == "explicit resolution\n"
+        assert ExecutionReportStore(restarted.control_worktree).list("T-1") == reports
+
+        def fresh(workspace, prompt, **_kwargs):
+            assert "FRESH" in prompt
+            assert "Continue the existing implementation" not in prompt
+            assert (workspace.path / "shared.txt").read_text() == "product\n"
+            return WorkerRunResult(
+                0, None, WorkerClaim("completed", "done", (), ()), None,
+            )
+
+        monkeypatch.setattr(restarted._workers, "run", fresh)
+        assert run_test_iteration(restarted) == 0
+        assert restarted._state["execution_id"] != reconciliation["execution_id"]
+        return
+
     assert run_test_iteration(restarted) == 0
     assert restarted._state["reconciliation"]["externally_resolved"] is True
     assert (execution / "shared.txt").read_text() == "explicit resolution\n"
@@ -2178,8 +2229,9 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     monkeypatch.setattr(restarted._workers, "run", revalidate)
     assert run_test_iteration(restarted) == 0
 
-def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("ancestry_available", [True, False])
+def test_engine_reconcile_update_base_requires_observable_same_parent_replacement(
+    tmp_path, monkeypatch, ancestry_available,
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -2215,6 +2267,24 @@ def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
         execution, "rev-parse", f"{reconciliation['original_base']}^"
     ).stdout.strip() == git(working, "rev-parse", f"{target}^").stdout.strip()
     git(working, "reset", "--hard", target)
+
+    if not ancestry_available:
+        runner = devlegate._git_runtime
+
+        def unavailable(path, *args, **kwargs):
+            if args == ("merge-base", "--is-ancestor", original_base, target):
+                return subprocess.CompletedProcess(args, 128, "", "commit unavailable")
+            return runner(path, *args, **kwargs)
+
+        original_base = reconciliation["original_base"]
+        monkeypatch.setattr(devlegate, "_git_runtime", unavailable)
+        with pytest.raises(DevlegateError, match="commit unavailable"):
+            devlegate.reconcile_update_base("T-1", target)
+        assert devlegate._state.get("transfer_progress") is None
+        assert devlegate._state["reconciliation"] == reconciliation
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_checkpoint
+        assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
+        return
 
     assert devlegate.reconcile_update_base("T-1", target) == 0
     resolved = devlegate._state["reconciliation"]
