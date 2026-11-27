@@ -6,6 +6,8 @@
 
 from _cli_support import *  # noqa: F403,F405
 
+from devlegate.active_transfer import is_same_parent_replacement
+
 def test_same_parent_replacement_requires_exact_single_parent_git_topology(
     git_fixture,
 ):

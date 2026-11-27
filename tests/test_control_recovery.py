@@ -320,41 +320,48 @@ def test_accepted_integration_state_requires_idle_and_exact_identity():
     )
 
 @pytest.mark.parametrize(
-    ("stable", "execution_remote_head", "expected_class"),
+    ("advance_product", "published", "expected_class"),
     [
-        (True, None, "resume"),
-        (False, None, "update-base"),
-        (
-            False,
-            "published-checkpoint",
-            "update-base with published-lineage rewrite",
-        ),
+        (False, False, "resume"),
+        (True, False, "update-base"),
+        (True, True, "update-base with published-lineage rewrite"),
     ],
 )
 def test_reconcile_auto_classifies_and_dispatches_from_durable_class(
-    tmp_path, monkeypatch, stable, execution_remote_head, expected_class
+    tmp_path, monkeypatch, advance_product, published, expected_class
 ):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     engine = runtime.ServiceEngine(config)
+    original_base = git(working, "rev-parse", "HEAD").stdout.strip()
+    execution_remote_head = None
+    if published:
+        execution_remote_head = git(
+            working,
+            "commit-tree",
+            f"{original_base}^{{tree}}",
+            "-p",
+            original_base,
+            "-m",
+            "worker checkpoint",
+        ).stdout.strip()
+        git(
+            working, "push", "origin",
+            f"{execution_remote_head}:refs/heads/devlegate/execution/T-1",
+        )
+    if advance_product:
+        (working / "product-advance.txt").write_text("product advance\n")
+        git(working, "add", "product-advance.txt")
+        git(working, "commit", "-m", "advance product after execution admission")
+        git(working, "push", "origin", "HEAD:main")
     current_head = git(working, "rev-parse", "HEAD").stdout.strip()
     engine._state["reconciliation"] = {
         "status": "pending",
         "ticket_id": "T-1",
-        "original_base": current_head,
+        "original_base": original_base,
         "execution_remote_head": execution_remote_head,
     }
-    monkeypatch.setattr(
-        engine,
-        "_observe_product_generation",
-        lambda _original_base: {
-            "target_eligible": True,
-            "local_head": current_head,
-            "remote_head": current_head,
-            "stable": stable,
-        },
-    )
     command = runtime.OperatorCommand(
         "request-1", "reconcile-auto", "fingerprint", "T-1", onto=current_head[:7]
     )
