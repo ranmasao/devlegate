@@ -50,6 +50,55 @@ def test_service_survives_recoverable_stage_devlegate_error(
     assert engine._state["execution_stage"] == stage
     assert "simulated publication transport failure" in capsys.readouterr().out
 
+
+def test_recovery_blocker_logs_changes_and_resets_after_validation(
+    tmp_path, monkeypatch, capsys,
+):
+    engine, _config, _state = make_engine(tmp_path, monkeypatch)
+    engine.poll_interval = "0"
+    stop_event = threading.Event()
+    outage = "simulated publication transport failure"
+    changed = "simulated remote observation failure"
+    errors = iter([outage, outage, changed, None, changed])
+    waits = []
+
+    def iteration():
+        message = next(errors)
+        engine._workflow_validation_succeeded = message is None
+        if message is None:
+            engine._state["phase"] = "idle"
+            engine._publish_service_snapshot(lifecycle="ready")
+            return 0
+        engine._state.update(
+            phase="agent_running", execution_stage="publishing", execution_id="replay",
+        )
+        raise DevlegateError(message)
+
+    def wait(_stop_event, interval):
+        snapshot = engine.service_snapshot()
+        waits.append((interval, snapshot.lifecycle, snapshot.blocked_reason))
+        return len(waits) == 5
+
+    monkeypatch.setattr(engine, "run_iteration", iteration)
+    monkeypatch.setattr(engine, "_wait_for_service_event", wait)
+    assert engine.serve(stop_event) == 0
+    assert waits == [
+        (1, "blocked", outage),
+        (1, "blocked", outage),
+        (1, "blocked", changed),
+        (0, "ready", None),
+        (1, "blocked", changed),
+    ]
+    diagnostics = [line for line in capsys.readouterr().out.splitlines() if (
+        "workflow blocked:" in line or "workflow is valid again" in line
+    )]
+    assert len(diagnostics) == 4
+    assert diagnostics[0].endswith(f"workflow blocked: {outage}")
+    assert diagnostics[1].endswith(f"workflow blocked: {changed}")
+    assert diagnostics[2].endswith("workflow is valid again")
+    assert diagnostics[3].endswith(f"workflow blocked: {changed}")
+
+
 def test_recoverable_stage_error_keeps_once_semantics(tmp_path, monkeypatch):
     engine, _config, _state = make_engine(tmp_path, monkeypatch)
     engine._state["phase"] = "agent_running"

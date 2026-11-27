@@ -2759,20 +2759,41 @@ def test_real_service_product_movement_during_downtime_blocks_stale_publish(
     )
     try:
         _wait_process_death(service)
-        _advance_product(git_fixture)
+        crashed = _disk_state(config)
+        base, target = _advance_product(git_fixture)
+        # Settle on a durable boundary rather than race the service through the
+        # transient post-checkpoint stage after restart.
+        monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "transfer_candidate")
+        service.restart()
+        _wait_process_death(service)
+        pending = _disk_state(config)["reconciliation"]
+        assert pending["status"] == "pending"
+        assert pending["original_base"] == base
+        assert pending["observed_product"] == target
+        assert pending["execution_report"] == crashed["pending_execution_report"]
+        assert attempts.read_text().splitlines() == ["attempt"]
+        execution = engine.execution_worktree_root / "work" / "T-1"
+        checkpoint = pending["worker_checkpoint"]
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == checkpoint
+        assert not git(
+            execution, "ls-remote", "origin", "refs/heads/devlegate/work/T-1",
+        ).stdout.strip()
+        review = engine.control_worktree / "kanban/review/T-1.md"
+        assert not review.exists()
+
         monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
         service.restart()
         service.wait_for(
-            lambda: _disk_state(config).get("execution_stage") == "post-checkpoint"
+            lambda: review.is_file() and _disk_state(config)["phase"] == "idle"
         )
-        assert attempts.read_text().splitlines() == ["attempt"]
-        execution = engine.execution_worktree_root / "work" / "T-1"
-        assert not git(
-            execution,
-            "ls-remote",
-            "origin",
-            "refs/heads/devlegate/work/T-1",
-        ).stdout.strip()
+        reports = ExecutionReportStore(engine.control_worktree).list("T-1")
+        assert len(reports) == 1
+        assert reports[0].code_base_head == target
+        assert reports[0].execution_id != pending["execution_id"]
+        assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+        assert git(execution, "rev-parse", pending["evidence_ref"]).stdout.strip() == (
+            checkpoint
+        )
     finally:
         service.stop()
 

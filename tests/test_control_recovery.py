@@ -1210,8 +1210,9 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
     control = next((state / "worktrees").glob("*/control"))
     assert (control / "kanban/review/T-1.md").is_file()
 
-def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("interruption", [None, "operator_abort"])
+def test_checkpoint_recovery_preserves_source_before_reconciliation(
+    tmp_path, monkeypatch, interruption
 ):
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
@@ -1220,6 +1221,8 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
 
     def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "partial.txt").write_text("preserve\n")
+        if interruption:
+            return WorkerRunResult(-2, None, None, None, interruption)
         return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
 
     from devlegate.resource_binding import ResourceBinding
@@ -1238,6 +1241,11 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
     with pytest.raises(DevlegateError, match="checkpoint failed"):
         run_test_iteration(devlegate)
     monkeypatch.setattr(ResourceBinding, "begin_operation", original_begin)
+    interrupted = state_payload(state)
+    assert interrupted["execution_stage"] == "checkpointing"
+    assert interrupted.get("execution_interruption_kind") == interruption
+    source_report = interrupted["pending_execution_report"]
+    base = source_report["code_base_head"]
 
     publisher = tmp_path / "publisher"
     git(tmp_path, "clone", "-b", "main", tmp_path / "remote.git", publisher)
@@ -1247,22 +1255,85 @@ def test_checkpoint_recovery_refuses_stale_product_before_side_effects(
     git(publisher, "add", "product-change.txt")
     git(publisher, "commit", "-m", "advance product")
     git(publisher, "push", "origin", "HEAD:main")
+    target = git(publisher, "rev-parse", "HEAD").stdout.strip()
 
     execution = next((state / "worktrees").glob("*/work/T-1"))
-    before = git(execution, "rev-parse", "HEAD").stdout.strip()
+    assert git(execution, "rev-parse", "HEAD").stdout.strip() == base
+    remote_refs = git(working, "ls-remote", "--refs", "origin").stdout
     recovered = Devlegate(config)
+    saves = _capture_reconciliation_save(recovered, monkeypatch)
     monkeypatch.setattr(
         recovered._workers,
         "run",
-        lambda *_args: pytest.fail("stale recovery launched worker"),
+        lambda *_args, **_kwargs: pytest.fail("stale recovery launched worker"),
     )
-    with pytest.raises(DevlegateError, match="product checkout or remote changed"):
+    with pytest.raises(WorkflowBlockedError, match="reconciliation required"):
         run_test_iteration(recovered)
-    assert recovered._state["execution_stage"] == "checkpointing"
-    assert git(execution, "rev-parse", "HEAD").stdout.strip() == before
-    assert not git(
-        execution, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
-    ).stdout.strip()
+    pending = state_payload(state)["reconciliation"]
+    assert saves == [pending]
+    assert pending["interruption_kind"] == interruption
+    assert pending["original_base"] == base
+    assert pending["observed_product"] == target
+    checkpoint = pending["worker_checkpoint"]
+    assert pending["execution_report"] == dict(source_report, workspace_head=checkpoint)
+    assert git(execution, "rev-list", "--parents", "-1", "HEAD").stdout.split() == [
+        checkpoint, base,
+    ]
+    assert (
+        git(execution, "diff", "--name-only", base, checkpoint).stdout
+        == "partial.txt\n"
+    )
+    assert git(execution, "show", f"{checkpoint}:partial.txt").stdout == "preserve\n"
+    assert not git(execution, "status", "--porcelain").stdout
+    assert git(working, "rev-parse", "HEAD").stdout.strip() == base
+    control = recovered.control_worktree
+    assert git(control, "rev-parse", "HEAD").stdout.strip() == pending["control_head"]
+    assert git(working, "ls-remote", "--refs", "origin").stdout == remote_refs
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert not list((control / "executions/T-1").glob("*.json"))
+
+    restarted = Devlegate(config)
+    launches = []
+
+    def revalidate(workspace, prompt, *, revisions, **_kwargs):
+        launches.append(restarted._state["execution_id"])
+        assert workspace.base_head == target
+        assert revisions.namespace.resolve("HEAD").identity == checkpoint
+        assert "Continue the existing implementation" in prompt
+        assert (workspace.path / "partial.txt").read_text() == "preserve\n"
+        return WorkerRunResult(
+            0, None, WorkerClaim("completed", "validated", (), ()), None,
+        )
+
+    monkeypatch.setattr(restarted._workers, "run", revalidate)
+    if interruption:
+        for _ in range(2):
+            with pytest.raises(DevlegateError, match="explicit recovery is required"):
+                run_test_iteration(restarted)
+        assert state_payload(state)["reconciliation"] == pending
+        assert restarted._state.get("transfer_progress") is None
+        assert launches == []
+        assert git(working, "ls-remote", "--refs", "origin").stdout == remote_refs
+        assert not (control / "kanban/review/T-1.md").exists()
+    else:
+        assert run_test_iteration(restarted) == 0
+        resolved = state_payload(state)["reconciliation"]
+        assert resolved["status"] == "resolved"
+        assert resolved["execution_report"] == pending["execution_report"]
+        fresh_id = resolved["resumed_execution_id"]
+        assert fresh_id != pending["execution_id"]
+        assert launches == []
+        assert not (control / "kanban/review/T-1.md").exists()
+        assert run_test_iteration(restarted) == 0
+        assert launches == [fresh_id]
+        assert (control / "kanban/review/T-1.md").is_file()
+        reports = list((control / "executions/T-1").glob("*.json"))
+        assert [json.loads(path.read_text())["execution_id"] for path in reports] == [
+            fresh_id,
+        ]
+    assert (
+        git(working, "rev-parse", pending["evidence_ref"]).stdout.strip() == checkpoint
+    )
 
 def test_post_publication_recovery_replays_lifecycle_without_worker(
     tmp_path, monkeypatch
@@ -1476,6 +1547,7 @@ def _capture_reconciliation_save(engine, monkeypatch):
                 "product_observation": reconciliation["product_observation"],
                 "product_target_eligible": reconciliation["product_target_eligible"],
                 "execution_report": report,
+                "interruption_kind": engine._state.get("execution_interruption_kind"),
             }
             assert phase == "idle"
             assert (

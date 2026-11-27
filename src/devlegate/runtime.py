@@ -10690,15 +10690,7 @@ class ServiceEngine:
                                 execution_id,
                                 message,
                             )
-                        self._publish_service_snapshot(
-                            lifecycle="blocked",
-                            worker_running=False,
-                            blocked_reason=message,
-                        )
-                        fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                        if self._workflow_blocker_fingerprint != fingerprint:
-                            _log(f"workflow blocked: {message}")
-                        self._workflow_blocker_fingerprint = fingerprint
+                        self._publish_workflow_blocker(message)
                         status = 1
                 except WorkflowBlockedError as error:
                     if operator_command is not None:
@@ -10709,16 +10701,7 @@ class ServiceEngine:
                         status = 1
                     else:
                         workflow_blocked = True
-                        message = str(error)
-                        self._publish_service_snapshot(
-                            lifecycle="blocked",
-                            worker_running=False,
-                            blocked_reason=message,
-                        )
-                        fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                        if self._workflow_blocker_fingerprint != fingerprint:
-                            _log(f"workflow blocked: {message}")
-                        self._workflow_blocker_fingerprint = fingerprint
+                        self._publish_workflow_blocker(str(error))
                         status = 1
                 except DevlegateError as error:
                     if operator_command is None:
@@ -10727,16 +10710,7 @@ class ServiceEngine:
                             or self._has_pending_accepted_integration()
                         ):
                             workflow_blocked = True
-                            message = str(error)
-                            self._publish_service_snapshot(
-                                lifecycle="blocked",
-                                worker_running=False,
-                                blocked_reason=message,
-                            )
-                            fingerprint = hashlib.sha256(message.encode()).hexdigest()
-                            if self._workflow_blocker_fingerprint != fingerprint:
-                                _log(f"workflow blocked: {message}")
-                            self._workflow_blocker_fingerprint = fingerprint
+                            self._publish_workflow_blocker(str(error))
                             status = 1
                         elif not once and (
                             self._has_recoverable_execution_stage()
@@ -10744,16 +10718,13 @@ class ServiceEngine:
                             or self._has_operator_recovery_required()
                         ):
                             workflow_blocked = True
+                            message = str(error)
                             execution_id = self._state.get("execution_id")
                             if isinstance(execution_id, str):
                                 self._workspace_preparation_blocker = (
-                                    execution_id, str(error),
+                                    execution_id, message,
                                 )
-                            self._publish_service_snapshot(
-                                lifecycle="blocked", worker_running=False,
-                                blocked_reason=str(error),
-                            )
-                            self._iteration_diagnostic = f"execution failed: {error}"
+                            self._publish_workflow_blocker(message)
                             status = 1
                         else:
                             raise
@@ -10826,6 +10797,15 @@ class ServiceEngine:
                 else:
                     self._service_wake.wait(interval)
                     self._service_wake.clear()
+
+    def _publish_workflow_blocker(self, message: str) -> None:
+        self._publish_service_snapshot(
+            lifecycle="blocked", worker_running=False, blocked_reason=message,
+        )
+        fingerprint = hashlib.sha256(message.encode()).hexdigest()
+        if self._workflow_blocker_fingerprint != fingerprint:
+            _log(f"workflow blocked: {message}")
+        self._workflow_blocker_fingerprint = fingerprint
 
     def _wake_when_stopped(self, stop_event: threading.Event) -> None:
         stop_event.wait()
