@@ -259,7 +259,7 @@ class ImplementationTransfer:
         if any(record.startswith("160000 ") for record in conflict.unmerged):
             raise ResolutionEditError(
                 "source-only resolution cannot select a gitlink commit; "
-                f"use devlegate reset {conflict.identity.ticket} to discard this REWORK"
+                f"use devlegate reset {conflict.identity.ticket} to discard this transfer"
             )
         self._status(path)  # Reject hidden index entries before staging.
         self._command(path, "add", "-A", "--", ".")

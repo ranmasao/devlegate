@@ -2085,14 +2085,16 @@ class ServiceEngine:
                 "requested ticket does not match pending reconciliation"
             )
         product = self._observe_product_generation(str(reconciliation["original_base"]))
+        if product["branch"] != self.current_branch:
+            raise DevlegateError("product checkout is on the wrong branch")
+        if product["dirty"]:
+            raise DevlegateError("product checkout is dirty")
         local_head = str(product["local_head"])
         remote_head = str(product["remote_head"])
-        if not local_head or local_head != remote_head:
+        if not local_head or not remote_head:
+            raise DevlegateError("current product generation is not observable")
+        if local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
-        if not product["target_eligible"]:
-            raise DevlegateError(
-                "current product generation is not eligible for reconciliation"
-            )
         if command.onto is None:
             command.onto = local_head
         else:
@@ -2145,19 +2147,22 @@ class ServiceEngine:
                 "requested ticket does not match pending reconciliation"
             )
         product = self._observe_product_generation(str(reconciliation["original_base"]))
-        if not product["target_eligible"]:
-            raise DevlegateError(
-                "current product generation is not eligible for reconciliation"
-            )
+        if product["branch"] != self.current_branch:
+            raise DevlegateError("product checkout is on the wrong branch")
+        if product["dirty"]:
+            raise DevlegateError("product checkout is dirty")
         local_head = str(product["local_head"])
         remote_head = str(product["remote_head"])
-        if not local_head or local_head != remote_head:
+        if not local_head or not remote_head:
+            raise DevlegateError("current product generation is not observable")
+        if local_head != remote_head:
             raise DevlegateError("current product local and remote HEADs do not agree")
-        require_target_lineage(self, reconciliation["original_base"], local_head)
+        target = local_head
+        require_target_lineage(self, reconciliation["original_base"], target)
         if command.onto is not None:
-            command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
+            command.onto = self._canonical_reconcile_assertion(command.onto, target)
         else:
-            command.onto = None if product["stable"] else local_head
+            command.onto = None if product["stable"] else target
         if product["stable"]:
             command.resolution_class = "resume"
         elif reconciliation.get("execution_remote_head") is not None:
@@ -2414,7 +2419,7 @@ class ServiceEngine:
                 or self._state.get("worker_identity") is not None
                 or not isinstance(conflict, dict)
             ):
-                raise DevlegateError("ticket has no waiting REWORK candidate")
+                raise DevlegateError("ticket has no waiting transfer candidate")
             if command.onto != conflict.get("path"):
                 raise DevlegateError("confirmation must name the waiting candidate")
             if progress.get("confirmation") is not None:

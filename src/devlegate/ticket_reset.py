@@ -312,10 +312,22 @@ def admit(owner, ticket_id):
         owner._state.get("execution_ticket_id") != ticket_id
     ):
         raise ValueError("reset blocked: another ticket's worker owns the service")
-    for key in ("accepted_integration", "reconciliation", "abandonment_admission",
+    for key in ("accepted_integration", "abandonment_admission",
                 "abandonment_publication", "clean_reset_intent"):
         if owner._state.get(key) is not None:
             raise ValueError(f"reset blocked by pending owner transaction: {key}")
+    reconciliation = owner._state.get("reconciliation")
+    transfer = owner._state.get("transfer_progress") or {}
+    if isinstance(reconciliation, dict) and reconciliation.get("status") == "pending":
+        active_binding = transfer.get("active_binding")
+        if not (isinstance(active_binding, dict) and isinstance(transfer.get("conflict"), dict)):
+            raise ValueError("reset blocked by pending owner transaction: reconciliation")
+        manager = _manager(owner, reconciliation["ticket_id"])
+        binding_dir = manager.resource_dir / str(active_binding["generation"])
+        if (binding_dir / "transfer-started.json").exists() or (
+            binding_dir / "receipt.json"
+        ).exists():
+            raise ValueError("reset blocked while active transfer installation is settling")
     reports = ExecutionReportStore(owner.control_worktree).list(ticket_id)
     current = owner._state.get("execution_ticket_id") == ticket_id
     reopening = owner._ticket_reopening(head, ticket_id)
