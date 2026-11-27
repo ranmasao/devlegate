@@ -230,79 +230,26 @@ def dispatch_mutation(
         return engine.submit_recover(
             ticket_id, execution_id, observed_head, request_id=request.request_id
         )
-    if request.method == "reconcile-update-base":
-        if set(request.payload) not in (
-            {"ticket_id"},
-            {"ticket_id", "onto"},
-            {"ticket_id", "rewrite_published"},
-            {"ticket_id", "onto", "rewrite_published"},
+    if request.method in {"reconcile-resolve", "reconcile-authorize-product"}:
+        resolve = request.method == "reconcile-resolve"
+        fields = {"ticket_id", "candidate", "candidate_digest"} if resolve else {
+            "ticket_id", "execution_id", "to",
+        }
+        payload = request.payload
+        if set(payload) != fields or any(
+            not isinstance(value, str) or not value or "\0" in value
+            for value in payload.values()
         ):
-            raise IPCProtocolError(
-                "invalid_request",
-                "reconciliation payload fields are invalid",
+            raise IPCProtocolError("invalid_request", "invalid reconciliation payload")
+        if resolve:
+            return engine.submit_reconcile_resolve(
+                payload["ticket_id"], request_id=request.request_id,
+                candidate=payload["candidate"],
+                candidate_digest=payload["candidate_digest"],
             )
-        ticket_id = request.payload["ticket_id"]
-        onto = request.payload.get("onto")
-        rewrite_published = request.payload.get("rewrite_published", False)
-        if not isinstance(ticket_id, str) or not ticket_id:
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation ticket_id must be non-empty text"
-            )
-        if onto is not None and (not isinstance(onto, str) or not onto):
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation onto must be non-empty text"
-            )
-        if not isinstance(rewrite_published, bool):
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation rewrite_published must be boolean"
-            )
-        kwargs = {"request_id": request.request_id}
-        if rewrite_published:
-            kwargs["rewrite_published"] = True
-        return engine.submit_reconcile_update_base(ticket_id, onto, **kwargs)
-    if request.method == "reconcile-resume":
-        if set(request.payload) not in (
-            {"ticket_id"}, {"ticket_id", "resolve_candidate", "candidate_digest"},
-        ):
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation resume payload fields are invalid"
-            )
-        ticket_id = request.payload["ticket_id"]
-        if not isinstance(ticket_id, str) or not ticket_id:
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation ticket_id must be non-empty text"
-            )
-        if "resolve_candidate" in request.payload:
-            candidate = request.payload["resolve_candidate"]
-            digest = request.payload["candidate_digest"]
-            if (not isinstance(candidate, str) or not candidate or "\0" in candidate
-                    or not isinstance(digest, str)):
-                raise IPCProtocolError(
-                    "invalid_request", "invalid resolution candidate path or digest",
-                )
-            return engine.submit_reconcile_resume(
-                ticket_id, request_id=request.request_id, resolve_candidate=candidate,
-                candidate_digest=digest,
-            )
-        return engine.submit_reconcile_resume(ticket_id, request_id=request.request_id)
-    if request.method == "reconcile-auto":
-        if set(request.payload) not in ({"ticket_id"}, {"ticket_id", "onto"}):
-            raise IPCProtocolError(
-                "invalid_request",
-                "automatic reconciliation payload fields are invalid",
-            )
-        ticket_id = request.payload["ticket_id"]
-        onto = request.payload.get("onto")
-        if not isinstance(ticket_id, str) or not ticket_id:
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation ticket_id must be non-empty text"
-            )
-        if onto is not None and (not isinstance(onto, str) or not onto):
-            raise IPCProtocolError(
-                "invalid_request", "reconciliation onto must be non-empty text"
-            )
-        return engine.submit_reconcile_auto(
-            ticket_id, onto, request_id=request.request_id
+        return engine.submit_reconcile_authorize_product(
+            payload["ticket_id"], payload["execution_id"], payload["to"],
+            request_id=request.request_id,
         )
     if request.method == "reconcile-control":
         if set(request.payload) != {"from", "to"}:

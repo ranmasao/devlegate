@@ -65,9 +65,13 @@ def waiting_message(conflict, origin="REWORK", error=None):
             "generation is safe to retire; otherwise preserve the candidate"
         )
     return (f"{error}; " if error else "") + message + (
-        f"edit source files, then run reconcile resume {identity['ticket']} "
-        "--resolve-candidate with the candidate path"
+        f"edit source files, then run devlegate reconcile resolve {identity['ticket']} "
+        "with the candidate path"
     )
+
+
+class ProductLineageError(ExecutionWorkspaceError):
+    pass
 
 
 def automatic_target(owner, base, product):
@@ -86,8 +90,8 @@ def automatic_target(owner, base, product):
             break
         previous = commit
     if previous != target:
-        raise ExecutionWorkspaceError(
-            "product remote is not a linear descendant; explicit reconciliation needed"
+        raise ProductLineageError(
+            "product remote is not a linear descendant"
         )
     if (not is_ancestor(owner.repo, base, local, runner=git)
             or not is_ancestor(owner.repo, local, target, runner=git)):

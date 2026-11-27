@@ -13,12 +13,15 @@ from devlegate.execution_result import ExecutionReportStore
 from devlegate.implementation_transfer import source_resolution_digest
 
 
-def _reconcile_when_not_busy(service, config, pending, target):
+def _authorize_product(service, config, pending, target, *, execution=None):
     result = None
 
     def attempt():
         nonlocal result
-        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
+        result = service.cli(
+            "reconcile", "authorize-product", "T-1", "--to", target,
+            "--execution", execution or pending["execution_id"],
+        )
         if result.returncode and (
             "service busy; mutable request was not admitted" in result.stderr
         ):
@@ -31,7 +34,7 @@ def _reconcile_when_not_busy(service, config, pending, target):
 
 
 def test_reconciliation_admission_retry_only_retries_explicit_busy(monkeypatch):
-    pending = {"status": "pending"}
+    pending = {"status": "pending", "execution_id": "execution"}
     monkeypatch.setattr(__import__(__name__), "_disk_state", lambda _: {
         "reconciliation": pending
     })
@@ -55,10 +58,10 @@ def test_reconciliation_admission_retry_only_retries_explicit_busy(monkeypatch):
     success = subprocess.CompletedProcess([], 0, "", "")
     other = subprocess.CompletedProcess([], 1, "", "admission coordination timed out")
     service = Service([busy, success])
-    assert _reconcile_when_not_busy(service, None, pending, "target") is success
+    assert _authorize_product(service, None, pending, "target") is success
     assert service.attempts == 2
     service = Service([other])
-    assert _reconcile_when_not_busy(service, None, pending, "target") is other
+    assert _authorize_product(service, None, pending, "target") is other
     assert service.attempts == 1
 
 @pytest.mark.parametrize("output", ["--json", "--yaml"])
@@ -1633,7 +1636,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                 def submitted():
                     nonlocal response
                     response = service.cli(
-                        "reconcile", "resume", "T-1", "--resolve-candidate", str(path),
+                        "reconcile", "resolve", "T-1", str(path),
                     )
                     return "service busy; mutable request was not admitted" not in (
                         response.stderr
@@ -1693,7 +1696,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             assert _disk_state(config)["execution_id"] == attempt
             assert len(attempts.read_text().splitlines()) == 2
             if rework == "lost-confirmation":
-                payload = {"ticket_id": "T-1", "resolve_candidate": str(candidate),
+                payload = {"ticket_id": "T-1", "candidate": str(candidate),
                            "candidate_digest": source_resolution_digest(candidate)}
 
                 def confirm():
@@ -1703,7 +1706,7 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                         nonlocal result
                         try:
                             result = ipc_request(
-                                service.locator.socket_path, "reconcile-resume",
+                                service.locator.socket_path, "reconcile-resolve",
                                 payload,
                                 mutable=True, request_id="confirm-rework",
                             )
@@ -1739,13 +1742,13 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
                 try:
                     response = confirm_cli(candidate)
                     assert response.returncode == 0, response.stderr
-                    assert "confirmation recorded" in response.stdout
+                    assert "decision recorded" in response.stdout
                     service.wait_for(gate.with_suffix(".waiting").exists)
                     progress = _disk_state(config)["transfer_progress"]
                     confirmation = progress["confirmation"]
                     assert ipc_request(
-                        service.locator.socket_path, "reconcile-resume", {
-                            "ticket_id": "T-1", "resolve_candidate": str(candidate),
+                        service.locator.socket_path, "reconcile-resolve", {
+                            "ticket_id": "T-1", "candidate": str(candidate),
                             "candidate_digest": confirmation["source_digest"],
                         }, mutable=True, request_id=confirmation["request_id"],
                     ) == {"accepted": True, "ticket_id": "T-1"}
@@ -3006,20 +3009,51 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
         service.restart()
         if ineligible or (conflicting and case != "reset-chain"):
             assert _disk_state(config)["reconciliation"] == pending_before
-        if ineligible:
-            if case == "same-parent":
-                service.wait_for(
-                    lambda: "linear descendant" in (
-                        service.cli("status", "--json").stdout
-                    )
-                )
-                assert not _disk_state(config).get("transfer_progress")
-                assert not worker.with_suffix(".resume").exists()
-                return
-            result = _reconcile_when_not_busy(service, config, pending_before, target)
+        if ineligible and case == "same-parent":
+            service.wait_for(lambda: "authorize-product" in (
+                service.cli("status", "--json").stdout
+            ))
+            assert not _disk_state(config).get("transfer_progress")
+            wrong_execution = _authorize_product(
+                service, config, pending_before, target, execution="wrong-execution",
+            )
+            assert wrong_execution.returncode != 0
+            assert "does not match the pending execution" in wrong_execution.stderr
+            stale = _authorize_product(service, config, pending_before, base)
+            assert stale.returncode != 0 and "must match current" in stale.stderr
+            assert not _disk_state(config).get("transfer_progress")
+            assert not worker.with_suffix(".resume").exists()
+
+            service.stop()
+            monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "receipt_after_save")
+            service.start()
+            service.wait_ready()
+            result = _authorize_product(service, config, pending_before, target)
+            assert result.returncode != 0 and "outcome is uncertain" in result.stderr
+            _wait_process_death(service)
+            admitted = _disk_state(config)
+            request_id, = (
+                key for key, receipt in admitted["mutable_receipts"].items()
+                if receipt["method"] == "reconcile-authorize-product"
+            )
+            binding = admitted["transfer_progress"]["active_binding"]
+            assert binding["base"] == target
+            attempt = binding["execution_id"]
+            assert git(execution, "rev-parse", "HEAD").stdout.strip() == source
+            assert not worker.with_suffix(".resume").exists()
+            monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+            service.restart()
+            payload = {
+                "ticket_id": "T-1", "execution_id": pending_before["execution_id"],
+                "to": target,
+            }
+            assert ipc_request(
+                service.locator.socket_path, "reconcile-authorize-product", payload,
+                mutable=True, request_id=request_id,
+            ) == {"accepted": True, **payload}
+        elif ineligible:
+            result = _authorize_product(service, config, pending_before, target)
             assert result.returncode != 0 and "not a descendant" in result.stderr
-            auto = service.cli("reconcile", "auto", "T-1")
-            assert auto.returncode != 0 and "not a descendant" in auto.stderr
             state = _disk_state(config)
             assert state["reconciliation"] == pending_before
             assert not state.get("transfer_progress")
@@ -3063,17 +3097,18 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
                     git(publisher, "commit", "--allow-empty", "-m", "advance again")
                     git(publisher, "push", "origin", "HEAD:main")
                     confirmation = service.cli(
-                        "reconcile", "resume", "T-1",
-                        "--resolve-candidate", str(candidate),
+                        "reconcile", "resolve", "T-1", str(candidate),
                     )
-                    assert confirmation.returncode == 0, confirmation.stderr
-                    assert _disk_state(config)["transfer_progress"]["confirmation"]
+                    assert confirmation.returncode != 0
+                    assert "stale candidate retained" in confirmation.stderr
+                    assert not _disk_state(config)["transfer_progress"].get(
+                        "confirmation"
+                    )
                     service.restart()
                 if case == "reset-settled":
                     (candidate / "implementation.txt").write_text("manual resolution\n")
                     confirmation = service.cli(
-                        "reconcile", "resume", "T-1",
-                        "--resolve-candidate", str(candidate),
+                        "reconcile", "resolve", "T-1", str(candidate),
                     )
                     assert confirmation.returncode == 0, confirmation.stderr
                     _wait_process_death(service)
@@ -3131,10 +3166,11 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
                 git(publisher, "commit", "--allow-empty", "-m", "advance past conflict")
                 git(publisher, "push", "origin", "HEAD:main")
             confirmation = service.cli(
-                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
+                "reconcile", "resolve", "T-1", str(candidate),
             )
-            assert confirmation.returncode == 0, confirmation.stderr
             if case == "stale-conflict":
+                assert confirmation.returncode != 0
+                assert "stale candidate retained" in confirmation.stderr
                 service.wait_for(lambda: "stale candidate retained" in (
                     service.cli("status", "--json").stdout
                 ))
@@ -3146,6 +3182,7 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
                 assert not ExecutionReportStore(engine.control_worktree).list("T-1")
                 assert worker.with_suffix(".attempts").read_text() == "attempt\n"
                 return
+            assert confirmation.returncode == 0, confirmation.stderr
 
         def resolved():
             status = service.cli("status", "--json")

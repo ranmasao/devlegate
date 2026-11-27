@@ -201,28 +201,8 @@ def decode_drop_ack(
         or value["execution_id"] != execution_id
     ):
         raise IPCClientError("service IPC returned invalid drop acknowledgement")
-def decode_reconcile_ack(
-    value: dict[str, object], ticket_id: str, onto: str
-) -> None:
-    if set(value) != {"accepted", "ticket_id", "onto"}:
-        raise IPCClientError(
-            "service IPC returned invalid reconciliation acknowledgement"
-        )
-    if (
-        value["accepted"] is not True
-        or value["ticket_id"] != ticket_id
-        or value["onto"] != onto
-    ):
-        raise IPCClientError(
-            "service IPC returned invalid reconciliation acknowledgement"
-        )
 
 
-def decode_reconcile_resume_ack(value: dict[str, object], ticket_id: str) -> None:
-    if value != {"accepted": True, "ticket_id": ticket_id}:
-        raise IPCClientError(
-            "service IPC returned invalid reconciliation resume acknowledgement"
-        )
 def decode_reconcile_control_ack(
     response: dict[str, object], from_head: str, to_head: str
 ) -> None:

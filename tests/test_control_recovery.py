@@ -319,182 +319,15 @@ def test_accepted_integration_state_requires_idle_and_exact_identity():
         }
     )
 
-@pytest.mark.parametrize(
-    ("advance_product", "published", "expected_class"),
-    [
-        (False, False, "resume"),
-        (True, False, "update-base"),
-        (True, True, "update-base with published-lineage rewrite"),
-    ],
-)
-def test_reconcile_auto_classifies_and_dispatches_from_durable_class(
-    tmp_path, monkeypatch, advance_product, published, expected_class
-):
+def test_product_authorization_requires_full_commit_id(tmp_path, monkeypatch):
     working, config, _state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
     engine = runtime.ServiceEngine(config)
-    original_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    execution_remote_head = None
-    if published:
-        execution_remote_head = git(
-            working,
-            "commit-tree",
-            f"{original_base}^{{tree}}",
-            "-p",
-            original_base,
-            "-m",
-            "worker checkpoint",
-        ).stdout.strip()
-        git(
-            working, "push", "origin",
-            f"{execution_remote_head}:refs/heads/devlegate/execution/T-1",
+    with pytest.raises(DevlegateError, match="full product commit ID"):
+        engine.submit_reconcile_authorize_product(
+            "T-1", "execution-1", "a" * 39, request_id="short-target",
         )
-    if advance_product:
-        (working / "product-advance.txt").write_text("product advance\n")
-        git(working, "add", "product-advance.txt")
-        git(working, "commit", "-m", "advance product after execution admission")
-        git(working, "push", "origin", "HEAD:main")
-    current_head = git(working, "rev-parse", "HEAD").stdout.strip()
-    engine._state["reconciliation"] = {
-        "status": "pending",
-        "ticket_id": "T-1",
-        "original_base": original_base,
-        "execution_remote_head": execution_remote_head,
-    }
-    command = runtime.OperatorCommand(
-        "request-1", "reconcile-auto", "fingerprint", "T-1", onto=current_head[:7]
-    )
-    engine._validate_reconcile_auto_admission(command)
-    assert command.resolution_class == expected_class
-    assert command.onto == current_head
-
-    engine._state["reconciliation"]["resolution_class"] = command.resolution_class
-    dispatched = []
-    monkeypatch.setattr(
-        engine,
-        "_reconcile_resume_owned",
-        lambda ticket_id: dispatched.append((ticket_id, "resume")) or 0,
-    )
-    monkeypatch.setattr(
-        engine,
-        "_reconcile_update_base_owned",
-        lambda ticket_id, target, **kwargs: dispatched.append(
-            (ticket_id, target, kwargs["rewrite_published"])
-        )
-        or 0,
-    )
-    engine._dispatch_operator_command(command, None)
-    expected = ("T-1", "resume") if expected_class == "resume" else (
-        "T-1",
-        current_head,
-        True,
-    )
-    assert dispatched == [expected]
-
-def test_reconcile_assertion_rejects_short_hex_prefix(tmp_path, monkeypatch):
-    working, config, _state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    engine = runtime.ServiceEngine(config)
-    with pytest.raises(DevlegateError, match="at least 4 characters"):
-        engine._canonical_reconcile_assertion("abc", "a" * 40)
-
-def test_reconcile_assertion_rejects_ambiguous_commit_prefix(tmp_path, monkeypatch):
-    working, config, _state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    base = git(working, "rev-parse", "HEAD").stdout.strip()
-
-    tree = git(working, "rev-parse", "HEAD^{tree}").stdout.strip()
-    parent = base
-    for index in range(2048):
-        message = f"ambiguous prefix {index}\n"
-        commit = subprocess.run(
-            ["git", "commit-tree", tree, "-p", parent, "-m", message.rstrip()],
-            cwd=working,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-        parent = commit.stdout.strip()
-    subprocess.run(
-        ["git", "update-ref", "refs/heads/ambiguous-prefixes", parent],
-        cwd=working,
-        check=True,
-    )
-
-    reachable = git(working, "rev-list", "--all").stdout.splitlines()
-    prefixes = {}
-    for commit in reachable:
-        prefix = commit[:4]
-        prefixes.setdefault(prefix, []).append(commit)
-    ambiguous = next(
-        prefix for prefix, matches in prefixes.items() if len(matches) > 1
-    )
-
-    engine = runtime.ServiceEngine(config)
-    with pytest.raises(DevlegateError, match="not a valid commit"):
-        engine._canonical_reconcile_assertion(ambiguous, base)
-
-def test_reconcile_auto_receipt_replays_canonical_prefix_after_restart(
-    tmp_path, monkeypatch
-):
-    working, config, _state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    engine = runtime.ServiceEngine(config)
-    original_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    prefix = original_base[:7]
-    engine._save_state(
-        "idle",
-        reconciliation={
-            "status": "pending",
-            "ticket_id": "T-1",
-            "execution_id": "execution-1",
-            "original_base": original_base,
-            "observed_product": original_base,
-            "worker_checkpoint": original_base,
-            "product_remote_head": original_base,
-            "control_head": original_base,
-            "execution_branch": "devlegate/execution/T-1",
-            "execution_path": str(working),
-            "evidence_ref": "evidence-1",
-        },
-    )
-    command = runtime.OperatorCommand(
-        "reconcile-replay",
-        "reconcile-auto",
-        runtime._reconcile_auto_request_fingerprint("T-1", prefix),
-        "T-1",
-        onto=prefix,
-    )
-    engine._admit_operator_command(command)
-    receipt = engine._state["mutable_receipts"]["reconcile-replay"]
-    assert receipt["onto"] == original_base
-    assert len(receipt["onto"]) == 40
-    assert receipt["resolution_class"] == "resume"
-
-    (working / "product-moved.txt").write_text("product moved\n")
-    git(working, "add", "product-moved.txt")
-    git(working, "commit", "-m", "move product after admission")
-    git(working, "push", "origin", "HEAD:main")
-
-    restarted = runtime.ServiceEngine(config)
-    monkeypatch.setattr(
-        restarted,
-        "_observe_product_generation",
-        lambda _original: pytest.fail("replayed receipt was reclassified"),
-    )
-    assert restarted.submit_reconcile_auto(
-        "T-1", prefix, request_id="reconcile-replay"
-    ) == {
-        "accepted": True,
-        "ticket_id": "T-1",
-        "onto": original_base,
-        "resolution_class": "resume",
-    }
-    assert restarted._operator_command is None
 
 def test_worker_gate_clears_bound_state_and_bound_state_requires_control_head(
     tmp_path, monkeypatch
@@ -915,7 +748,7 @@ def test_reconcile_resume_race_stays_unresolved_before_lifecycle(tmp_path, monke
 
     monkeypatch.setattr(runtime, "_git", racing_git)
     with pytest.raises(DevlegateError, match="remote changed during publication"):
-        devlegate.reconcile_resume("T-1")
+        run_test_iteration(devlegate)
     assert raced
     assert devlegate._state["reconciliation"]["status"] == "resolving"
     assert not (control / "kanban/review/T-1.md").exists()
@@ -1210,7 +1043,7 @@ def test_service_recovers_publication_failure_without_rerunning_worker(
     control = next((state / "worktrees").glob("*/control"))
     assert (control / "kanban/review/T-1.md").is_file()
 
-@pytest.mark.parametrize("interruption", [None, "operator_abort"])
+@pytest.mark.parametrize("interruption", [None, "process_loss", "operator_abort"])
 def test_checkpoint_recovery_preserves_source_before_reconciliation(
     tmp_path, monkeypatch, interruption
 ):
@@ -1306,31 +1139,38 @@ def test_checkpoint_recovery_preserves_source_before_reconciliation(
         )
 
     monkeypatch.setattr(restarted._workers, "run", revalidate)
-    if interruption:
+    if interruption == "operator_abort":
         for _ in range(2):
-            with pytest.raises(DevlegateError, match="explicit recovery is required"):
+            with pytest.raises(DevlegateError, match="run devlegate retry T-1"):
                 run_test_iteration(restarted)
         assert state_payload(state)["reconciliation"] == pending
         assert restarted._state.get("transfer_progress") is None
         assert launches == []
         assert git(working, "ls-remote", "--refs", "origin").stdout == remote_refs
         assert not (control / "kanban/review/T-1.md").exists()
-    else:
-        assert run_test_iteration(restarted) == 0
-        resolved = state_payload(state)["reconciliation"]
-        assert resolved["status"] == "resolved"
-        assert resolved["execution_report"] == pending["execution_report"]
-        fresh_id = resolved["resumed_execution_id"]
-        assert fresh_id != pending["execution_id"]
+        command = runtime.OperatorCommand("retry-id", "retry", "fingerprint", "T-1")
+        with restarted._lock():
+            restarted._admit_operator_command(command)
+            assert restarted._dispatch_operator_command(command, None) == 0
+        assert command.admission_result == {"accepted": True, "ticket_id": "T-1"}
         assert launches == []
-        assert not (control / "kanban/review/T-1.md").exists()
-        assert run_test_iteration(restarted) == 0
-        assert launches == [fresh_id]
-        assert (control / "kanban/review/T-1.md").is_file()
-        reports = list((control / "executions/T-1").glob("*.json"))
-        assert [json.loads(path.read_text())["execution_id"] for path in reports] == [
-            fresh_id,
-        ]
+        restarted = Devlegate(config)
+        monkeypatch.setattr(restarted._workers, "run", revalidate)
+    assert run_test_iteration(restarted) == 0
+    resolved = state_payload(state)["reconciliation"]
+    assert resolved["status"] == "resolved"
+    assert resolved["execution_report"] == pending["execution_report"]
+    fresh_id = resolved["resumed_execution_id"]
+    assert fresh_id != pending["execution_id"]
+    assert launches == []
+    assert not (control / "kanban/review/T-1.md").exists()
+    assert run_test_iteration(restarted) == 0
+    assert launches == [fresh_id]
+    assert (control / "kanban/review/T-1.md").is_file()
+    reports = list((control / "executions/T-1").glob("*.json"))
+    assert [json.loads(path.read_text())["execution_id"] for path in reports] == [
+        fresh_id,
+    ]
     assert (
         git(working, "rev-parse", pending["evidence_ref"]).stdout.strip() == checkpoint
     )
@@ -1657,10 +1497,7 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
         == reconciliation["worker_checkpoint"]
     )
 
-    git(working, "pull", "--ff-only", "origin", "main")
-    assert (
-        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"]) == 0
-    )
+    assert run_test_iteration(devlegate) == 0
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["execution_id"] != old_id
     assert devlegate._state["reconciliation"]["execution_report"] == (
@@ -2026,7 +1863,7 @@ def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     checkpoint = reconciliation["worker_checkpoint"]
     assert reconciliation["execution_report"]["workspace_head"] == checkpoint
     (working / "dirty-product.txt").unlink()
-    assert devlegate.reconcile_resume("T-1") == 0
+    assert run_test_iteration(devlegate) == 0
     assert calls == [True]
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["reconciliation"]["resolution"] == "resume"
@@ -2054,7 +1891,7 @@ def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
     reconciliation.pop("execution_report")
     devlegate._save_state("idle", reconciliation=reconciliation)
     (working / "dirty-product.txt").unlink()
-    assert devlegate.reconcile_resume("T-1") == 0
+    assert run_test_iteration(devlegate) == 0
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["resume_required"] == {
         "ticket_id": "T-1",
@@ -2140,8 +1977,8 @@ def test_reconcile_resume_rejects_unsafe_state(tmp_path, monkeypatch, mutation):
         git(working, "push", "origin", f"{moved}:refs/heads/main")
     elif mutation == "dirty product":
         (working / "dirty-again.txt").write_text("dirty\n")
-    with pytest.raises(DevlegateError):
-        devlegate.reconcile_resume("T-1")
+    with devlegate._lock(), pytest.raises(DevlegateError):
+        devlegate._reconcile_resume_owned("T-1")
     assert devlegate._state["reconciliation"]["status"] != "resolved"
     observed_remote = git(
         execution,
@@ -2179,6 +2016,15 @@ def test_reconcile_resume_rejects_malformed_retained_report(tmp_path, monkeypatc
     payload["reconciliation"]["execution_report"] = {"invalid": True}
     with pytest.raises(DevlegateError, match="retained reconciliation report"):
         runtime.ServiceEngine._validate_state_invariant(payload)
+
+def _admit_product_authorization(engine, pending, target):
+    command = runtime.OperatorCommand(
+        "authorize-product", "reconcile-authorize-product", "fingerprint",
+        pending["ticket_id"], onto=target, execution_id=pending["execution_id"],
+    )
+    with engine._lock():
+        engine._admit_operator_command(command)
+
 
 @pytest.mark.parametrize("disposition", ["resume", "reset"])
 def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
@@ -2225,8 +2071,11 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     assert target_parent == original_parent
     git(working, "reset", "--hard", reconciliation["observed_product"])
 
+    _admit_product_authorization(
+        devlegate, reconciliation, reconciliation["observed_product"],
+    )
     with pytest.raises(DevlegateError, match="waiting for source resolution"):
-        devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
+        run_test_iteration(devlegate)
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
     assert not git(execution, "status", "--porcelain").stdout
     assert (
@@ -2255,7 +2104,7 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     with restarted._lock():
         restarted._admit_operator_command(OperatorCommand(
             request_id="resolution", fingerprint="resolution",
-            method="reconcile-resume",
+            method="reconcile-resolve",
             ticket_id="T-1", onto=str(candidate),
             plan_digest=source_resolution_digest(candidate),
         ))
@@ -2358,14 +2207,15 @@ def test_engine_reconcile_update_base_requires_observable_same_parent_replacemen
         original_base = reconciliation["original_base"]
         monkeypatch.setattr(devlegate, "_git_runtime", unavailable)
         with pytest.raises(DevlegateError, match="commit unavailable"):
-            devlegate.reconcile_update_base("T-1", target)
+            _admit_product_authorization(devlegate, reconciliation, target)
         assert devlegate._state.get("transfer_progress") is None
         assert devlegate._state["reconciliation"] == reconciliation
         assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_checkpoint
         assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
         return
 
-    assert devlegate.reconcile_update_base("T-1", target) == 0
+    _admit_product_authorization(devlegate, reconciliation, target)
+    assert run_test_iteration(devlegate) == 0
     resolved = devlegate._state["reconciliation"]
     assert resolved["status"] == "resolved"
     assert resolved["resolution"] == "update-base"

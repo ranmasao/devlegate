@@ -36,9 +36,7 @@ from devlegate.ipc_client import (
     IPCClientError,
     decode_drop_ack,
     decode_drop_candidates,
-    decode_reconcile_ack,
     decode_reconcile_control_ack,
-    decode_reconcile_resume_ack,
     decode_retry_ack,
     decode_retry_candidates,
     decode_status,
@@ -980,124 +978,47 @@ def _abandonment_recover_daemon(env_file, ticket_id, execution_id, observed_head
     return 0
 
 
-def _reconcile_daemon(
-    env_file: Path,
-    ticket_id: str,
-    onto: str | None,
-    output_format: str,
-    rewrite_published: bool = False,
+def _reconciliation_decision(
+    env_file: Path, args: argparse.Namespace,
 ) -> int:
+    ticket_id = args.ticket_id
+    identity = {"ticket_id": ticket_id}
     try:
         locator = RuntimeLocator.from_env(env_file)
         if not locator.daemon_authority_present():
             raise DevlegateError(
                 "service is not running for this checkout; run `devlegate start`"
             )
-        payload = {
-            "ticket_id": ticket_id,
-            **({"onto": onto} if onto is not None else {}),
-            **({"rewrite_published": True} if rewrite_published else {}),
-        }
+        if args.reconcile_command == "resolve":
+            from devlegate.execution_workspace import ExecutionWorkspaceError
+            from devlegate.implementation_transfer import source_resolution_digest
+
+            path = Path(args.candidate).absolute()
+            try:
+                digest = source_resolution_digest(path)
+            except (OSError, ExecutionWorkspaceError) as error:
+                raise DevlegateError(str(error)) from error
+            payload = {**identity, "candidate": str(path), "candidate_digest": digest}
+        else:
+            identity.update(execution_id=args.execution, to=args.to)
+            payload = identity
         result = request(
-            locator.socket_path,
-            "reconcile-update-base",
-            payload,
-            mutable=True,
+            locator.socket_path, f"reconcile-{args.reconcile_command}",
+            payload, mutable=True,
         )
-        effective_onto = result.get("onto")
-        if not isinstance(effective_onto, str) or not effective_onto:
-            raise DevlegateError("service returned an invalid reconciliation target")
-        decode_reconcile_ack(result, ticket_id, effective_onto)
-    except RuntimeLocatorError as error:
-        raise DevlegateError(str(error)) from error
-    except IPCClientError as error:
-        raise DevlegateError(str(error)) from error
-    result = {"result": "accepted", "ticket_id": ticket_id, "onto": effective_onto}
-    emit(
-        result,
-        output_format,
-        f"reconciliation request accepted: {ticket_id}; see service log for result",
-    )
-    return 0
-
-
-def _reconcile_resume_daemon(
-    env_file: Path, ticket_id: str, output_format: str = "table", *,
-    resolve_candidate: str | None = None,
-) -> int:
-    payload = {"ticket_id": ticket_id}
-    if resolve_candidate is not None:
-        from devlegate.execution_workspace import ExecutionWorkspaceError
-        from devlegate.implementation_transfer import source_resolution_digest
-
-        path = Path(resolve_candidate).absolute()
-        try:
-            payload["candidate_digest"] = source_resolution_digest(path)
-        except (OSError, ExecutionWorkspaceError) as error:
-            raise DevlegateError(str(error)) from error
-        payload["resolve_candidate"] = str(path)
-    try:
-        locator = RuntimeLocator.from_env(env_file)
-        if not locator.daemon_authority_present():
-            raise DevlegateError(
-                "service is not running for this checkout; run `devlegate start`"
-            )
-        result = request(
-            locator.socket_path,
-            "reconcile-resume",
-            payload,
-            mutable=True,
-        )
-        decode_reconcile_resume_ack(result, ticket_id)
-    except RuntimeLocatorError as error:
-        raise DevlegateError(str(error)) from error
-    except IPCClientError as error:
-        raise DevlegateError(str(error)) from error
-    result = {"result": "accepted", "ticket_id": ticket_id}
-    emit(
-        result,
-        output_format,
-        (f"REWORK confirmation recorded: {ticket_id}; see service status for result"
-         if resolve_candidate is not None
-         else f"reconciliation resume accepted: {ticket_id}"),
-    )
-    return 0
-
-
-def _reconcile_auto_daemon(
-    env_file: Path, ticket_id: str, onto: str | None, output_format: str
-) -> int:
-    try:
-        locator = RuntimeLocator.from_env(env_file)
-        if not locator.daemon_authority_present():
-            raise DevlegateError(
-                "service is not running for this checkout; run `devlegate start`"
-            )
-        payload = {"ticket_id": ticket_id}
-        if onto is not None:
-            payload["onto"] = onto
-        result = request(locator.socket_path, "reconcile-auto", payload, mutable=True)
-        if result.get("accepted") is not True or result.get("ticket_id") != ticket_id:
+        if (result.get("accepted") is not True
+                or result != {"accepted": True, **identity}):
             raise DevlegateError(
                 "service returned an invalid reconciliation acknowledgement"
             )
-        effective_onto = result.get("onto")
-        if effective_onto is not None and (
-            not isinstance(effective_onto, str) or not effective_onto
-        ):
-            raise DevlegateError("service returned an invalid reconciliation target")
     except RuntimeLocatorError as error:
         raise DevlegateError(str(error)) from error
     except IPCClientError as error:
         raise DevlegateError(str(error)) from error
     emit(
-        {
-            "result": "accepted",
-            "ticket_id": ticket_id,
-            **({"onto": effective_onto} if effective_onto is not None else {}),
-        },
-        output_format,
-        f"reconciliation request accepted: {ticket_id}; see service log for result",
+        {"result": "accepted", **identity},
+        args.output_format,
+        f"reconciliation decision recorded: {ticket_id}; see status for progress",
     )
     return 0
 
@@ -2970,7 +2891,7 @@ class DevlegateArgumentParser(ConciseArgumentParser):
                 ("reset", "start the same ticket anew"),
                 ("retry", "retry a failed or recoverable execution"),
                 ("drop", "retire a blocked execution without applying it"),
-                ("reconcile", "perform explicit reconciliation"),
+                ("reconcile", "confirm conflict edits or authorize a lineage change"),
             ),
         ),
         ("Other", (("version", "show program version"),)),
@@ -3337,61 +3258,36 @@ def build_parser() -> argparse.ArgumentParser:
     add_output_arguments(abandonment_recover)
     reconcile_parser = commands.add_parser(
         "reconcile",
-        help="resolve a pending reconciliation",
+        help="confirm conflict edits or authorize a lineage change",
         description=(
-            "Handle a pending product-base change for an execution. Resolve it "
-            "using the strongest safe service-owned operation. Normal form: "
-            "devlegate reconcile TICKET. The optional --onto assertion accepts a "
-            "full SHA or a unique hexadecimal prefix of at least 4 characters. "
-            "Names other than the listed commands are ticket IDs, including command "
-            "prefixes. Use auto TICKET for IDs matching a command name."
+            "The service reconciles ordinary changes automatically. Use status to "
+            "see progress and blockers. These commands record explicit decisions."
         ),
     )
     reconcile_commands = reconcile_parser.add_subparsers(
-        dest="reconcile_command", parser_class=DevlegateArgumentParser
+        dest="reconcile_command", parser_class=DevlegateArgumentParser, required=True,
     )
-    auto_parser = reconcile_commands.add_parser(
-        "auto",
-        help="automatically reconcile a ticket (also the default form)",
+    product_parser = reconcile_commands.add_parser(
+        "authorize-product", help="authorize an exceptional product lineage change",
         description=(
-            "Automatically reconcile a ticket using the safe service-owned operation."
+            "Authorize transferring one retained execution onto an exact non-linear "
+            "product descendant or same-parent replacement, including rewriting its "
+            "proven published execution ref if necessary. See status for exact IDs."
         ),
     )
-    auto_parser.add_argument("ticket_id", help="ticket execution to reconcile")
-    auto_parser.add_argument("--onto", help="assert the current product HEAD")
-    add_output_arguments(auto_parser)
-    update_base_parser = reconcile_commands.add_parser(
-        "update-base",
-        help="update an execution to a new product base",
-        description="Update a ticket execution after the product base changes.",
+    product_parser.add_argument("ticket_id")
+    product_parser.add_argument(
+        "--execution", required=True, help="pending execution ID",
     )
-    update_base_parser.add_argument("ticket_id", help="ticket execution to update")
-    update_base_parser.add_argument(
-        "--onto",
-        help=(
-            "exact current product HEAD, as a full SHA or unique hexadecimal "
-            "prefix of at least 4 characters; defaults to service observation"
-        ),
+    product_parser.add_argument("--to", required=True, help="full product commit ID")
+    add_output_arguments(product_parser)
+    resolve_parser = reconcile_commands.add_parser(
+        "resolve", help="confirm edited source in the waiting conflict candidate",
+        description="Confirm source edits in the exact candidate shown by status.",
     )
-    update_base_parser.add_argument(
-        "--rewrite-published",
-        action="store_true",
-        help="authorize rewriting the published Devlegate execution ref",
-    )
-    resume_parser = reconcile_commands.add_parser(
-        "resume",
-        help="resume retained execution progress on the same product base",
-        description=(
-            "Resume retained execution progress without changing the product base."
-        ),
-    )
-    resume_parser.add_argument("ticket_id", help="ticket execution to resume")
-    resume_parser.add_argument(
-        "--resolve-candidate", metavar="PATH",
-        help="confirm the current source edits in the named waiting REWORK candidate",
-    )
-    add_output_arguments(resume_parser)
-    add_output_arguments(update_base_parser)
+    resolve_parser.add_argument("ticket_id")
+    resolve_parser.add_argument("candidate", metavar="PATH")
+    add_output_arguments(resolve_parser)
     control_reconcile_parser = reconcile_commands.add_parser(
         "control",
         help="adopt an explicitly authorized divergent control history",
@@ -3569,37 +3465,14 @@ def main() -> int:
 def _main() -> int:
     parser = build_parser()
     argv, project_alias = _selector_argv(sys.argv[1:], parser)
-    shorthand = None
-    index = 0
-    if argv and argv[0] == "--env":
-        index = 2
-    elif argv and argv[0].startswith("--env="):
-        index = 1
-    if len(argv) > index and argv[index] == "reconcile":
-        if (
-            index + 1 < len(argv)
-            and argv[index + 1] not in {"auto", "resume", "update-base", "control"}
-            and not argv[index + 1].startswith("-")
-        ):
-            shorthand = argv[index + 1]
-            argv[index + 1 : index + 1] = ["auto"]
     args = parser.parse_args(argv)
     if args.command == "reconcile" and args.reconcile_command in {
-        "auto", "resume", "update-base"
+        "authorize-product", "resolve",
     }:
         from devlegate.tickets import is_canonical_ticket_name
 
         if not is_canonical_ticket_name(args.ticket_id + ".md"):
             parser.error(f"invalid ticket ID: {args.ticket_id!r}")
-        if shorthand and any(
-            name.startswith(shorthand)
-            for name in ("auto", "resume", "update-base", "control")
-        ):
-            print(
-                f"devlegate: interpreting {shorthand!r} as a ticket ID; "
-                "use `reconcile --help` for command syntax",
-                file=sys.stderr,
-            )
     args.project_alias = project_alias
     startup_fd = _startup_fd()
     match args.command:
@@ -3655,10 +3528,6 @@ def _main() -> int:
         except DevlegateError as error:
             print(f"devlegate: {error}", file=sys.stderr)
             return 1
-    if args.command == "reconcile" and args.reconcile_command is None:
-        DevlegateArgumentParser(prog="devlegate reconcile").error(
-            "a reconcile command is required"
-        )
     if args.command == "project":
         if project_alias is not None or args.service_env is not None:
             parser.error("project selectors are not valid for project commands")
@@ -3849,32 +3718,11 @@ def _main() -> int:
                 args.output_format,
             )
         if args.command == "reconcile":
-            if args.reconcile_command == "auto":
-                return _reconcile_auto_daemon(
-                    env_file, args.ticket_id, args.onto, args.output_format
-                )
             if args.reconcile_command == "control":
                 return _reconcile_control(
                     env_file, args.from_head, args.to_head, args.output_format
                 )
-            if args.reconcile_command == "resume":
-                if args.resolve_candidate is not None:
-                    return _reconcile_resume_daemon(
-                        env_file, args.ticket_id, args.output_format,
-                        resolve_candidate=args.resolve_candidate,
-                    )
-                if args.output_format == "table":
-                    return _reconcile_resume_daemon(env_file, args.ticket_id)
-                return _reconcile_resume_daemon(
-                    env_file, args.ticket_id, args.output_format
-                )
-            return _reconcile_daemon(
-                env_file,
-                args.ticket_id,
-                args.onto,
-                args.output_format,
-                args.rewrite_published,
-            )
+            return _reconciliation_decision(env_file, args)
     except KeyboardInterrupt:
         _notify_startup_failure(KeyboardInterrupt())
         return 130

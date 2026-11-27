@@ -16,6 +16,7 @@ from devlegate.reconciliation import (
 from devlegate.resource_binding import ResourceBinding
 from devlegate.runtime_state_validation import DevlegateError
 from devlegate.transfer_transaction import (
+    ProductLineageError,
     TransferTransaction,
     automatic_target,
     origin_digest,
@@ -275,22 +276,40 @@ def advance_pending(owner):
     ticket, base = value["ticket_id"], value["original_base"]
     progress = owner._state.get("transfer_progress") or {}
     intent = progress.get("active_binding")
-    source = owner._execution_generation_binding()
     if intent:
+        source = owner._execution_generation_binding()
         transaction = ActiveTransfer.admitted(owner, source, value)
         if transaction.installation_started or not transaction.automatic:
             if progress.get("conflict") and not progress.get("confirmation"):
                 transaction.require_authority()
                 raise ExecutionWorkspaceError(_waiting(progress))
-            return update_base(owner, ticket, intent["base"], replay=True)
-    if (owner._state.get("manual_retry_required") or value.get("interruption_kind")):
+            return complete_admitted(transaction)
+    if requires_retry(owner, value):
         raise ExecutionWorkspaceError(
-            "interrupted execution retained; explicit recovery is required"
+            f"interrupted execution retained; run devlegate retry {ticket} "
+            "to authorize continuation"
         )
     product = owner._observe_product_generation(base)
-    target = automatic_target(owner, base, product)
+    try:
+        target = automatic_target(owner, base, product)
+    except ProductLineageError as error:
+        target = product["remote_head"]
+        require_target_lineage(owner, base, target)
+        hint = (
+            f"; if intentional, synchronize the product checkout to the observed "
+            f"remote and run devlegate reconcile authorize-product {ticket} "
+            f"--execution {value['execution_id']} --to {target}"
+            if not intent else "; admitted transfer retained"
+        )
+        raise ExecutionWorkspaceError(f"{error}{hint}") from error
     if target == base and value.get("installed_source") is not None:
         raise ExecutionWorkspaceError("product rolled back; installed source retained")
+    if (target == base and not intent
+            and not owner._state.get("execution_resource_binding")):
+        # Retake the exact same-base publication path for legacy state. That
+        # path proves workspace/branch, pinned H, and the predecessor itself.
+        return owner._reconcile_resume_owned(ticket)
+    source = owner._execution_generation_binding()
     if intent and intent["base"] != target:
         if target == base or not owner._is_ancestor_runtime(
             owner.repo, intent["base"], target,
@@ -320,7 +339,13 @@ def advance_pending(owner):
         # Keep the old attempt and H on disk. A new generation cannot consume its
         # confirmation, even if a client submits the old candidate path again.
         owner._save_state("idle", transfer_progress=None)
-    return update_base(owner, ticket, target, automatic=True, replay=bool(intent))
+        intent = None
+    if target == base:
+        return owner._reconcile_resume_owned(ticket)
+    if not intent:
+        transaction = plan_transfer(owner, value, target, automatic=True)
+        transaction.save(**planned_progress(transaction))
+    return complete_admitted(transaction)
 
 
 def _waiting(progress):
@@ -328,95 +353,85 @@ def _waiting(progress):
                            progress.get("resolution_error"))
 
 
-def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False,
-                automatic=False):
+def requires_retry(owner, value):
+    return bool(owner._state.get("manual_retry_required")) or (
+        value.get("interruption_kind") == "operator_abort"
+        and value.get("retry_authorized") is not True
+    )
+
+
+def plan_transfer(owner, value, target, *, automatic):
     owner._assert_repository_owner()
     if owner._stop_before_admission():
         raise ExecutionWorkspaceError("transfer paused for service shutdown")
-    value = owner.reconciliation_pending()
-    if value["ticket_id"] != ticket_id:
-        raise ExecutionWorkspaceError(
-            "requested ticket does not match pending reconciliation"
-        )
+    ticket_id = value["ticket_id"]
     base, checkpoint = value["original_base"], value["worker_checkpoint"]
-    target = owner._resolve_commit_runtime(owner.repo, onto)
-    if target is None:
-        raise ExecutionWorkspaceError("requested reconciliation target is not a commit")
     source = owner._execution_generation_binding()
     manager = source.manager
     if (manager.branch != value["execution_branch"]
             or str(manager.path) != value["execution_path"]):
         raise ExecutionWorkspaceError("reconciliation workspace binding is invalid")
-    progress = owner._state.get("transfer_progress")
     if "execution_remote_head" not in value:
         raise ExecutionWorkspaceError("reconciliation lacks execution predecessor")
     before = value["execution_remote_head"]
-    if (target != base and before is not None
-            and not (rewrite_published or replay or automatic)):
+    product = owner._observe_product_generation(base)
+    if not product["target_eligible"]:
+        raise ExecutionWorkspaceError(str(product["reason"]))
+    if product["local_head"] != target or product["remote_head"] != target:
         raise ExecutionWorkspaceError(
-            f"published execution ref refs/heads/{manager.branch} requires "
-            "--rewrite-published authorization"
+            "target must match current local and remote product HEAD"
         )
-    if progress is not None:
-        intent = progress.get("active_binding")
-        if intent is None or intent["base"] != target:
-            raise ExecutionWorkspaceError("target differs from admitted transfer")
-        binding = ResourceBinding(manager, intent)
-        rewrite_published = progress["rewrite_published"]
-        automatic = progress.get("automatic", False)
+    if automatic:
+        automatic_target(owner, base, product)
     else:
-        product = owner._observe_product_generation(base)
-        if product["branch"] != owner.current_branch:
-            raise ExecutionWorkspaceError("product checkout is on the wrong branch")
-        if product["dirty"]:
-            raise ExecutionWorkspaceError("product checkout is dirty")
-        if product["local_head"] != target:
-            raise ExecutionWorkspaceError(
-                "requested reconciliation target is not the current product HEAD"
-            )
-        if product["remote_head"] != target:
-            raise ExecutionWorkspaceError(
-                "requested reconciliation target is not the fresh product remote HEAD"
-            )
-        if automatic:
+        require_target_lineage(owner, base, target)
+        try:
             automatic_target(owner, base, product)
-            rewrite_published = before is not None
+        except ProductLineageError:
+            pass
         else:
-            require_target_lineage(owner, base, target)
-        if target == base:
-            return owner._reconcile_resume_owned(ticket_id)
-        control = value["control_head"]
-        require_control(owner, control, ticket_id)
-        if source.latest_remote(source.intent["prior_remote"]) != before:
-            raise ExecutionWorkspaceError("active upstream predecessor is unproven")
-        if (automatic and before is not None
-                and source.abandonment_remote_authority() != before):
             raise ExecutionWorkspaceError(
-                "published execution ref ownership is unproved"
+                "product lineage is eligible for automatic reconciliation"
             )
-        if before is not None and (
-            (before == base and not (automatic and before == checkpoint))
-            or not owner._is_ancestor_runtime(owner.repo, base, before)
-            or not owner._is_ancestor_runtime(owner.repo, before, checkpoint)
-        ):
-            raise ExecutionWorkspaceError(
-                "published execution ref is outside the proven execution lineage"
-            )
-        binding = ResourceBinding.plan(
-            manager, execution_id=new_execution_id(), base=target, control=control,
-            ticket_blob=source.intent["ticket_blob"], remote=owner.remote_name,
-            remote_head=before,
+    control = value["control_head"]
+    require_control(owner, control, ticket_id)
+    if source.latest_remote(source.intent["prior_remote"]) != before:
+        raise ExecutionWorkspaceError("active upstream predecessor is unproven")
+    if before is not None and source.abandonment_remote_authority() != before:
+        raise ExecutionWorkspaceError("published execution ref ownership is unproved")
+    if before is not None and (
+        (before == base and not (automatic and before == checkpoint))
+        or not owner._is_ancestor_runtime(owner.repo, base, before)
+        or not owner._is_ancestor_runtime(owner.repo, before, checkpoint)
+    ):
+        raise ExecutionWorkspaceError(
+            "published execution ref is outside the proven execution lineage"
         )
-        binding.intent["transfer_origin"] = _origin(value, rewrite_published, automatic)
+    rewrite_published = before is not None
+    binding = ResourceBinding.plan(
+        manager, execution_id=new_execution_id(), base=target, control=control,
+        ticket_blob=source.intent["ticket_blob"], remote=owner.remote_name,
+        remote_head=before,
+    )
+    binding.intent["transfer_origin"] = _origin(value, rewrite_published, automatic)
     transaction = ActiveTransfer(
         owner, binding, source, value, rewrite_published, automatic,
     )
-    if progress is None:
-        transaction.require_source(transaction.identity)
-        transaction.save(
-            active_binding=binding.intent, rewrite_published=rewrite_published,
-            **({"automatic": True} if automatic else {}),
-        )
+    transaction.require_source(transaction.identity)
+    transaction.require_authority()
+    return transaction
+
+
+def planned_progress(transaction):
+    return {
+        "active_binding": transaction.binding.intent,
+        "rewrite_published": transaction.binding.intent["prior_remote"] is not None,
+        **({"automatic": True} if transaction.automatic else {}),
+    }
+
+
+def complete_admitted(transaction):
+    binding = transaction.binding
     if not (binding.directory / "intent.json").exists():
         transaction.require_source(transaction.identity)
         binding.record_intent()

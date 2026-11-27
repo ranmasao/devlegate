@@ -73,25 +73,42 @@ def test_ping_and_status_work_and_plan_is_rejected_over_unix_socket(running_serv
     assert not plan.ok
     assert plan.error["code"] == "unknown_method"
 
-def test_reconcile_resume_routes_over_live_unix_socket(running_server):
+@pytest.mark.parametrize("method", [
+    "reconcile-auto", "reconcile-update-base", "reconcile-resume",
+])
+def test_removed_reconciliation_methods_are_unknown(running_server, method):
+    _engine, _state, server = running_server
+    response = request(server.path, "removed", method, {"ticket_id": "LAB-111"})
+    assert not response.ok
+    assert response.error["code"] == "unknown_method"
+
+
+def test_reconcile_resolve_routes_exact_confirmation_over_live_socket(running_server):
     engine, _state, server = running_server
     calls = []
 
-    def submit(ticket_id, *, request_id):
-        calls.append((ticket_id, request_id))
+    def submit(ticket_id, *, request_id, candidate, candidate_digest):
+        calls.append((ticket_id, request_id, candidate, candidate_digest))
         return {"accepted": True, "ticket_id": ticket_id}
 
-    engine.submit_reconcile_resume = submit
+    engine.submit_reconcile_resolve = submit
+    payload = {
+        "ticket_id": "LAB-111", "candidate": "/candidate", "candidate_digest": "a" * 64,
+    }
     response = request(
         server.path,
-        "resume-id",
-        "reconcile-resume",
-        {"ticket_id": "LAB-111"},
+        "confirm-id",
+        "reconcile-resolve",
+        payload,
     )
 
     assert response.ok
     assert response.result == {"accepted": True, "ticket_id": "LAB-111"}
-    assert calls == [("LAB-111", "resume-id")]
+    invalid = request(
+        server.path, "bad-id", "reconcile-resolve", {"ticket_id": "LAB-111"},
+    )
+    assert invalid.error["code"] == "invalid_request"
+    assert calls == [("LAB-111", "confirm-id", "/candidate", "a" * 64)]
 
 def test_malformed_request_does_not_crash_server(running_server):
     _engine, _state, _server = running_server

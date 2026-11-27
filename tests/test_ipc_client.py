@@ -11,8 +11,6 @@ from devlegate.cli import _execution_projection, _render_status_text
 from devlegate.ipc_client import (
     IPCClientError,
     decode_plan,
-    decode_reconcile_ack,
-    decode_reconcile_resume_ack,
     decode_status,
     request,
 )
@@ -157,23 +155,6 @@ def test_mutable_ambiguous_delivery_replays_same_request_identity(tmp_path):
     assert received[0].request_id == received[1].request_id
     assert received[0].method == received[1].method == "retry"
     assert received[0].payload == received[1].payload == {"ticket_id": "T-1"}
-
-
-def test_reconcile_ack_decoder_requires_exact_identity():
-    value = {"accepted": True, "ticket_id": "T-1", "onto": "B"}
-    assert decode_reconcile_ack(value, "T-1", "B") is None
-    with pytest.raises(IPCClientError, match="invalid reconciliation acknowledgement"):
-        decode_reconcile_ack({**value, "onto": "C"}, "T-1", "B")
-
-
-def test_reconcile_resume_ack_decoder_requires_exact_identity():
-    assert decode_reconcile_resume_ack(
-        {"accepted": True, "ticket_id": "T-1"}, "T-1"
-    ) is None
-    with pytest.raises(IPCClientError, match="reconciliation resume acknowledgement"):
-        decode_reconcile_resume_ack(
-            {"accepted": True, "ticket_id": "T-1", "onto": "B"}, "T-1"
-        )
 
 
 def representative_observation(branch="main"):

@@ -105,17 +105,14 @@ def test_settled_task_199_rework_keeps_predecessor_authority(multi_commit_rework
 
 
 @pytest.mark.parametrize("boundary", [
-    "candidate", "cas", "publication", "remote", "control", "product",
-    "generation", "incorporated", "auto-candidate", "auto-cas", "auto-publication",
-    "auto-supersede", "auto-chain",
+    "candidate", "cas", "publication", "remote", "control",
+    "generation", "incorporated", "supersede", "chain",
 ])
 def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boundary):
     from devlegate import implementation_transfer, runtime
 
     owner, config, published = multi_commit_rework
     repo = owner.repo
-    automatic = boundary.startswith("auto-")
-    boundary = boundary.removeprefix("auto-")
 
     def drift(workspace, _prompt, **_kwargs):
         (workspace.path / "third.txt").write_text("active checkpoint\n")
@@ -135,12 +132,9 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     count = git(path, "rev-list", "--count", f"{source['original_base']}..HEAD").stdout
     assert count == "3\n"
     reports = ExecutionReportStore(owner.control_worktree).list("T-1")
-    with pytest.raises(DevlegateError, match="--rewrite-published"):
-        owner.reconcile_update_base("T-1", target)
-
     if boundary == "incorporated":
         with pytest.raises(DevlegateError, match="execution lineage is invalid"):
-            owner.reconcile_update_base("T-1", target, rewrite_published=True)
+            run_test_iteration(owner)
         assert git(path, "rev-parse", "HEAD").stdout.strip() == head
         assert git(repo, "ls-remote", "origin", ref).stdout.split()[0] == (
             published.workspace_head
@@ -151,8 +145,8 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     if boundary == "generation":
         wrong = dict(owner._state["execution_resource_binding"], generation="f" * 64)
         owner._save_state("idle", execution_resource_binding=wrong)
-        with pytest.raises(DevlegateError, match="source or admission differs"):
-            owner.reconcile_update_base("T-1", target, rewrite_published=True)
+        with pytest.raises(DevlegateError, match="independent intent or receipt"):
+            run_test_iteration(owner)
         assert owner._state.get("transfer_progress") is None
         assert git(path, "rev-parse", "HEAD").stdout.strip() == head
         return
@@ -180,8 +174,8 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         result = original_git(cwd, *args, **kwargs)
         if cas or push:
             effects.append(("cas" if cas else "publication", result.returncode))
-        if not fired and ((cas and boundary in {"cas", "control", "product", "chain"})
-                          or (push and boundary == "publication")):
+        if not fired and ((cas and boundary in {"cas", "control", "chain"})
+                           or (push and boundary == "publication")):
             fired = True
             assert result.returncode == 0
             raise ProcessLoss()
@@ -191,10 +185,7 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     monkeypatch.setattr(implementation_transfer, "_publish", interrupt_record)
     expected = DevlegateError if boundary == "remote" else ProcessLoss
     with pytest.raises(expected):
-        if automatic:
-            run_test_iteration(owner)
-        else:
-            owner.reconcile_update_base("T-1", target, rewrite_published=True)
+        run_test_iteration(owner)
     assert fired
     assert owner._state["reconciliation"] == source
     assert ExecutionReportStore(owner.control_worktree).list("T-1") == reports
@@ -208,14 +199,13 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         control = owner.control_worktree
         git(control, "commit", "--allow-empty", "-m", "move the control authority")
         git(control, "push", "origin", "devlegate/control")
-    elif boundary in {"product", "chain", "supersede"}:
+    elif boundary in {"chain", "supersede"}:
         (repo / "later.txt").write_text("C\n")
         git(repo, "add", "later.txt")
         git(repo, "commit", "-m", "move the product authority")
         git(repo, "push", "origin", "HEAD:main")
 
-    final_target = (git(repo, "rev-parse", "HEAD").stdout.strip()
-                    if automatic else target)
+    final_target = git(repo, "rev-parse", "HEAD").stdout.strip()
 
     restarted = Devlegate(config)
     if boundary == "cas":
@@ -242,7 +232,7 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
         return completed()
 
     monkeypatch.setattr(restarted._workers, "run", worker)
-    if boundary in {"control", "product", "remote"}:
+    if boundary in {"control", "remote"}:
         with pytest.raises(WorkspacePreparationBlockedError):
             run_test_iteration(restarted)
         assert not launches
@@ -355,7 +345,6 @@ def test_waiting_rework_refuses_stale_or_unowned_handoff(
     digest = source_resolution_digest(path)
     ref = f"refs/heads/{source.execution_branch}"
     if change == "product":
-        advance_product(repo)
         expected = "stale REWORK target"
     elif change == "control":
         control = owner.control_worktree
@@ -387,11 +376,13 @@ def test_waiting_rework_refuses_stale_or_unowned_handoff(
     restarted = Devlegate(config)
     with restarted._lock():
         command = OperatorCommand(
-            request_id="test-confirmation", method="reconcile-resume",
+            request_id="test-confirmation", method="reconcile-resolve",
             fingerprint="test-fingerprint", ticket_id="T-1", onto=str(path),
             plan_digest=digest,
         )
         restarted._admit_operator_command(command)
+        if change == "product":
+            advance_product(repo)
         transaction = ReworkTransfer(
             restarted, restarted._execution_generation_binding(),
             restarted._state["rework_provenance"],
@@ -423,7 +414,7 @@ def test_reset_discards_waiting_rework_without_using_candidate(
     with owner._lock():
         if confirmation_recorded:
             command = OperatorCommand(
-                request_id="reset-confirmation", method="reconcile-resume",
+                request_id="reset-confirmation", method="reconcile-resolve",
                 fingerprint="test-fingerprint", ticket_id="T-1", onto=str(candidate),
                 plan_digest=source_resolution_digest(candidate),
             )

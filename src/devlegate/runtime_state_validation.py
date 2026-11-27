@@ -355,6 +355,10 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             reconciliation["reason"], str
         ):
             raise DevlegateError("invalid reconciliation reason")
+        if "retry_authorized" in reconciliation and reconciliation[
+            "retry_authorized"
+        ] is not True:
+            raise DevlegateError("invalid retained execution retry authorization")
         if "execution_remote_head" in reconciliation and not (
             reconciliation["execution_remote_head"] is None
             or _is_git_identity(reconciliation["execution_remote_head"])

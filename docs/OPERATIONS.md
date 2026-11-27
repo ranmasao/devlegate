@@ -268,7 +268,6 @@ to the ticket's exact ID, then choose the appropriate command:
 ```sh
 devlegate retry "$TICKET_ID"
 devlegate drop "$TICKET_ID"
-devlegate reconcile "$TICKET_ID"
 ```
 
 `retry` requests a new attempt after a failed execution. `drop` retires a
@@ -282,18 +281,19 @@ worker validation before returning the ticket for review. Reviewed requeues
 likewise carry their original review into the next worker. Check status for
 the current blocker; network failures retry at the normal polling interval.
 
-The explicit `reconcile`, `reconcile resume`, and `reconcile update-base` forms
-remain available for exceptional requests. `--onto` asserts the exact current
-product HEAD;
-it does not select the algorithm. Supply it as a full SHA or a unique hexadecimal
-commit prefix of at least 4 characters; Devlegate records the resolved full ID.
-Explicit `reconcile update-base` requires `--rewrite-published` if it would
-replace a published execution ref. The canonical `reconcile <ticket-id>` form
-retains its existing service-proven published-lineage policy.
+`reconcile authorize-product TICKET --execution EXECUTION --to COMMIT` is for
+an intentional product lineage change the automatic policy does not authorize:
+a proven same-parent replacement or a non-linear descendant. First verify the
+change and synchronize the clean product checkout to that exact remote commit.
+Use the pending execution ID and full target commit ID shown in `status`. The
+decision includes replacing the execution's proven published ref if necessary.
+It does not allow unrelated history, unproved ownership, or a stale selection.
+`reconcile control --from LOCAL --to REMOTE` separately acknowledges an exact
+external control-history rewrite.
 
-If an update-base or REWORK transfer reports a conflict, edit source files only
+If an active or REWORK transfer reports a conflict, edit source files only
 at the candidate path named in status or the service log. Then confirm the
-exact edits with `devlegate reconcile resume "$TICKET_ID" --resolve-candidate
+exact edits with `devlegate reconcile resolve "$TICKET_ID"
 /absolute/candidate/path` (on one line). Confirmation records the decision;
 status shows whether the owner completed the handoff or found another blocker.
 Restart retains a waiting conflict. If the product advances again, status may
@@ -307,12 +307,16 @@ validation could launch, reset can instead retire that settled generation while
 retaining its checkpoint. A refusal preserves the checkpoint and candidate. See the
 [transfer contract](implementation-transfer.md) for the clean upgrade boundary.
 
-Ticket IDs start with an ASCII letter or digit and may also contain ASCII
-letters, digits, underscores, and hyphens. Thus `reconcile update` selects the
-ticket `update`, not an abbreviation of `update-base`. Exact command names take
-precedence; use `reconcile auto resume` (or another command name) to select a
-ticket with that name. Invalid syntax is rejected before sending an IPC request;
-the service remains responsible for admission and ownership decisions.
+| Situation | Previous operator surface | Current action |
+| --- | --- | --- |
+| Clean transfer or REWORK | Automatic; manual stage commands also exposed | None. Check `status` or `inspect` for progress. |
+| Restart or interrupted transfer | Automatic replay; a manual resume command also exposed | None for proved replay. Explicit `retry` releases an operator-abort hold; `recover` remains for an exact unsafe pre-worker workspace binding. |
+| Transfer conflict | Source edits, then the candidate-confirmation form of resume | Source edits, then one `reconcile resolve` against the displayed candidate. |
+| Exceptional product or control lineage | Manual transfer with optional published rewrite authority; separate control acknowledgement | One exact product authorization after synchronization, or one exact control acknowledgement. |
+
+These commands acknowledge recorded decisions, not completed effects. Use
+`status` to see the result. `retry`, `reset`, `drop`, `recover`, and force forms
+retain their separate intent and safety checks.
 
 `devlegate stop --force` is the only lifecycle command that persists an
 execution-scoped manual-retry barrier. It records explicit operator intent for
