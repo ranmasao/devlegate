@@ -1,0 +1,30 @@
+{
+  "code_base_head": "556a8864b8b54a899257f6efd218abee5e27b90d",
+  "conclusion": "completed",
+  "control_head": "6f7f5c9f49db95b2ccabcac2199b33e8ce96343f",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-198",
+  "execution_id": "5ac6fbe4934a46fcb1030905ff5b3df7",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-198",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-198/5ac6fbe4934a46fcb1030905ff5b3df7.md",
+  "report_sha256": "8832f91e1f1c5e3e45aa952ae887a9674bb79a250660bf13a70aa835b13e20d4",
+  "resource_generation": "dce6bbf9506006c27be0fe3cee89091179922dc95e5b4054cbfa2b8ce28a1ee2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-198",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused local regressions: 274 passed, 1 skipped. ./dev lint and git diff --check passed. Hosted CI at the exact successor checkpoint is a Devlegate integration gate and has not been verified by this worker.",
+    "summary": "Reworked owner-held transfer to reuse exact known candidates without a checkout and to recompute interrupted private Git work from admitted inputs. Published conflicts retain their files and require exact authorization before the owner checkpoints a resolution and continues."
+  },
+  "workspace_head": "06a0ce600956db4547467f363c24cc822873a00a"
+}
