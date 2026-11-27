@@ -12,6 +12,7 @@ from _ipc_support import (
     _request,
     dispatch_mutation,
     dispatch_read_only,
+    encode_request,
     git,
     ipc_server,
     make_engine,
@@ -131,12 +132,26 @@ def test_wrong_peer_credential_is_rejected_without_stopping_server(
     server = UnixIPCServer(engine, engine.ipc_socket_path)
     server.start()
     monkeypatch.setattr(
+        engine, "submit_reconcile_authorize_product",
+        lambda *args, **kwargs: pytest.fail("untrusted peer reached admission"),
+    )
+    monkeypatch.setattr(
         "devlegate.ipc_server._peer_credentials_are_current_user", lambda _socket: False
     )
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         connection.connect(str(server.path))
-        assert receive_frame(connection.makefile("rb")) is None
+        connection.settimeout(2)
+        with connection.makefile("rwb") as stream:
+            try:
+                send_frame(stream, encode_request(
+                    "untrusted", "reconcile-authorize-product",
+                    {"ticket_id": "T-1", "execution_id": "execution", "to": "a" * 40},
+                ))
+                assert receive_frame(stream) is None
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The credential check can close the socket before any read.
+        assert not engine._state.get("mutable_receipts")
     finally:
         connection.close()
         server.stop()

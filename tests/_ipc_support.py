@@ -48,7 +48,6 @@ from devlegate.runtime import (
     DevlegateError,
     OperatorCommand,
     RetryCandidate,
-    _reconcile_resume_request_fingerprint,
 )
 from devlegate.service import ServiceEngine
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
@@ -105,7 +104,6 @@ __all__ = [
     "UnixIPCServer",
     "WorkerClaim",
     "WorkerRunResult",
-    "_reconcile_resume_request_fingerprint",
     "_request",
     "cli",
     "control_fixture",

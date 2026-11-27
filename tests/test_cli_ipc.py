@@ -7,33 +7,6 @@
 from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
 
-def test_reconcile_resume_routes_to_daemon_helper(
-    cli_daemon, git_fixture, monkeypatch, capsys
-):
-    accepted = []
-
-    def resume(_env_file, ticket_id):
-        accepted.append(ticket_id)
-        return 0
-
-    config = _short_runtime_config(git_fixture)
-    monkeypatch.setattr("devlegate.cli._reconcile_resume_daemon", resume)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "devlegate",
-            "--env",
-            str(config),
-            "reconcile",
-            "resume",
-            "LAB-111",
-        ],
-    )
-    assert main() == 0
-    assert accepted == ["LAB-111"]
-    assert capsys.readouterr().out == ""
-
 def test_version_does_not_contact_daemon(monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["devlegate", "version"])
     monkeypatch.setattr(cli, "request", pytest.fail)
@@ -435,109 +408,6 @@ def test_force_retry_rejection_is_synchronous_and_has_no_success_ack(
     assert "matching-live" in output.err
     assert "forced retry admitted" not in output.out
 
-def test_reconcile_uses_daemon_authority_and_never_constructs_cli_engine(
-    cli_daemon, git_fixture, monkeypatch, capsys
-):
-    accepted = []
-
-    def submit(ticket_id, onto, *, request_id):
-        accepted.append((ticket_id, onto, request_id))
-        return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
-
-    monkeypatch.setattr(cli_daemon, "submit_reconcile_update_base", submit)
-    monkeypatch.setattr(
-        "devlegate.cli._service_engine",
-        lambda *_args, **_kwargs: pytest.fail("CLI constructed mutable engine"),
-    )
-    config = _short_runtime_config(git_fixture)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "devlegate",
-            "--env",
-            str(config),
-            "reconcile",
-            "update-base",
-            "T-1",
-            "--onto",
-            "abc123",
-        ],
-    )
-
-    assert main() == 0
-    assert accepted and accepted[0][:2] == ("T-1", "abc123")
-    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
-
-def test_canonical_reconcile_uses_automatic_ipc_operation(
-    cli_daemon, git_fixture, monkeypatch, capsys
-):
-    accepted = []
-
-    def submit(ticket_id, onto, *, request_id):
-        accepted.append((ticket_id, onto, request_id))
-        return {
-            "accepted": True,
-            "ticket_id": ticket_id,
-            "resolution_class": "resume",
-        }
-
-    monkeypatch.setattr(cli_daemon, "submit_reconcile_auto", submit)
-    monkeypatch.setattr(
-        "devlegate.cli._service_engine",
-        lambda *_args, **_kwargs: pytest.fail("CLI constructed mutable engine"),
-    )
-    config = _short_runtime_config(git_fixture)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "devlegate",
-            "--env",
-            str(config),
-            "reconcile",
-            "T-1",
-        ],
-    )
-
-    assert main() == 0
-    assert accepted and accepted[0][0] == "T-1"
-    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
-
-def test_canonical_reconcile_onto_is_forwarded_as_assertion(
-    cli_daemon, git_fixture, monkeypatch, capsys
-):
-    accepted = []
-
-    def submit(ticket_id, onto, *, request_id):
-        accepted.append((ticket_id, onto, request_id))
-        return {
-            "accepted": True,
-            "ticket_id": ticket_id,
-            "onto": onto,
-            "resolution_class": "resume",
-        }
-
-    monkeypatch.setattr(cli_daemon, "submit_reconcile_auto", submit)
-    config = _short_runtime_config(git_fixture)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "devlegate",
-            "--env",
-            str(config),
-            "reconcile",
-            "T-1",
-            "--onto",
-            "current-head",
-        ],
-    )
-
-    assert main() == 0
-    assert accepted and accepted[0][1] == "current-head"
-    assert "reconciliation request accepted: T-1" in capsys.readouterr().out
-
 def test_reconcile_refuses_without_daemon_without_constructing_engine(
     git_fixture, monkeypatch, capsys
 ):
@@ -555,10 +425,9 @@ def test_reconcile_refuses_without_daemon_without_constructing_engine(
             "--env",
             str(config),
             "reconcile",
-            "update-base",
+            "authorize-product",
             "T-1",
-            "--onto",
-            "abc123",
+            "--to", "a" * 40, "--execution", "execution",
         ],
     )
 
@@ -589,10 +458,9 @@ def test_reconcile_refuses_connectable_socket_without_authority(
             "--env",
             str(config),
             "reconcile",
-            "update-base",
+            "resolve",
             "T-1",
-            "--onto",
-            "abc123",
+            "candidate",
         ],
     )
     try:
@@ -626,10 +494,9 @@ def test_reconcile_fails_closed_when_authority_exists_without_socket(
             "--env",
             str(config),
             "reconcile",
-            "update-base",
+            "authorize-product",
             "T-1",
-            "--onto",
-            "abc123",
+            "--to", "a" * 40, "--execution", "execution",
         ],
     )
     try:
@@ -1249,58 +1116,6 @@ def test_real_service_receipt_restart_is_not_a_persistent_command_queue(
             lambda: (engine.control_worktree / "kanban/review/T-1.md").is_file()
         )
         assert attempts.read_text().splitlines() == ["attempt"]
-    finally:
-        service.stop()
-
-def test_real_service_reconcile_receipt_restart_is_not_a_queue(
-    git_fixture, monkeypatch
-):
-    monkeypatch.chdir(git_fixture["working"])
-    config = _recovery_config(git_fixture)
-    engine = _service_engine_with_control(git_fixture, config)
-    _add_service_ticket(engine)
-
-    def worker(workspace, _prompt, **_kwargs):
-        (workspace.path / "implementation.txt").write_text("worker\n")
-        (git_fixture["working"] / "product-change.txt").write_text("product B\n")
-        git(git_fixture["working"], "add", "product-change.txt")
-        git(git_fixture["working"], "commit", "-m", "advance product")
-        git(git_fixture["working"], "push", "origin", "HEAD:main")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "implemented", (), ()), None
-        )
-
-    monkeypatch.setattr(engine._workers, "run", worker)
-    assert run_test_iteration(engine) == 1
-    target = engine._state["reconciliation"]["observed_product"]
-    git(git_fixture["working"], "pull", "--ff-only", "origin", "main")
-    monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "receipt_after_save")
-    release_marker = git_fixture["tmp"] / "reconcile-operator-released"
-    release_marker.unlink(missing_ok=True)
-    monkeypatch.setenv("DEVLEGATE_TEST_OPERATOR_RELEASE_MARKER", str(release_marker))
-    service = LiveService(
-        git_fixture["working"],
-        config,
-        command=_recovery_driver(config, "receipt_after_save"),
-    )
-    service.start()
-    service.wait_ready()
-    try:
-        try:
-            service.cli("reconcile", "update-base", "T-1", "--onto", target, timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        _wait_process_death(service)
-        before = _disk_state(config)["reconciliation"]
-        monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
-        service.restart()
-        assert _disk_state(config)["reconciliation"] == before
-        result = service.cli("reconcile", "update-base", "T-1", "--onto", target)
-        assert result.returncode == 0, result.stderr
-        service.wait_for(
-            lambda: _disk_state(config)["reconciliation"]["status"] == "resolved"
-        )
-        service.wait_for(lambda: release_marker.exists())
     finally:
         service.stop()
 

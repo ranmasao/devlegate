@@ -184,8 +184,8 @@ establish independent service topology.
 | `devlegate`, `devlegate foreground`, `devlegate once` | Construct the canonical `_service_engine()` and call `run_service()` with the selected hosting mode | KEEP - canonical service commands | `src/devlegate/cli.py`, `src/devlegate/daemon.py` |
 | `devlegate stop` | Uses the authenticated IPC stop request and does not construct an engine | KEEP - canonical service control command | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
 | `devlegate status` | Tries IPC first and uses a read-only guarded `ServiceEngine` canonical `status_view()` fallback only when authority is absent | KEEP - read-only bootstrap/offline path | `src/devlegate/cli.py` |
-| `devlegate retry` / `reconcile update-base` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | KEEP - canonical client path | `src/devlegate/cli.py:103-179`, `src/devlegate/ipc_server.py:47-78` |
-| `ServiceEngine.retry()` / `reconcile_update_base()` / `reconcile_resume()` | Direct internal engine methods, called by semantic tests and owner-side code; not called by CLI client dispatch | KEEP - intentional internal semantic seam | `src/devlegate/runtime.py`; owner command handling routes through the corresponding owned methods |
+| `devlegate retry` / `reconcile resolve`, `authorize-product`, `control` | Validate CLI input and submit IPC intentions; do not construct a mutable CLI engine | Canonical client path | `src/devlegate/cli.py`, `src/devlegate/ipc_server.py` |
+| Owner loop | Advances routine reconciliation without operator requests | Canonical transaction path | `src/devlegate/runtime.py`, `src/devlegate/active_transfer.py`, `src/devlegate/transfer_transaction.py` |
 
 ### Construction Map
 
@@ -212,14 +212,14 @@ The production mutable path is:
 ```text
 CLI retry/reconcile -> Unix IPC -> dispatch_mutation
   -> ServiceEngine.submit_* -> owner command admission
-  -> ServiceEngine owner loop -> _retry_owned/_reconcile_update_base_owned
+  -> ServiceEngine owner loop -> intent-specific proof and effects
   -> _save_state and other runtime mutations
 ```
 
 `RuntimeStore` writes occur inside `ServiceEngine` methods. CLI clients must not
 write runtime state directly, and IPC handlers submit mutable work to the owner
-instead of executing it. `ServiceEngine.retry()` and `reconcile_update_base()`
-are owner-side algorithms and useful lower-layer regression seams.
+instead of executing it. Automatic transfer and recorded reconciliation decisions
+use the same owner-held transfer transaction.
 
 The following tests exercise bootstrap, semantic, or IPC seams:
 

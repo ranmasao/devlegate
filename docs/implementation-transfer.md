@@ -110,7 +110,7 @@ new files. Do not stage, commit or change Git administration. To confirm the
 edits to the running owner, use:
 
 ```sh
-devlegate reconcile resume T-1 --resolve-candidate /absolute/candidate/path
+devlegate reconcile resolve T-1 /absolute/candidate/path
 ```
 
 The CLI captures the current source bytes. One runtime write records their
@@ -150,10 +150,11 @@ remote HEAD, then admit that exact agreed target. A published execution ref
 may be replaced only by a transfer retaining its source and proving the exact
 owned ref and predecessor lease. The binding's origin digest and transfer
 progress record that authority before execution-ref effects. A same-parent
-replacement remains explicit; arbitrary product or control rewrites are not
-eligible. The zero-delta automatic retry retains its own retirement and
-admission path. A mechanical replay cannot omit a contributing commit merely
-because its change already exists in B.
+replacement or non-linear descendant requires `reconcile authorize-product`
+with the exact pending execution and agreed local/remote product commit.
+Arbitrary product rewrites are not eligible. The zero-delta automatic retry
+retains its own retirement and admission path. A mechanical replay cannot omit
+a contributing commit merely because its change already exists in B.
 
 Before installation, a new linear target can supersede an untouched mechanical
 attempt. The owner retains old attempt evidence and assigns a fresh generation;

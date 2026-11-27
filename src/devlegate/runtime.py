@@ -57,9 +57,10 @@ from devlegate.abandonment_refs import (
 )
 from devlegate.active_transfer import (
     advance_pending,
-    require_target_lineage,
+    plan_transfer,
+    planned_progress,
+    requires_retry,
     retain_stale_install,
-    update_base,
 )
 from devlegate.agent_protocol import (
     AgentProtocolError,
@@ -566,15 +567,15 @@ class OperatorCommand:
     ticket_id: str
     onto: str | None = None
     execution_id: str | None = None
-    rewrite_published: bool = False
     force: bool = False
     mutable: bool = True
-    resolution_class: str | None = None
     plan_digest: str | None = None
     generation: str | None = None
     include_prompt: bool = False
     observation_deadline: float | None = None
     reset_intent: dict[str, object] | None = None
+    transfer_plan: dict | None = None
+    retry_retained: bool = False
     admission_event: threading.Event = dataclasses.field(
         default_factory=threading.Event
     )
@@ -616,30 +617,6 @@ def _recover_request_fingerprint(
             "execution_id": execution_id,
             "observed_head": observed_head,
         },
-    )
-
-
-def _reconcile_request_fingerprint(
-    ticket_id: str, onto: str | None, rewrite_published: bool = False
-) -> str:
-    return _mutation_fingerprint(
-        "reconcile-update-base",
-        {
-            "ticket_id": ticket_id,
-            "onto": onto if onto is not None else "<current-product-head>",
-            "rewrite_published": "1" if rewrite_published else "0",
-        },
-    )
-
-
-def _reconcile_resume_request_fingerprint(ticket_id: str) -> str:
-    return _mutation_fingerprint("reconcile-resume", {"ticket_id": ticket_id})
-
-
-def _reconcile_auto_request_fingerprint(ticket_id: str, onto: str | None) -> str:
-    return _mutation_fingerprint(
-        "reconcile-auto",
-        {"ticket_id": ticket_id, "onto": onto if onto is not None else "<auto>"},
     )
 
 
@@ -1148,60 +1125,37 @@ class ServiceEngine:
             }),
         )
 
-    def submit_reconcile_update_base(
-        self,
-        ticket_id: str,
-        onto: str | None,
-        *,
-        rewrite_published: bool = False,
-        request_id: str,
+    def submit_reconcile_resolve(
+        self, ticket_id: str, *, request_id: str, candidate: str, candidate_digest: str,
     ) -> dict[str, object]:
-        """Submit one reconciliation intent for owner-side admission."""
+        if not re.fullmatch(r"[0-9a-f]{64}", candidate_digest):
+            raise DevlegateError("resolution requires observed candidate content")
         return self._submit_operator_command(
-            method="reconcile-update-base",
+            method="reconcile-resolve",
             ticket_id=ticket_id,
-            onto=onto,
-            rewrite_published=rewrite_published,
+            onto=candidate,
             request_id=request_id,
-            fingerprint=_reconcile_request_fingerprint(
-                ticket_id, onto, rewrite_published
-            ),
-        )
-
-    def submit_reconcile_resume(
-        self, ticket_id: str, *, request_id: str, resolve_candidate: str | None = None,
-        candidate_digest: str | None = None,
-    ) -> dict[str, object]:
-        """Submit same-base reconciliation for owner-side admission."""
-        fingerprint = _reconcile_resume_request_fingerprint(ticket_id)
-        if resolve_candidate is not None:
-            if not candidate_digest or not re.fullmatch(
-                r"[0-9a-f]{64}", candidate_digest,
-            ):
-                raise DevlegateError("resolution requires observed candidate content")
-            fingerprint = _mutation_fingerprint("reconcile-resume", {
-                "ticket_id": ticket_id, "resolve_candidate": resolve_candidate,
+            fingerprint=_mutation_fingerprint("reconcile-resolve", {
+                "ticket_id": ticket_id, "candidate": candidate,
                 "candidate_digest": candidate_digest,
-            })
-        return self._submit_operator_command(
-            method="reconcile-resume",
-            ticket_id=ticket_id,
-            onto=resolve_candidate,
-            request_id=request_id,
-            fingerprint=fingerprint,
+            }),
             plan_digest=candidate_digest,
         )
 
-    def submit_reconcile_auto(
-        self, ticket_id: str, onto: str | None, *, request_id: str
+    def submit_reconcile_authorize_product(
+        self, ticket_id: str, execution_id: str, target: str, *, request_id: str
     ) -> dict[str, object]:
-        """Submit the intent-driven reconciliation operation."""
+        if not _is_git_identity(target):
+            raise DevlegateError("a full product commit ID is required")
         return self._submit_operator_command(
-            method="reconcile-auto",
+            method="reconcile-authorize-product",
             ticket_id=ticket_id,
-            onto=onto,
+            onto=target,
+            execution_id=execution_id,
             request_id=request_id,
-            fingerprint=_reconcile_auto_request_fingerprint(ticket_id, onto),
+            fingerprint=_mutation_fingerprint("reconcile-authorize-product", {
+                "ticket_id": ticket_id, "execution_id": execution_id, "to": target,
+            }),
         )
 
     def submit_reconcile_control(
@@ -1362,7 +1316,6 @@ class ServiceEngine:
         fingerprint: str,
         onto: str | None = None,
         execution_id: str | None = None,
-        rewrite_published: bool = False,
         force: bool = False,
         mutable: bool = True,
         plan_digest: str | None = None,
@@ -1414,9 +1367,8 @@ class ServiceEngine:
                     return self._operator_ack(
                         method,
                         ticket_id,
-                        receipt.get("onto", onto),
+                        onto,
                         execution_id,
-                        receipt.get("resolution_class"),
                     )
             existing = self._operator_command or self._operator_active_command
             if method == "reset" and self._operator_command is None and (
@@ -1453,7 +1405,6 @@ class ServiceEngine:
                     ticket_id=ticket_id,
                     onto=onto,
                     execution_id=execution_id,
-                    rewrite_published=rewrite_published,
                     force=force,
                     plan_digest=plan_digest,
                     generation=generation,
@@ -2084,103 +2035,33 @@ class ServiceEngine:
             },
         )
 
-    def _validate_reconcile_admission(self, command: OperatorCommand) -> None:
-        reconciliation = self._state.get("reconciliation")
-        if not isinstance(reconciliation, dict) or reconciliation.get("status") != (
-            "pending"
-        ):
-            raise DevlegateError(
-                f"ticket {command.ticket_id} has no pending reconciliation"
-            )
-        if reconciliation.get("ticket_id") != command.ticket_id:
-            raise DevlegateError(
-                "requested ticket does not match pending reconciliation"
-            )
-        product = self._observe_product_generation(str(reconciliation["original_base"]))
-        if product["branch"] != self.current_branch:
-            raise DevlegateError("product checkout is on the wrong branch")
-        if product["dirty"]:
-            raise DevlegateError("product checkout is dirty")
-        local_head = str(product["local_head"])
-        remote_head = str(product["remote_head"])
-        if not local_head or not remote_head:
-            raise DevlegateError("current product generation is not observable")
-        if local_head != remote_head:
-            raise DevlegateError("current product local and remote HEADs do not agree")
-        if command.onto is None:
-            command.onto = local_head
-        else:
-            command.onto = self._canonical_reconcile_assertion(command.onto, local_head)
-        binding = (self._state.get("transfer_progress") or {}).get("active_binding")
-        if binding is None:
-            require_target_lineage(self, reconciliation["original_base"], command.onto)
-        elif command.onto != binding["base"]:
-            raise DevlegateError("target differs from admitted transfer")
-
-    def _canonical_reconcile_assertion(self, value: str, current_head: str) -> str:
-        if not value:
-            raise DevlegateError("requested reconciliation target is empty")
-        if re.fullmatch(r"[0-9a-fA-F]+", value) and len(value) < 4:
-            raise DevlegateError(
-                "requested reconciliation target is a hexadecimal commit prefix; "
-                "use at least 4 characters"
-            )
-        try:
-            canonical = self._resolve_commit_runtime(self.repo, value)
-        except GitObservationError as error:
-            raise DevlegateError(
-                "requested reconciliation target is not a valid commit; "
-                "use a full SHA or a unique hexadecimal prefix of at least 4 characters"
-            ) from error
-        if canonical is None:
-            raise DevlegateError(
-                "requested reconciliation target is not a valid commit; "
-                "use a full SHA or a unique hexadecimal prefix of at least 4 characters"
-            )
-        if canonical != current_head:
-            raise DevlegateError(
-                "requested reconciliation target is not the current product HEAD"
-            )
-        return canonical
-
-    def _validate_reconcile_auto_admission(self, command: OperatorCommand) -> None:
-        if (self._state.get("transfer_progress") or {}).get("active_binding"):
-            raise DevlegateError("update-base transfer already admitted")
-        reconciliation = self._state.get("reconciliation")
+    def _plan_product_authorization(self, command: OperatorCommand) -> dict:
+        current = self.reconciliation_pending()
         if (
-            not isinstance(reconciliation, dict)
-            or reconciliation.get("status") != "pending"
+            self._state.get("phase") != "idle"
+            or self._state.get("worker_identity") is not None
+            or self._state.get("execution_id") != current["execution_id"]
         ):
             raise DevlegateError(
-                f"ticket {command.ticket_id} has no pending reconciliation"
+                "product authorization requires the retained execution"
             )
-        if reconciliation.get("ticket_id") != command.ticket_id:
+        if (current["ticket_id"], current["execution_id"]) != (
+            command.ticket_id, command.execution_id,
+        ):
+            raise DevlegateError("authorization does not match the pending execution")
+        if self._state.get("transfer_progress"):
+            raise DevlegateError("a transfer is already admitted")
+        if requires_retry(self, current):
             raise DevlegateError(
-                "requested ticket does not match pending reconciliation"
+                f"interrupted execution requires retry {command.ticket_id}"
             )
-        product = self._observe_product_generation(str(reconciliation["original_base"]))
-        if product["branch"] != self.current_branch:
-            raise DevlegateError("product checkout is on the wrong branch")
-        if product["dirty"]:
-            raise DevlegateError("product checkout is dirty")
-        local_head = str(product["local_head"])
-        remote_head = str(product["remote_head"])
-        if not local_head or not remote_head:
-            raise DevlegateError("current product generation is not observable")
-        if local_head != remote_head:
-            raise DevlegateError("current product local and remote HEADs do not agree")
-        target = local_head
-        require_target_lineage(self, reconciliation["original_base"], target)
-        if command.onto is not None:
-            command.onto = self._canonical_reconcile_assertion(command.onto, target)
-        else:
-            command.onto = None if product["stable"] else target
-        if product["stable"]:
-            command.resolution_class = "resume"
-        elif reconciliation.get("execution_remote_head") is not None:
-            command.resolution_class = "update-base with published-lineage rewrite"
-        else:
-            command.resolution_class = "update-base"
+        assert command.onto is not None
+        try:
+            transaction = plan_transfer(self, current, command.onto, automatic=False)
+            return planned_progress(transaction)
+        except (ExecutionWorkspaceError, EvidenceError, GitObservationError,
+                GitAncestryError, OSError, subprocess.CalledProcessError) as error:
+            raise DevlegateError(str(error)) from error
 
     def _automatic_zero_delta_authorization(
         self,
@@ -2397,6 +2278,29 @@ class ServiceEngine:
                 raise DevlegateError("workspace cleanup limit must be positive")
             return
         if command.method == "retry":
+            current = self._state.get("reconciliation") or {}
+            if (
+                not command.force and self._state.get("phase") == "idle"
+                and current.get("status") == "pending"
+                and current.get("ticket_id") == command.ticket_id
+                and current.get("execution_id") == self._state.get("execution_id")
+                and self._state.get("worker_identity") is None
+                and requires_retry(self, current)
+            ):
+                marker = self._state.get("manual_retry_required")
+                base = self._state.get("execution_base_head")
+                if marker is not None and (
+                    marker.get("ticket_id") != command.ticket_id
+                    or marker.get("execution_id") != current["execution_id"]
+                    or marker.get("generation") != current["original_base"]
+                    or marker.get("generation") != base
+                ):
+                    raise DevlegateError(
+                        "manual retry hold does not match retained execution"
+                    )
+                command.retry_retained = True
+                command.execution_id = current["execution_id"]
+                return
             self._validate_retry_admission(command.ticket_id, command.force)
             return
         if command.method == "drop":
@@ -2411,16 +2315,10 @@ class ServiceEngine:
                 command.ticket_id, command.execution_id, command.onto
             )
             return
-        if command.method == "reconcile-update-base":
-            self._validate_reconcile_admission(command)
+        if command.method == "reconcile-authorize-product":
+            command.transfer_plan = self._plan_product_authorization(command)
             return
-        if command.method == "reconcile-auto":
-            self._validate_reconcile_auto_admission(command)
-            return
-        if command.method == "reconcile-resume":
-            if command.onto is None:
-                self._validate_reconcile_resume_admission(command.ticket_id)
-                return
+        if command.method == "reconcile-resolve":
             progress = self._state.get("transfer_progress") or {}
             conflict = progress.get("conflict")
             if (
@@ -2436,6 +2334,9 @@ class ServiceEngine:
                 raise DevlegateError("confirmation must name the waiting candidate")
             if progress.get("confirmation") is not None:
                 raise DevlegateError("candidate confirmation is already recorded")
+            product = self._observe_product_generation(conflict["identity"]["target"])
+            if not product["stable"]:
+                raise DevlegateError(f"stale candidate retained: {product['reason']}")
             return
         if command.method == "reconcile-control":
             if command.onto is None:
@@ -2452,7 +2353,6 @@ class ServiceEngine:
         ticket_id: str,
         onto: str | None,
         execution_id: str | None = None,
-        resolution_class: str | None = None,
     ) -> dict[str, object]:
         if method == "cleanup-workspaces":
             return {"accepted": True, "ticket_id": ticket_id}
@@ -2483,23 +2383,11 @@ class ServiceEngine:
                     "reconcile-control requires both control revisions"
                 )
             return {"accepted": True, "from": ticket_id, "to": onto}
-        if method == "reconcile-resume":
+        if method == "reconcile-resolve":
             return {"accepted": True, "ticket_id": ticket_id}
-        if method == "reconcile-update-base":
-            if onto is None:
-                raise DevlegateError("reconciliation target was not resolved")
-            return {"accepted": True, "ticket_id": ticket_id, "onto": onto}
-        if method == "reconcile-auto":
-            return {
-                "accepted": True,
-                "ticket_id": ticket_id,
-                **({"onto": onto} if onto is not None else {}),
-                **(
-                    {"resolution_class": resolution_class}
-                    if resolution_class is not None
-                    else {}
-                ),
-            }
+        if method == "reconcile-authorize-product":
+            return {"accepted": True, "ticket_id": ticket_id,
+                    "execution_id": execution_id, "to": onto}
         raise DevlegateError(f"unsupported operator command: {method}")
 
     @staticmethod
@@ -2527,8 +2415,6 @@ class ServiceEngine:
                         "ticket_id",
                         "accepted",
                         "execution_id",
-                        "onto",
-                        "resolution_class",
                         "result",
                         "cohort",
                     }
@@ -2548,14 +2434,6 @@ class ServiceEngine:
                 not isinstance(execution_id, str) or not execution_id
             ):
                 raise DevlegateError("invalid mutable request receipt execution")
-            onto = receipt.get("onto")
-            if onto is not None and (not isinstance(onto, str) or not onto):
-                raise DevlegateError("invalid mutable request receipt target")
-            resolution_class = receipt.get("resolution_class")
-            if resolution_class is not None and (
-                not isinstance(resolution_class, str) or not resolution_class
-            ):
-                raise DevlegateError("invalid mutable request receipt resolution")
             result = receipt.get("result")
             if result is not None and not isinstance(result, dict):
                 raise DevlegateError("invalid mutable request receipt result")
@@ -2623,16 +2501,6 @@ class ServiceEngine:
             execution_id = getattr(command, "execution_id", None)
             if execution_id is not None:
                 receipt["execution_id"] = execution_id
-            if command.method == "reconcile-update-base" or (
-                command.method == "reconcile-auto" and command.onto is not None
-            ):
-                if command.onto is None:
-                    raise DevlegateError("reconciliation target was not resolved")
-                receipt["onto"] = command.onto
-            if command.method == "reconcile-auto":
-                if command.resolution_class is None:
-                    raise DevlegateError("automatic reconciliation was not classified")
-                receipt["resolution_class"] = command.resolution_class
             if command.method == "cleanup-workspaces":
                 if command.onto is None:
                     raise DevlegateError("workspace cleanup limit is missing")
@@ -2659,9 +2527,8 @@ class ServiceEngine:
                 )
                 return
             updated[command.request_id] = receipt
-            reconciliation = None
-            transfer_progress = None
-            if command.method == "reconcile-resume" and command.onto is not None:
+            transfer_progress = command.transfer_plan
+            if command.method == "reconcile-resolve":
                 # Persist the exact decision alongside its replay receipt. The
                 # scheduler validates and applies it under repository ownership,
                 # after admission and without the command lock.
@@ -2672,28 +2539,6 @@ class ServiceEngine:
                         "source_digest": command.plan_digest,
                     },
                     "resolution_error": None,
-                }
-            elif command.method == "reconcile-resume":
-                current = self._state.get("reconciliation")
-                if not isinstance(current, dict):
-                    raise DevlegateError("invalid reconciliation state")
-                reconciliation = {
-                    **current,
-                    "status": "resolving",
-                    "resolution": "resume",
-                }
-            elif command.method == "reconcile-auto":
-                current = self._state.get("reconciliation")
-                if not isinstance(current, dict):
-                    raise DevlegateError("invalid reconciliation state")
-                reconciliation = {
-                    **current,
-                    "resolution": (
-                        "resume"
-                        if command.resolution_class == "resume"
-                        else "update-base"
-                    ),
-                    "resolution_class": command.resolution_class,
                 }
             manual_retry = self._state.get("manual_retry_required")
             clear_manual_retry = (
@@ -2714,6 +2559,9 @@ class ServiceEngine:
                 str(self._state["phase"]),
                 mutable_receipts=updated,
                 **({"manual_retry_required": None} if clear_manual_retry else {}),
+                **({"reconciliation": {
+                    **self._state["reconciliation"], "retry_authorized": True,
+                }} if command.retry_retained else {}),
                 **(
                     {
                         "operator_recovery": {
@@ -2725,7 +2573,6 @@ class ServiceEngine:
                     if command.method == "recover"
                     else {}
                 ),
-                **({"reconciliation": reconciliation} if reconciliation else {}),
                 **({"transfer_progress": transfer_progress} if transfer_progress
                    else {}),
             )
@@ -3023,7 +2870,6 @@ class ServiceEngine:
                     command.ticket_id,
                     command.onto,
                     getattr(command, "execution_id", None),
-                    command.resolution_class,
                 )
         except DevlegateError as error:
             if not recording:
@@ -10517,6 +10363,10 @@ class ServiceEngine:
             self._recover_abandonment_owned(command)
             return 0
         if command.method == "retry":
+            if command.retry_retained:
+                self._workspace_preparation_blocker = None
+                self.wake()
+                return 0
             if command.force:
                 return self._retry_owned(command.ticket_id, stop_event, True)
             return self._retry_owned(command.ticket_id, stop_event)
@@ -10529,45 +10379,10 @@ class ServiceEngine:
                 command.ticket_id, command.execution_id, command.onto
             )
             return 0
-        if command.method == "reconcile-resume":
-            if command.onto is not None:
-                self._workspace_preparation_blocker = None
-                self.wake()
-                return 0
-            return self._reconcile_resume_owned(command.ticket_id)
-        if command.method == "reconcile-auto":
-            reconciliation = self._state.get("reconciliation")
-            resolution_class = (
-                reconciliation.get("resolution_class")
-                if isinstance(reconciliation, dict)
-                else None
-            )
-            if resolution_class == "resume":
-                return self._reconcile_resume_owned(command.ticket_id)
-            if (
-                resolution_class
-                not in {
-                    "update-base",
-                    "update-base with published-lineage rewrite",
-                }
-                or command.onto is None
-            ):
-                raise DevlegateError(
-                    "automatic reconciliation classification is invalid"
-                )
-            return self._reconcile_update_base_owned(
-                command.ticket_id, command.onto, rewrite_published=True
-            )
-        if command.method == "reconcile-update-base":
-            if command.onto is None:
-                raise DevlegateError(
-                    "reconcile-update-base requires a product base target"
-                )
-            return self._reconcile_update_base_owned(
-                command.ticket_id,
-                command.onto,
-                rewrite_published=command.rewrite_published,
-            )
+        if command.method in {"reconcile-resolve", "reconcile-authorize-product"}:
+            self._workspace_preparation_blocker = None
+            self.wake()
+            return 0
         if command.method == "reconcile-control":
             if command.onto is None:
                 raise DevlegateError(
@@ -12810,21 +12625,6 @@ class ServiceEngine:
             # infrastructure failures recoverable in the hosted polling loop.
             raise DevlegateError(str(error)) from error
 
-    def reconcile_update_base(
-        self, ticket_id: str, onto: str, *, rewrite_published: bool = False
-    ) -> int:
-        """Transplant the preserved linear worker lineage onto an explicit base."""
-        return self._reconcile_update_base_owned(
-            ticket_id,
-            onto,
-            rewrite_published=rewrite_published,
-            _take_lock=True,
-        )
-
-    def reconcile_resume(self, ticket_id: str) -> int:
-        """Recover retained execution progress without changing its product base."""
-        return self._reconcile_resume_owned(ticket_id, _take_lock=True)
-
     def reconcile_control(self, from_head: str, to_head: str) -> int:
         """Adopt an explicitly authorized divergent control history."""
         return self._reconcile_control_owned(from_head, to_head, _take_lock=True)
@@ -13030,196 +12830,171 @@ class ServiceEngine:
             )
         return copy.deepcopy(reconciliation)
 
-    def _reconcile_update_base_owned(
-        self,
-        ticket_id: str,
-        onto: str,
-        *,
-        rewrite_published: bool = False,
-        _take_lock: bool = False,
-        _replay: bool = False,
-    ) -> int:
-        """Run the owner-held reconciliation transaction."""
-        try:
-            with self._lock() if _take_lock else nullcontext():
-                return update_base(
-                    self, ticket_id, onto, rewrite_published=rewrite_published,
-                    replay=_replay,
-                )
-        except (ExecutionWorkspaceError, EvidenceError, GitObservationError,
-                GitAncestryError, OSError, subprocess.CalledProcessError) as error:
-            raise DevlegateError(str(error)) from error
-
-    def _reconcile_resume_owned(
-        self, ticket_id: str, *, _take_lock: bool = False
-    ) -> int:
-        authority = self._lock() if _take_lock else nullcontext()
-        with authority:
-            self._validate_reconcile_resume_admission(ticket_id)
-            reconciliation = self._state.get("reconciliation")
-            if not isinstance(reconciliation, dict) or reconciliation.get(
-                "status"
-            ) not in {"pending", "resolving"}:
-                raise DevlegateError(
-                    f"ticket {ticket_id} has no resumable reconciliation"
-                )
-            if reconciliation.get("ticket_id") != ticket_id:
-                raise DevlegateError("requested ticket does not match reconciliation")
-            original_base = str(reconciliation["original_base"])
-            checkpoint = str(reconciliation["worker_checkpoint"])
-            was_resolving = reconciliation["status"] == "resolving"
-            pending_report = reconciliation.get("execution_report")
-            product = self._observe_product_generation(original_base)
-            if not product["stable"]:
-                if not (was_resolving and isinstance(pending_report, dict)):
-                    raise DevlegateError(
-                        f"same-base reconciliation cannot resume: {product['reason']}"
-                    )
-                # The resume intent alone admitted no publication. Re-enter the
-                # common recovery stage; it will settle any exact publication WAL
-                # first, or preserve H for transfer if publication never began.
-                automatic_target(self, original_base, product)
-            self._validate_control_worktree()
-            recorded_control = str(reconciliation["control_head"])
-            control_head = resolve_commit(
-                self.control_worktree, "HEAD", runner=self._git_runtime
+    def _reconcile_resume_owned(self, ticket_id: str) -> int:
+        self._assert_repository_owner()
+        self._validate_reconcile_resume_admission(ticket_id)
+        reconciliation = self._state.get("reconciliation")
+        if not isinstance(reconciliation, dict) or reconciliation.get(
+            "status"
+        ) not in {"pending", "resolving"}:
+            raise DevlegateError(
+                f"ticket {ticket_id} has no resumable reconciliation"
             )
-            if (control_head != recorded_control or (
-                was_resolving and self._execution_remote_head(self.control_branch)
-                != recorded_control
-            )):
-                raise DevlegateError("control revision changed during reconciliation")
-            store = self._ticket_store(head=control_head, require_clean=True)
-            ticket = store.by_id.get(ticket_id)
-            if ticket is None or ticket.state not in {"todo", "review"}:
-                raise DevlegateError("reconciliation ticket is no longer compatible")
-            manager = ExecutionWorkspaceManager(
-                self.repo,
-                self.execution_worktree_root,
-                ticket_id,
-                runner=self._git_runtime,
-            )
-            if (
-                reconciliation["execution_branch"] != manager.branch
-                or Path(str(reconciliation["execution_path"])) != manager.path
-            ):
-                raise DevlegateError("reconciliation workspace binding is invalid")
-            workspace = self._execution_workspace_for_recovery()
-            if workspace.head != checkpoint or workspace.dirty:
-                raise DevlegateError("execution workspace changed before resume")
-            evidence = resolve_commit(
-                self.repo,
-                str(reconciliation["evidence_ref"]),
-                runner=self._git_runtime,
-            )
-            if evidence != checkpoint:
-                raise DevlegateError("preserved worker checkpoint evidence changed")
-            if "execution_remote_head" in reconciliation:
-                expected_remote = reconciliation["execution_remote_head"]
-            elif "execution_remote_head" in self._state:
-                expected_remote = self._state["execution_remote_head"]
-            else:
+        if reconciliation.get("ticket_id") != ticket_id:
+            raise DevlegateError("requested ticket does not match reconciliation")
+        original_base = str(reconciliation["original_base"])
+        checkpoint = str(reconciliation["worker_checkpoint"])
+        was_resolving = reconciliation["status"] == "resolving"
+        pending_report = reconciliation.get("execution_report")
+        product = self._observe_product_generation(original_base)
+        if not product["stable"]:
+            if not (was_resolving and isinstance(pending_report, dict)):
                 raise DevlegateError(
-                    "legacy reconciliation lacks execution predecessor"
+                    f"same-base reconciliation cannot resume: {product['reason']}"
                 )
-            if expected_remote is not None and not _is_git_identity(expected_remote):
-                raise DevlegateError("execution predecessor identity is invalid")
-            remote = self._execution_remote_head(manager.branch)
-            if not (
-                (expected_remote is None and remote is None)
-                or (isinstance(expected_remote, str) and remote == expected_remote)
-                or (was_resolving and remote == checkpoint and (
-                    not isinstance(pending_report, dict)
-                    or self.recovery_has_pending_publication()
-                    or self.recovery_has_recorded_publication()
-                ))
-            ):
-                raise DevlegateError(
-                    "execution remote changed or has divergent lineage"
-                )
-            if isinstance(expected_remote, str):
-                try:
-                    predecessor_is_ancestor = is_ancestor(
-                        self.repo,
-                        expected_remote,
-                        checkpoint,
-                        runner=self._git_runtime,
-                    )
-                except GitAncestryError as error:
-                    raise DevlegateError(
-                        "execution predecessor history could not be observed"
-                    ) from error
-                if not predecessor_is_ancestor:
-                    raise DevlegateError(
-                        "execution predecessor is not an ancestor of checkpoint"
-                    )
-            resolving = {
-                **reconciliation,
-                "status": "resolving",
-                "resolution": "resume",
-            }
-            if not was_resolving:
-                self._save_state("idle", reconciliation=resolving)
-            # Re-observe immediately after the durable write-ahead intent.
-            product = self._observe_product_generation(original_base)
-            if not product["stable"]:
-                if not isinstance(pending_report, dict):
-                    raise DevlegateError(
-                        "product generation changed before publication: "
-                        f"{product['reason']}"
-                    )
-                automatic_target(self, original_base, product)
-            reobserved_remote = self._execution_remote_head(manager.branch)
-            if reobserved_remote != remote:
-                if not (was_resolving and reobserved_remote == checkpoint):
-                    raise DevlegateError("execution remote changed before publication")
-            if isinstance(pending_report, dict):
-                report = ExecutionReport.from_dict(pending_report)
-                stage = ("post-publication" if self.recovery_has_recorded_publication()
-                         else "post-checkpoint")
-                self._save_state(
-                    "agent_running",
-                    local_head=original_base,
-                    remote_head=original_base,
-                    changed_paths="",
-                    control_head=recorded_control,
-                    selected_ticket_id=ticket_id,
-                    selected_ticket_body=ticket.body,
-                    execution_ticket_id=ticket_id,
-                    execution_base_head=original_base,
-                    execution_control_head=recorded_control,
-                    execution_branch=manager.branch,
-                    execution_path=str(manager.path),
-                    execution_id=report.execution_id,
-                    execution_remote_head=expected_remote,
-                    execution_start_head=original_base,
-                    execution_stage=stage,
-                    pending_execution_report=report.as_dict(),
-                    worker_identity=None,
-                    execution_interruption_kind=reconciliation.get("interruption_kind"),
-                )
-                self._recover_checkpoint_publication()
-                report = self._recover_lifecycle_report()
-                return self._complete_execution_lifecycle(report)
-            if reobserved_remote != checkpoint:
-                self._publish_execution_branch(
-                    self._execution_workspace_for_recovery(),
-                    checkpoint,
+            # The resume intent alone admitted no publication. Re-enter the
+            # common recovery stage; it will settle any exact publication WAL
+            # first, or preserve H for transfer if publication never began.
+            automatic_target(self, original_base, product)
+        self._validate_control_worktree()
+        recorded_control = str(reconciliation["control_head"])
+        control_head = resolve_commit(
+            self.control_worktree, "HEAD", runner=self._git_runtime
+        )
+        control_remote = self._execution_remote_head(self.control_branch)
+        if control_head != recorded_control or control_remote != recorded_control:
+            raise DevlegateError("control revision changed during reconciliation")
+        store = self._ticket_store(head=control_head, require_clean=True)
+        ticket = store.by_id.get(ticket_id)
+        if ticket is None or ticket.state not in {"todo", "review"}:
+            raise DevlegateError("reconciliation ticket is no longer compatible")
+        manager = ExecutionWorkspaceManager(
+            self.repo,
+            self.execution_worktree_root,
+            ticket_id,
+            runner=self._git_runtime,
+        )
+        if (
+            reconciliation["execution_branch"] != manager.branch
+            or Path(str(reconciliation["execution_path"])) != manager.path
+        ):
+            raise DevlegateError("reconciliation workspace binding is invalid")
+        workspace = self._execution_workspace_for_recovery()
+        if workspace.head != checkpoint or workspace.dirty:
+            raise DevlegateError("execution workspace changed before resume")
+        evidence = resolve_commit(
+            self.repo,
+            str(reconciliation["evidence_ref"]),
+            runner=self._git_runtime,
+        )
+        if evidence != checkpoint:
+            raise DevlegateError("preserved worker checkpoint evidence changed")
+        if "execution_remote_head" in reconciliation:
+            expected_remote = reconciliation["execution_remote_head"]
+        elif "execution_remote_head" in self._state:
+            expected_remote = self._state["execution_remote_head"]
+        else:
+            raise DevlegateError(
+                "legacy reconciliation lacks execution predecessor"
+            )
+        if expected_remote is not None and not _is_git_identity(expected_remote):
+            raise DevlegateError("execution predecessor identity is invalid")
+        remote = self._execution_remote_head(manager.branch)
+        if not (
+            (expected_remote is None and remote is None)
+            or (isinstance(expected_remote, str) and remote == expected_remote)
+            or (was_resolving and remote == checkpoint and (
+                not isinstance(pending_report, dict)
+                or self.recovery_has_pending_publication()
+                or self.recovery_has_recorded_publication()
+            ))
+        ):
+            raise DevlegateError(
+                "execution remote changed or has divergent lineage"
+            )
+        if isinstance(expected_remote, str):
+            try:
+                predecessor_is_ancestor = is_ancestor(
+                    self.repo,
                     expected_remote,
+                    checkpoint,
+                    runner=self._git_runtime,
                 )
-            if self._execution_remote_head(manager.branch) != checkpoint:
+            except GitAncestryError as error:
                 raise DevlegateError(
-                    "execution checkpoint publication could not be proven"
+                    "execution predecessor history could not be observed"
+                ) from error
+            if not predecessor_is_ancestor:
+                raise DevlegateError(
+                    "execution predecessor is not an ancestor of checkpoint"
                 )
+        resolving = {
+            **reconciliation,
+            "status": "resolving",
+            "resolution": "resume",
+        }
+        if not was_resolving:
+            self._save_state("idle", reconciliation=resolving)
+        # Re-observe immediately after the durable write-ahead intent.
+        product = self._observe_product_generation(original_base)
+        if not product["stable"]:
+            if not isinstance(pending_report, dict):
+                raise DevlegateError(
+                    "product generation changed before publication: "
+                    f"{product['reason']}"
+                )
+            automatic_target(self, original_base, product)
+        reobserved_remote = self._execution_remote_head(manager.branch)
+        if reobserved_remote != remote:
+            if not (was_resolving and reobserved_remote == checkpoint):
+                raise DevlegateError("execution remote changed before publication")
+        if isinstance(pending_report, dict):
+            report = ExecutionReport.from_dict(pending_report)
+            stage = ("post-publication" if self.recovery_has_recorded_publication()
+                     else "post-checkpoint")
             self._save_state(
-                "idle",
+                "agent_running",
+                local_head=original_base,
+                remote_head=original_base,
+                changed_paths="",
+                control_head=recorded_control,
+                selected_ticket_id=ticket_id,
+                selected_ticket_body=ticket.body,
+                execution_ticket_id=ticket_id,
                 execution_base_head=original_base,
-                execution_remote_head=checkpoint,
-                reconciliation={**resolving, "status": "resolved"},
-                resume_required={"ticket_id": ticket_id, "status": "required"},
+                execution_control_head=recorded_control,
+                execution_branch=manager.branch,
+                execution_path=str(manager.path),
+                execution_id=report.execution_id,
+                execution_remote_head=expected_remote,
+                execution_start_head=original_base,
+                execution_stage=stage,
+                pending_execution_report=report.as_dict(),
+                worker_identity=None,
+                execution_interruption_kind=reconciliation.get("interruption_kind"),
             )
-            _log(f"reconciliation resolved for {ticket_id}; resume required")
-            return 0
+            self._recover_checkpoint_publication()
+            report = self._recover_lifecycle_report()
+            return self._complete_execution_lifecycle(report)
+        if reobserved_remote != checkpoint:
+            self._publish_execution_branch(
+                self._execution_workspace_for_recovery(),
+                checkpoint,
+                expected_remote,
+            )
+        if self._execution_remote_head(manager.branch) != checkpoint:
+            raise DevlegateError(
+                "execution checkpoint publication could not be proven"
+            )
+        self._save_state(
+            "idle",
+            execution_base_head=original_base,
+            execution_remote_head=checkpoint,
+            reconciliation={**resolving, "status": "resolved"},
+            resume_required={"ticket_id": ticket_id, "status": "required"},
+        )
+        _log(f"reconciliation resolved for {ticket_id}; resume required")
+        return 0
 
     def _resumed_after_worker_stall(self, ticket_id: str) -> bool:
         failures = self._state.get("failed_executions", {})

@@ -182,7 +182,7 @@ are split behind owner-held capabilities:
 | Classification | `recovery.py` classifies stage, interruption, and stranded-worker action | none |
 | Workspace | `recovery_workspace.py` proves branch, path, registration, and report ownership | worktree repair and CAS/evidence writes |
 | Workflow replay | `recovery_workflow.py` replays checkpoint, publication, lifecycle, and accepted integration stages | Git, WAL/state, report store, and control mutations |
-| Lineage admission | `reconciliation_transactions.py` orders product, ancestry, evidence, and workspace proofs | rebase, lease/CAS publication, displaced-history refs, and final state |
+| Lineage admission | `active_transfer.py` and `transfer_transaction.py` order product, ancestry, evidence, and workspace proofs | isolated transfer, lease/CAS publication, displaced-history refs, and final state |
 
 The transaction phases are durable write-ahead boundaries: observe and prove,
 record intent, perform one owner-held Git or report mutation, re-observe exact
@@ -335,9 +335,10 @@ service is active. When no service authority exists, it can take a
 guarded read-only observation directly.
 
 If service authority exists but IPC cannot safely be used, the client fails
-closed rather than reading or writing around the service. `retry`, `drop`,
-`reconcile resume`, and `reconcile update-base` are mutable operations and go
-through the service; they do not construct a separate mutable CLI runtime.
+closed rather than reading or writing around the service. `retry`, `drop`, and
+the three explicit decisions (`reconcile resolve`, `reconcile authorize-product`,
+and `reconcile control`) go through owner admission. Ordinary transfer and replay
+run in the owner loop without an IPC mutation.
 
 ## External Control Writers
 

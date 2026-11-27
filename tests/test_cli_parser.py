@@ -16,14 +16,16 @@ def test_reconcile_help_exposes_grammar_without_suppression(monkeypatch, capsys)
     assert error.value.code == 0
     output = capsys.readouterr().out
     assert "==SUPPRESS==" not in output
-    for name in ("auto", "resume", "update-base", "control"):
+    for name in ("resolve", "authorize-product", "control"):
         assert name in output
+    for removed in ("resume", "update-base", "--onto", "--rewrite-published"):
+        assert removed not in output
 
 
 @pytest.mark.parametrize("arguments", [
-    ["bad.id"], ["update", "extra"], ["resume"],
-    ["update-base", "T-1", "--unknown"], ["control", "--from", "abc"],
-    ["T-1", "--json", "--yaml"],
+    ["T-1"], ["auto", "T-1"], ["resume", "T-1"], ["update-base", "T-1"],
+    ["resume", "T-1", "--resolve-candidate", "path"], ["control", "--from", "abc"],
+    ["resolve", "T-1"], ["resolve", "bad.id", "path"], ["authorize-product", "T-1"],
 ])
 def test_invalid_reconcile_never_contacts_service(arguments, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", *arguments])
@@ -34,29 +36,11 @@ def test_invalid_reconcile_never_contacts_service(arguments, monkeypatch):
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("arguments,ticket,fmt", [
-    (["T-1"], "T-1", "table"),
-    (["update", "--json"], "update", "json"),
-    (["update-base-1", "--yaml"], "update-base-1", "yaml"),
-    (["auto", "resume"], "resume", "table"),
-])
-def test_reconcile_ticket_selection(arguments, ticket, fmt, monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", *arguments])
-    monkeypatch.setattr(
-        cli, "_project_target", lambda **_: SimpleNamespace(env_file=Path(".env"))
-    )
-    calls = []
-    monkeypatch.setattr(
-        cli, "_reconcile_auto_daemon", lambda *args: calls.append(args) or 0
-    )
-    assert main() == 0
-    assert calls[0][1:] == (ticket, None, fmt)
-    if ticket == "update":
-        assert "interpreting 'update' as a ticket ID" in capsys.readouterr().err
-
-
 def test_reconcile_preserves_busy_refusal(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["devlegate", "reconcile", "update"])
+    monkeypatch.setattr(sys, "argv", [
+        "devlegate", "reconcile", "authorize-product", "T-1",
+        "--execution", "execution", "--to", "a" * 40,
+    ])
     monkeypatch.setattr(
         cli, "_project_target", lambda **_: SimpleNamespace(env_file=Path(".env"))
     )
@@ -70,10 +54,11 @@ def test_reconcile_preserves_busy_refusal(monkeypatch, capsys):
         raise cli.IPCClientError("service busy; mutable request was not admitted")
     monkeypatch.setattr(cli, "request", busy)
     assert main() == 1
-    assert calls[0][0][1:] == ("reconcile-auto", {"ticket_id": "update"})
+    assert calls[0][0][1:] == ("reconcile-authorize-product", {
+        "ticket_id": "T-1", "execution_id": "execution", "to": "a" * 40,
+    })
     assert calls[0][1] == {"mutable": True}
     output = capsys.readouterr().err
-    assert "interpreting 'update' as a ticket ID" in output
     assert "service busy; mutable request was not admitted" in output
 
 
@@ -192,7 +177,7 @@ def test_nested_command_help_uses_command_sections():
     )
     for argv, commands in (
         (["control"], ("init",)),
-        (["reconcile"], ("update-base", "resume", "control")),
+        (["reconcile"], ("resolve", "authorize-product", "control")),
     ):
         target = parser
         for name in argv:
@@ -203,10 +188,11 @@ def test_nested_command_help_uses_command_sections():
         for command in commands:
             assert command in output
         if argv == ["reconcile"]:
-            resume = target._subparsers._group_actions[0].choices["resume"]
-            leaf = resume.format_help()
+            choices = target._subparsers._group_actions[0].choices
+            assert set(choices) == set(commands)
+            leaf = choices["resolve"].format_help()
             assert "ticket_id" in leaf
-            assert "usage: devlegate reconcile resume" in leaf
+            assert "usage: devlegate reconcile resolve" in leaf
 
 @pytest.mark.parametrize(
     "argv, expected",
@@ -270,21 +256,20 @@ def test_explicit_help_remains_detailed(argv, expected, monkeypatch, capsys):
         ),
         (
             ["reconcile", "--help"],
-            ["Handle a pending product-base change for an execution."],
+            ["The service reconciles ordinary changes automatically."],
         ),
         (
-            ["reconcile", "update-base", "--help"],
+            ["reconcile", "authorize-product", "--help"],
             [
-                "Update a ticket execution after the product base changes.",
-                "ticket execution to update",
-                "exact current product HEAD",
+                "Authorize transferring one retained execution",
+                "pending execution ID",
+                "full product commit ID",
             ],
         ),
         (
-            ["reconcile", "resume", "--help"],
+            ["reconcile", "resolve", "--help"],
             [
-                "Resume retained execution progress without changing the product base.",
-                "ticket execution to resume",
+                "Confirm source edits in the exact candidate shown by status.",
             ],
         ),
     ],
