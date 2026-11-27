@@ -1,0 +1,30 @@
+{
+  "code_base_head": "4aadc2ef200eefcd50113f1d36d9c927fd9f6407",
+  "conclusion": "completed",
+  "control_head": "a14e5dfe5e4f5e3b9c01dce9135ee6b3a2c463c2",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-202",
+  "execution_id": "8f142564563548ae85764cf81767b3b9",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-202",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-202/8f142564563548ae85764cf81767b3b9.md",
+  "report_sha256": "0cb05ee33ac1722ca5b291d1988e3ab4d878d0903a458b35091d00cc3c1c984c",
+  "resource_generation": "4f40faed31ce45f6d648dabd2256d4167cc39d9e91301eb38e9acbf8f1a7379c",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-202",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused worker checks passed on Python 3.12, including real-service replay, stale conflict refusal, explicit product and control authority, IPC routing and refusal, and independent retry/reset/drop/recover. Two topology cases that hit the wait deadline during concurrent execution passed on a serial rerun. ./dev lint and git diff --check passed. Against TASK-201: production Python LOC 42,911 \u2192 42,395; test Python LOC 58,000 \u2192 57,189; collected cases 2,764 \u2192 2,742 (base count from review). Exact successor hosted CI is pending Devlegate checkpointing and is not claimed.",
+    "summary": "Removed the reportless same-base mutation path and redundant live transfer flags. The owner continues a retained checkpoint through the normal publication and lifecycle path only with exact generation, report, pin and predecessor proof. Updated the parser regression and added owner-level refusal and retry-hold coverage."
+  },
+  "workspace_head": "1400e50ba593205b60b48fa9c2f889c301c0d07f"
+}
