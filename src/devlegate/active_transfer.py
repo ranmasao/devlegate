@@ -25,12 +25,13 @@ from devlegate.transfer_transaction import (
 )
 
 
-def _origin(reconciliation, rewrite_published, automatic=False):
+def _origin(reconciliation, automatic=False):
     authority = {
         "ticket": reconciliation["ticket_id"],
         "report": reconciliation.get("execution_report"),
         "evidence": reconciliation["evidence_ref"],
-        "rewrite_published": rewrite_published,
+        # Keep the origin digest stable; this fact no longer needs live state.
+        "rewrite_published": reconciliation["execution_remote_head"] is not None,
     }
     if automatic:
         authority["policy"] = "owned-linear-transfer"
@@ -47,12 +48,10 @@ class ActiveTransfer(TransferTransaction):
         progress = owner._state["transfer_progress"]
         return cls(
             owner, ResourceBinding(source.manager, progress["active_binding"]),
-            source, reconciliation, progress["rewrite_published"],
-            progress.get("automatic", False),
+            source, reconciliation, progress.get("automatic", False),
         )
 
-    def __init__(self, owner, binding, source, reconciliation, rewrite_published,
-                 automatic=False):
+    def __init__(self, owner, binding, source, reconciliation, automatic=False):
         self.reconciliation = reconciliation
         self.automatic = automatic
         super().__init__(
@@ -88,7 +87,7 @@ class ActiveTransfer(TransferTransaction):
             or binding.intent["prior_local"] != self.identity.checkpoint
             or binding.intent["prior_remote"] != reconciliation["execution_remote_head"]
             or binding.intent.get("transfer_origin") != _origin(
-                reconciliation, rewrite_published, automatic,
+                reconciliation, automatic,
             )
         ):
             raise ExecutionWorkspaceError("active transfer source or admission differs")
@@ -170,8 +169,6 @@ class ActiveTransfer(TransferTransaction):
             transfer_progress=None, rework_provenance=None,
             reconciliation={
                 **source, "status": "resolved", "resolution": "update-base",
-                "resolution_class": ("update-base" if remote is None else
-                                     "update-base with published-lineage rewrite"),
                 "effective_base": target, "worker_checkpoint": checkpoint,
                 "execution_remote_head": remote, "evidence_ref": evidence,
                 "displaced_evidence_ref": self.evidence,
@@ -304,11 +301,8 @@ def advance_pending(owner):
         raise ExecutionWorkspaceError(f"{error}{hint}") from error
     if target == base and value.get("installed_source") is not None:
         raise ExecutionWorkspaceError("product rolled back; installed source retained")
-    if (target == base and not intent
-            and not owner._state.get("execution_resource_binding")):
-        # Retake the exact same-base publication path for legacy state. That
-        # path proves workspace/branch, pinned H, and the predecessor itself.
-        return owner._reconcile_resume_owned(ticket)
+    if target == base and not intent:
+        return owner._continue_retained_checkpoint()
     source = owner._execution_generation_binding()
     if intent and intent["base"] != target:
         if target == base or not owner._is_ancestor_runtime(
@@ -340,8 +334,6 @@ def advance_pending(owner):
         # confirmation, even if a client submits the old candidate path again.
         owner._save_state("idle", transfer_progress=None)
         intent = None
-    if target == base:
-        return owner._reconcile_resume_owned(ticket)
     if not intent:
         transaction = plan_transfer(owner, value, target, automatic=True)
         transaction.save(**planned_progress(transaction))
@@ -407,15 +399,14 @@ def plan_transfer(owner, value, target, *, automatic):
         raise ExecutionWorkspaceError(
             "published execution ref is outside the proven execution lineage"
         )
-    rewrite_published = before is not None
     binding = ResourceBinding.plan(
         manager, execution_id=new_execution_id(), base=target, control=control,
         ticket_blob=source.intent["ticket_blob"], remote=owner.remote_name,
         remote_head=before,
     )
-    binding.intent["transfer_origin"] = _origin(value, rewrite_published, automatic)
+    binding.intent["transfer_origin"] = _origin(value, automatic)
     transaction = ActiveTransfer(
-        owner, binding, source, value, rewrite_published, automatic,
+        owner, binding, source, value, automatic,
     )
     transaction.require_source(transaction.identity)
     transaction.require_authority()
@@ -425,7 +416,6 @@ def plan_transfer(owner, value, target, *, automatic):
 def planned_progress(transaction):
     return {
         "active_binding": transaction.binding.intent,
-        "rewrite_published": transaction.binding.intent["prior_remote"] is not None,
         **({"automatic": True} if transaction.automatic else {}),
     }
 

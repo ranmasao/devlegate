@@ -106,7 +106,7 @@ def test_missing_commands_are_concise(monkeypatch, capsys):
         main()
     stderr = capsys.readouterr().err
     assert error.value.code == 2
-    assert "devlegate reconcile: a reconcile command is required" in stderr
+    assert "devlegate reconcile: a command is required" in stderr
     assert "usage:" not in stderr
 
 def test_machine_format_flags_are_mutually_exclusive():

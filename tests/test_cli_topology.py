@@ -2688,10 +2688,10 @@ def test_real_service_transaction_stage_restart_preserves_execution(
 
 
 @pytest.mark.parametrize(
-    "renewed_drift", [None, "same_base_resolving", "publication_ack_lost"],
+    "interruption", [None, "same_base_resolving", "publication_ack_lost", "retry_hold"],
 )
 def test_real_service_resumes_same_base_when_checkout_is_clean_again(
-    git_fixture, monkeypatch, renewed_drift,
+    git_fixture, monkeypatch, interruption,
 ):
     repo = git_fixture["working"]
     monkeypatch.chdir(repo)
@@ -2710,11 +2710,30 @@ def test_real_service_resumes_same_base_when_checkout_is_clean_again(
         ))
         assert attempts.read_text().splitlines() == ["attempt"]
         assert not (engine.control_worktree / "kanban/review/T-1.md").exists()
-        if renewed_drift:
+        renewed_drift = interruption in {"same_base_resolving", "publication_ack_lost"}
+        if interruption:
             service.stop()
+        if interruption == "retry_hold":
+            # Model the durable operator-abort hold at the retained checkpoint.
+            owner = ServiceEngine(config)
+            pending = owner._state["reconciliation"]
+            with owner._lock():
+                owner._save_state("idle", manual_retry_required={
+                    "ticket_id": "T-1", "execution_id": pending["execution_id"],
+                    "generation": pending["original_base"], "request_id": "forced-stop",
+                })
         dirty.unlink()
+        if interruption == "retry_hold":
+            service.restart()
+            service.wait_for(lambda: "run devlegate retry T-1" in (
+                service.cli("status", "--json").stdout
+            ))
+            assert _disk_state(config)["reconciliation"] == pending
+            assert attempts.read_text().splitlines() == ["attempt"]
+            result = service.cli("retry", "T-1")
+            assert result.returncode == 0, result.stderr
         if renewed_drift:
-            monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", renewed_drift)
+            monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", interruption)
             service.start()
             _wait_process_death(service)
             state = _disk_state(config)
@@ -2723,7 +2742,7 @@ def test_real_service_resumes_same_base_when_checkout_is_clean_again(
             assert attempts.read_text().splitlines() == ["attempt"]
             branch = f"refs/heads/{original['execution_branch']}"
             upstream = git(repo, "ls-remote", "origin", branch).stdout.split()
-            if renewed_drift == "publication_ack_lost":
+            if interruption == "publication_ack_lost":
                 assert upstream[0] == original["worker_checkpoint"]
             else:
                 assert not upstream

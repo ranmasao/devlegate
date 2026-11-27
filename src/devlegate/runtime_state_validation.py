@@ -343,14 +343,6 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             "update-base",
         }:
             raise DevlegateError("invalid reconciliation resolution")
-        if "resolution_class" in reconciliation and reconciliation[
-            "resolution_class"
-        ] not in {
-            "resume",
-            "update-base",
-            "update-base with published-lineage rewrite",
-        }:
-            raise DevlegateError("invalid reconciliation resolution class")
         if "reason" in reconciliation and not isinstance(
             reconciliation["reason"], str
         ):
@@ -780,7 +772,7 @@ def _validate_transfer_progress(state):
     if progress is None:
         return
     if not isinstance(progress, dict) or not progress.keys() <= {
-        "active_binding", "rewrite_published", "conflict", "confirmation",
+        "active_binding", "conflict", "confirmation",
         "resolution_error", "candidate", "automatic",
     }:
         raise DevlegateError("invalid transfer progress")
@@ -796,13 +788,11 @@ def _validate_transfer_progress(state):
             or not _is_git_identity(active.get("base"))
             or active.get("base") == source.get("original_base")
             or active.get("prior_remote") != source.get("execution_remote_head")
-            or not isinstance(progress.get("rewrite_published"), bool)
             or ("automatic" in progress and progress["automatic"] is not True)
-            or (active.get("prior_remote") and not progress["rewrite_published"])
         ):
             raise DevlegateError("invalid active transfer admission")
     elif (state.get("phase") != "agent_pending" or not isinstance(rework, dict)
-          or "rewrite_published" in progress or "automatic" in progress):
+          or "automatic" in progress):
         raise DevlegateError("invalid reviewed transfer admission")
     conflict, candidate = progress.get("conflict"), progress.get("candidate")
     if conflict is not None and (

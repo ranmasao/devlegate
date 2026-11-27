@@ -640,93 +640,12 @@ def test_worker_created_commit_cannot_reach_lifecycle_or_publication(
         control, "ls-remote", "origin", "refs/heads/devlegate/work/T-1"
     ).stdout.strip()
 
-def test_reconcile_resume_race_stays_unresolved_before_lifecycle(tmp_path, monkeypatch):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-    base = git(working, "rev-parse", "HEAD").stdout.strip()
+def test_same_base_publication_race_stays_unresolved(tmp_path, monkeypatch):
+    devlegate, working, state = _pending_resume_fixture(tmp_path, monkeypatch)
+    reconciliation = devlegate._state["reconciliation"]
+    branch = reconciliation["execution_branch"]
+    external = reconciliation["original_base"]
     control = next((state / "worktrees").glob("*/control"))
-    control_head = git(control, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(
-        devlegate.repo, devlegate.execution_worktree_root, "T-1"
-    )
-    workspace = manager.prepare(base)
-    (workspace.path / "predecessor.txt").write_text("E\n")
-    git(workspace.path, "add", "predecessor.txt")
-    git(workspace.path, "commit", "-m", "predecessor")
-    predecessor = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-    git(
-        workspace.path,
-        "push",
-        "origin",
-        f"{predecessor}:refs/heads/{manager.branch}",
-    )
-    tree = git(workspace.path, "rev-parse", f"{predecessor}^{{tree}}").stdout.strip()
-    external = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(workspace.path),
-            "commit-tree",
-            tree,
-            "-p",
-            predecessor,
-        ],
-        input="external\n",
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout.strip()
-    git(workspace.path, "reset", "--hard", external)
-    (workspace.path / "implementation.txt").write_text("worker\n")
-    git(workspace.path, "add", "implementation.txt")
-    git(workspace.path, "commit", "-m", "checkpoint")
-    checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-    report = build_execution_report(
-        execution_id="execution-1",
-        ticket_id="T-1",
-        code_base_head=base,
-        control_head=control_head,
-        execution_branch=manager.branch,
-        execution_path=str(manager.path),
-        workspace_head=checkpoint,
-        run=WorkerRunResult(
-            0, None, WorkerClaim("completed", "implemented", (), ()), None
-        ),
-    )
-    evidence_ref = "refs/devlegate/reconciliation/T-1/execution-1"
-    git(workspace.path, "update-ref", evidence_ref, checkpoint)
-    reconciliation = {
-        "status": "pending",
-        "reason": "product-observation-unsafe",
-        "resolution": None,
-        "ticket_id": "T-1",
-        "execution_id": "execution-1",
-        "original_base": base,
-        "observed_product": base,
-        "worker_checkpoint": checkpoint,
-        "execution_remote_head": predecessor,
-        "product_remote_head": base,
-        "control_head": control_head,
-        "execution_branch": manager.branch,
-        "execution_path": str(manager.path),
-        "evidence_ref": evidence_ref,
-        "execution_report": report.as_dict(),
-    }
-    devlegate._save_state(
-        "idle",
-        local_head=base,
-        remote_head=base,
-        execution_ticket_id="T-1",
-        execution_base_head=base,
-        execution_control_head=control_head,
-        execution_branch=manager.branch,
-        execution_path=str(manager.path),
-        execution_id="execution-1",
-        execution_remote_head=predecessor,
-        reconciliation=reconciliation,
-    )
     original_git = runtime._git
     raced = False
 
@@ -735,14 +654,14 @@ def test_reconcile_resume_race_stays_unresolved_before_lifecycle(tmp_path, monke
         if (
             not raced
             and args[:1] == ("push",)
-            and any(f"refs/heads/{manager.branch}" in arg for arg in args)
+            and any(f"refs/heads/{branch}" in arg for arg in args)
         ):
             raced = True
             git(
-                workspace.path,
+                working,
                 "push",
                 "origin",
-                f"{external}:refs/heads/{manager.branch}",
+                f"{external}:refs/heads/{branch}",
             )
         return original_git(repo, *args, check=check)
 
@@ -754,7 +673,7 @@ def test_reconcile_resume_race_stays_unresolved_before_lifecycle(tmp_path, monke
     assert not (control / "kanban/review/T-1.md").exists()
     assert (
         git(
-            workspace.path, "ls-remote", "origin", f"refs/heads/{manager.branch}"
+            working, "ls-remote", "origin", f"refs/heads/{branch}"
         ).stdout.split()[0]
         == external
     )
@@ -1868,49 +1787,6 @@ def test_engine_reconciliation_resume_reuses_retained_report_without_worker(
     assert devlegate._state["reconciliation"]["status"] == "resolved"
     assert devlegate._state["reconciliation"]["resolution"] == "resume"
 
-def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
-    tmp_path, monkeypatch
-):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    monkeypatch.chdir(working)
-    devlegate = Devlegate(config)
-
-    def worker(workspace, _prompt, **_kwargs):
-        (workspace.path / "implementation.txt").write_text("worker\n")
-        (working / "dirty-product.txt").write_text("operator\n")
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "implemented", (), ()), None
-        )
-
-    monkeypatch.setattr(devlegate._workers, "run", worker)
-    assert run_test_iteration(devlegate) == 1
-    reconciliation = dict(devlegate._state["reconciliation"])
-    old_id = reconciliation["execution_id"]
-    checkpoint = reconciliation["worker_checkpoint"]
-    reconciliation.pop("execution_report")
-    devlegate._save_state("idle", reconciliation=reconciliation)
-    (working / "dirty-product.txt").unlink()
-    assert run_test_iteration(devlegate) == 0
-    assert devlegate._state["reconciliation"]["status"] == "resolved"
-    assert devlegate._state["resume_required"] == {
-        "ticket_id": "T-1",
-        "status": "required",
-    }
-    resumed_ids = []
-
-    def resumed_worker(workspace, prompt, **_kwargs):
-        resumed_ids.append(devlegate._state["execution_id"])
-        assert "Continue the existing implementation" in prompt
-        assert git(workspace.path, "rev-parse", "HEAD").stdout.strip() == checkpoint
-        return WorkerRunResult(
-            0, None, WorkerClaim("completed", "validated", (), ()), None
-        )
-
-    monkeypatch.setattr(devlegate._workers, "run", resumed_worker)
-    assert run_test_iteration(devlegate) == 0
-    assert resumed_ids and resumed_ids[0] != old_id
-
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1919,12 +1795,14 @@ def test_engine_legacy_reconciliation_resume_publishes_and_schedules_resume(
         "dirty workspace",
         "changed workspace head",
         "changed control",
-        "wrong product local head",
-        "wrong product remote head",
-        "dirty product",
+        "missing report",
+        "missing generation",
+        "wrong report generation",
+        "missing predecessor",
+        "unreceipted checkpoint during replay",
     ],
 )
-def test_reconcile_resume_rejects_unsafe_state(tmp_path, monkeypatch, mutation):
+def test_owner_refuses_unproven_same_base_checkpoint(tmp_path, monkeypatch, mutation):
     devlegate, working, state = _pending_resume_fixture(tmp_path, monkeypatch)
     reconciliation = devlegate._state["reconciliation"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
@@ -1953,33 +1831,35 @@ def test_reconcile_resume_rejects_unsafe_state(tmp_path, monkeypatch, mutation):
         (control / "changed.txt").write_text("changed\n")
         git(control, "add", "changed.txt")
         git(control, "commit", "-m", "foreign change")
-    elif mutation == "wrong product local head":
-        (working / "product.txt").write_text("changed\n")
-        git(working, "add", "product.txt")
-        git(working, "commit", "-m", "foreign product change")
-    elif mutation == "wrong product remote head":
-        changed = git(working, "rev-parse", "HEAD^{tree}").stdout.strip()
-        moved = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(working),
-                "commit-tree",
-                changed,
-                "-p",
-                reconciliation["original_base"],
-            ],
-            input="remote change\n",
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-        git(working, "push", "origin", f"{moved}:refs/heads/main")
-    elif mutation == "dirty product":
-        (working / "dirty-again.txt").write_text("dirty\n")
-    with devlegate._lock(), pytest.raises(DevlegateError):
-        devlegate._reconcile_resume_owned("T-1")
-    assert devlegate._state["reconciliation"]["status"] != "resolved"
+    elif mutation in {"missing report", "missing predecessor"}:
+        reconciliation = dict(reconciliation)
+        reconciliation.pop({"missing report": "execution_report",
+                            "missing predecessor": "execution_remote_head"}[mutation])
+        devlegate._save_state("idle", reconciliation=reconciliation)
+    elif mutation == "missing generation":
+        devlegate._save_state("idle", execution_resource_binding=None)
+    elif mutation == "wrong report generation":
+        reconciliation = copy.deepcopy(reconciliation)
+        reconciliation["execution_report"]["resource_generation"] = "0" * 64
+        devlegate._save_state("idle", reconciliation=reconciliation)
+    elif mutation == "unreceipted checkpoint during replay":
+        expected_remote = reconciliation["worker_checkpoint"]
+        git(execution, "push", "origin",
+            f"{expected_remote}:refs/heads/{reconciliation['execution_branch']}")
+        reconciliation = {
+            **reconciliation, "status": "resolving", "resolution": "resume",
+        }
+        devlegate._save_state("idle", reconciliation=reconciliation)
+    monkeypatch.setattr(
+        devlegate._workers, "run", lambda *_args, **_kwargs: pytest.fail("worker ran")
+    )
+    with pytest.raises(runtime.WorkspacePreparationBlockedError):
+        run_test_iteration(devlegate)
+    assert devlegate._state["reconciliation"] == reconciliation
+    assert devlegate._state.get("resume_required") is None
+    control = next((state / "worktrees").glob("*/control"))
+    assert (control / "kanban/todo/T-1.md").exists()
+    assert not list(control.glob("executions/T-1/*.json"))
     observed_remote = git(
         execution,
         "ls-remote",

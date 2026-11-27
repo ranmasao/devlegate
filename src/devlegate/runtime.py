@@ -2153,20 +2153,6 @@ class ServiceEngine:
             "is no longer executable"
         )
 
-    def _validate_reconcile_resume_admission(self, ticket_id: str) -> None:
-        if (self._state.get("transfer_progress") or {}).get("active_binding"):
-            raise DevlegateError("update-base transfer already admitted")
-        reconciliation = self._state.get("reconciliation")
-        if not isinstance(reconciliation, dict) or reconciliation.get("status") not in {
-            "pending",
-            "resolving",
-        }:
-            raise DevlegateError(f"ticket {ticket_id} has no resumable reconciliation")
-        if reconciliation.get("ticket_id") != ticket_id:
-            raise DevlegateError(
-                "requested ticket does not match pending reconciliation"
-            )
-
     def _validate_control_reconcile_admission(
         self, from_head: str, to_head: str
     ) -> None:
@@ -4119,9 +4105,9 @@ class ServiceEngine:
             and reconciliation.get("status") == "resolving"
         ):
             try:
-                return self._reconcile_resume_owned(reconciliation["ticket_id"])
-            except (DevlegateError, ExecutionWorkspaceError, GitObservationError,
-                    OSError) as error:
+                return self._continue_retained_checkpoint()
+            except (DevlegateError, ExecutionWorkspaceError, EvidenceError,
+                    GitObservationError, GitAncestryError, OSError) as error:
                 raise WorkspacePreparationBlockedError(str(error)) from error
         if self._state.get("phase") == "idle":
             self._reconcile_workspace_backlog()
@@ -12830,25 +12816,69 @@ class ServiceEngine:
             )
         return copy.deepcopy(reconciliation)
 
-    def _reconcile_resume_owned(self, ticket_id: str) -> int:
+    def _continue_retained_checkpoint(self) -> int:
+        """Re-enter checkpoint publication with independently bound evidence."""
         self._assert_repository_owner()
-        self._validate_reconcile_resume_admission(ticket_id)
         reconciliation = self._state.get("reconciliation")
-        if not isinstance(reconciliation, dict) or reconciliation.get(
-            "status"
-        ) not in {"pending", "resolving"}:
-            raise DevlegateError(
-                f"ticket {ticket_id} has no resumable reconciliation"
-            )
-        if reconciliation.get("ticket_id") != ticket_id:
-            raise DevlegateError("requested ticket does not match reconciliation")
-        original_base = str(reconciliation["original_base"])
-        checkpoint = str(reconciliation["worker_checkpoint"])
+        if (
+            not isinstance(reconciliation, dict)
+            or reconciliation.get("status") not in {"pending", "resolving"}
+            or (self._state.get("transfer_progress") or {}).get("active_binding")
+        ):
+            raise DevlegateError("no retained checkpoint eligible for continuation")
+        ticket_id = reconciliation["ticket_id"]
+        original_base = reconciliation["original_base"]
+        checkpoint = reconciliation["worker_checkpoint"]
         was_resolving = reconciliation["status"] == "resolving"
-        pending_report = reconciliation.get("execution_report")
+        if not isinstance(reconciliation.get("execution_report"), dict):
+            raise DevlegateError("retained reconciliation report is missing")
+        if "execution_remote_head" not in reconciliation:
+            raise DevlegateError("reconciliation lacks execution predecessor")
+        expected_remote = reconciliation["execution_remote_head"]
+        report = ExecutionReport.from_dict(reconciliation["execution_report"])
+        binding = self._execution_generation_binding()
+        self._require_report_generation_identity(report)
+        self._report_matches_execution_binding(report)
+        binding.require_worker_retirement()
+        manager = binding.manager
+        if (
+            report.workspace_head != checkpoint
+            or report.code_base_head != original_base
+            or report.execution_id != reconciliation["execution_id"]
+            or report.ticket_id != ticket_id
+            or report.control_head != reconciliation["control_head"]
+            or report.execution_branch != reconciliation["execution_branch"]
+            or report.execution_path != reconciliation["execution_path"]
+        ):
+            raise DevlegateError("retained reconciliation report binding is invalid")
+        if binding.require_local(clean=True).head != checkpoint:
+            raise DevlegateError("execution workspace changed before resume")
+        require_pin(binding, {
+            "location": "local", "ref": reconciliation["evidence_ref"],
+            "head": checkpoint,
+        })
+        published = self.recovery_has_recorded_publication()
+        if published:
+            receipt = binding.operation_receipt("publication")
+            if receipt.get("after") != checkpoint or not (
+                expected_remote == checkpoint
+                or (was_resolving and receipt.get("before") == expected_remote)
+            ):
+                raise DevlegateError("retained checkpoint publication receipt differs")
+        predecessor = checkpoint if published else expected_remote
+        if binding.latest_remote(binding.intent["prior_remote"]) != predecessor:
+            raise DevlegateError("reconciliation execution predecessor is unproven")
+        if self._execution_remote_head(manager.branch) != predecessor:
+            raise DevlegateError("execution remote changed or has divergent lineage")
+        if expected_remote is not None and not self._is_ancestor_runtime(
+            self.repo, expected_remote, checkpoint,
+        ):
+            raise DevlegateError(
+                "execution predecessor is not an ancestor of checkpoint"
+            )
         product = self._observe_product_generation(original_base)
         if not product["stable"]:
-            if not (was_resolving and isinstance(pending_report, dict)):
+            if not was_resolving:
                 raise DevlegateError(
                     f"same-base reconciliation cannot resume: {product['reason']}"
                 )
@@ -12868,133 +12898,34 @@ class ServiceEngine:
         ticket = store.by_id.get(ticket_id)
         if ticket is None or ticket.state not in {"todo", "review"}:
             raise DevlegateError("reconciliation ticket is no longer compatible")
-        manager = ExecutionWorkspaceManager(
-            self.repo,
-            self.execution_worktree_root,
-            ticket_id,
-            runner=self._git_runtime,
-        )
-        if (
-            reconciliation["execution_branch"] != manager.branch
-            or Path(str(reconciliation["execution_path"])) != manager.path
-        ):
-            raise DevlegateError("reconciliation workspace binding is invalid")
-        workspace = self._execution_workspace_for_recovery()
-        if workspace.head != checkpoint or workspace.dirty:
-            raise DevlegateError("execution workspace changed before resume")
-        evidence = resolve_commit(
-            self.repo,
-            str(reconciliation["evidence_ref"]),
-            runner=self._git_runtime,
-        )
-        if evidence != checkpoint:
-            raise DevlegateError("preserved worker checkpoint evidence changed")
-        if "execution_remote_head" in reconciliation:
-            expected_remote = reconciliation["execution_remote_head"]
-        elif "execution_remote_head" in self._state:
-            expected_remote = self._state["execution_remote_head"]
-        else:
-            raise DevlegateError(
-                "legacy reconciliation lacks execution predecessor"
-            )
-        if expected_remote is not None and not _is_git_identity(expected_remote):
-            raise DevlegateError("execution predecessor identity is invalid")
-        remote = self._execution_remote_head(manager.branch)
-        if not (
-            (expected_remote is None and remote is None)
-            or (isinstance(expected_remote, str) and remote == expected_remote)
-            or (was_resolving and remote == checkpoint and (
-                not isinstance(pending_report, dict)
-                or self.recovery_has_pending_publication()
-                or self.recovery_has_recorded_publication()
-            ))
-        ):
-            raise DevlegateError(
-                "execution remote changed or has divergent lineage"
-            )
-        if isinstance(expected_remote, str):
-            try:
-                predecessor_is_ancestor = is_ancestor(
-                    self.repo,
-                    expected_remote,
-                    checkpoint,
-                    runner=self._git_runtime,
-                )
-            except GitAncestryError as error:
-                raise DevlegateError(
-                    "execution predecessor history could not be observed"
-                ) from error
-            if not predecessor_is_ancestor:
-                raise DevlegateError(
-                    "execution predecessor is not an ancestor of checkpoint"
-                )
-        resolving = {
-            **reconciliation,
-            "status": "resolving",
-            "resolution": "resume",
-        }
         if not was_resolving:
-            self._save_state("idle", reconciliation=resolving)
+            self._save_state("idle", reconciliation={
+                **reconciliation, "status": "resolving", "resolution": "resume",
+            })
         # Re-observe immediately after the durable write-ahead intent.
         product = self._observe_product_generation(original_base)
         if not product["stable"]:
-            if not isinstance(pending_report, dict):
-                raise DevlegateError(
-                    "product generation changed before publication: "
-                    f"{product['reason']}"
-                )
             automatic_target(self, original_base, product)
-        reobserved_remote = self._execution_remote_head(manager.branch)
-        if reobserved_remote != remote:
-            if not (was_resolving and reobserved_remote == checkpoint):
-                raise DevlegateError("execution remote changed before publication")
-        if isinstance(pending_report, dict):
-            report = ExecutionReport.from_dict(pending_report)
-            stage = ("post-publication" if self.recovery_has_recorded_publication()
-                     else "post-checkpoint")
-            self._save_state(
-                "agent_running",
-                local_head=original_base,
-                remote_head=original_base,
-                changed_paths="",
-                control_head=recorded_control,
-                selected_ticket_id=ticket_id,
-                selected_ticket_body=ticket.body,
-                execution_ticket_id=ticket_id,
-                execution_base_head=original_base,
-                execution_control_head=recorded_control,
-                execution_branch=manager.branch,
-                execution_path=str(manager.path),
-                execution_id=report.execution_id,
-                execution_remote_head=expected_remote,
-                execution_start_head=original_base,
-                execution_stage=stage,
-                pending_execution_report=report.as_dict(),
-                worker_identity=None,
-                execution_interruption_kind=reconciliation.get("interruption_kind"),
-            )
-            self._recover_checkpoint_publication()
-            report = self._recover_lifecycle_report()
-            return self._complete_execution_lifecycle(report)
-        if reobserved_remote != checkpoint:
-            self._publish_execution_branch(
-                self._execution_workspace_for_recovery(),
-                checkpoint,
-                expected_remote,
-            )
-        if self._execution_remote_head(manager.branch) != checkpoint:
-            raise DevlegateError(
-                "execution checkpoint publication could not be proven"
-            )
+        if self._execution_remote_head(manager.branch) != predecessor:
+            raise DevlegateError("execution remote changed before publication")
         self._save_state(
-            "idle",
-            execution_base_head=original_base,
-            execution_remote_head=checkpoint,
-            reconciliation={**resolving, "status": "resolved"},
-            resume_required={"ticket_id": ticket_id, "status": "required"},
+            "agent_running",
+            local_head=original_base,
+            remote_head=original_base,
+            changed_paths="",
+            control_head=recorded_control,
+            selected_ticket_id=ticket_id,
+            selected_ticket_body=ticket.body,
+            execution_remote_head=predecessor,
+            execution_start_head=original_base,
+            execution_stage="post-publication" if published else "post-checkpoint",
+            pending_execution_report=report.as_dict(),
+            worker_identity=None,
+            execution_interruption_kind=reconciliation.get("interruption_kind"),
         )
-        _log(f"reconciliation resolved for {ticket_id}; resume required")
-        return 0
+        self._recover_checkpoint_publication()
+        report = self._recover_lifecycle_report()
+        return self._complete_execution_lifecycle(report)
 
     def _resumed_after_worker_stall(self, ticket_id: str) -> bool:
         failures = self._state.get("failed_executions", {})

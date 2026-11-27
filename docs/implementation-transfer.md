@@ -181,7 +181,8 @@ Stop the owner at a quiescent boundary. Settle any old in-place update-base
 rewrite (including its follow-up revalidation), pending REWORK, or worker/lifecycle
 recovery with the runtime that admitted it before upgrading. Do not delete
 journals, repair native rebase state, or recreate bindings by hand. The new owner
-does not migrate or resume
-old transfer progress. Immutable reports, evidence pins, and settled resource
+does not migrate old transfer progress or publish a retained checkpoint without
+its report, independent generation proof, and exact upstream predecessor.
+Immutable reports, evidence pins, and settled resource
 journals remain usable as historical evidence, including older REWORK predecessor
 records and receipted rewrite, rollback, and rewrite-publication operations.
