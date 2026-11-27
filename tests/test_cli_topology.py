@@ -4,9 +4,11 @@
 # ruff: noqa: F403, F405, I001
 """Independent CLI/service process, lifecycle, and recovery topology proof."""
 
+import select
+from contextlib import ExitStack
+
 from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
-import select
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.implementation_transfer import source_resolution_digest
 
@@ -2751,6 +2753,8 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     worker = git_fixture["tmp"] / "active-worker.py"
     ready = worker.with_suffix(".ready")
     release = worker.with_suffix(".release")
+    product_target = worker.with_suffix(".product-target")
+    monkeypatch.setenv("DEVLEGATE_TEST_POST_CHECKPOINT_PRODUCT", str(product_target))
     worker.write_text(
         "#!/usr/bin/env python3\n"
         "import json, pathlib, sys, time\n"
@@ -2776,33 +2780,59 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
     _add_service_ticket(engine)
     git(repo, "commit", "--allow-empty", "-m", "active base A")
     git(repo, "push", "origin", "HEAD:main")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    publisher = _ensure_publisher(git_fixture)
     ineligible = case in {"unrelated", "divergent"}
 
-    with LiveService(repo, config) as service:
+    with ExitStack() as cleanup:
+        service = LiveService(repo, config, command=_recovery_driver(config))
+        cleanup.push(service)
+        cleanup.callback(release.touch)
+        service.start()
+        service.wait_ready()
         service.wait_for(ready.exists)
+        assert git(repo, "rev-parse", "HEAD").stdout.strip() == base
         product_file = (
             "implementation.txt" if case == "conflict" else "product-change.txt"
         )
-        (repo / product_file).write_text("product B\n")
-        git(repo, "add", product_file)
-        git(repo, "commit", "-m", "advance product")
+        (publisher / product_file).write_text("product B\n")
+        git(publisher, "add", product_file)
+        git(publisher, "commit", "-m", "advance product")
         if ineligible:
             parents = ()
             if case == "divergent":
-                other = git(repo, "commit-tree", "HEAD^^{tree}", "-p", "HEAD^^",
-                            "-m", "divergent parent").stdout.strip()
+                other = git(
+                    publisher, "commit-tree", "HEAD^^{tree}", "-p", "HEAD^^",
+                    "-m", "divergent parent",
+                ).stdout.strip()
                 parents = ("-p", other)
-            other = git(repo, "commit-tree", "HEAD^{tree}", *parents,
-                        "-m", "replace product history").stdout.strip()
-            git(repo, "reset", "--hard", other)
-        git(repo, "push", "--force-with-lease", "origin", "HEAD:main")
+            other = git(
+                publisher, "commit-tree", "HEAD^{tree}", *parents,
+                "-m", "replace product history",
+            ).stdout.strip()
+            git(publisher, "reset", "--hard", other)
+        target = git(publisher, "rev-parse", "HEAD").stdout.strip()
+        git(
+            publisher, "push", f"--force-with-lease=refs/heads/main:{base}",
+            "origin", "HEAD:main",
+        )
+        # Remote-only movement is safe for an ordinary running descendant.
+        # Ask the driver to install B locally at the owner's checkpoint boundary.
+        product_target.write_text(target)
         release.touch()
         service.wait_for(lambda: (
             (_disk_state(config).get("reconciliation") or {}).get("status") == "pending"
         ))
         pending_before = _disk_state(config)["reconciliation"]
-        target = pending_before["observed_product"]
+        assert pending_before["original_base"] == base
+        assert pending_before["observed_product"] == target
         execution = Path(pending_before["execution_path"])
+        source = pending_before["worker_checkpoint"]
+        assert git(execution, "rev-parse", "HEAD").stdout.strip() == source
+        assert git(execution, "rev-parse", f"{source}^").stdout.strip() == base
+        assert git(execution, "show", f"{source}:implementation.txt").stdout == (
+            "worker work\n"
+        )
         assert git(repo, "rev-parse", "HEAD").stdout.strip() == target
         service.kill()
         service.restart()
@@ -2823,7 +2853,6 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
             control = git(repo, "ls-remote", "origin", "refs/heads/devlegate/control")
             assert product.stdout.split()[0] == target
             assert control.stdout.split()[0] == pending_before["control_head"]
-            source = pending_before["worker_checkpoint"]
             assert git(execution, "rev-parse", "HEAD").stdout.strip() == source
             pin = git(repo, "rev-parse", pending_before["evidence_ref"])
             assert pin.stdout.strip() == source

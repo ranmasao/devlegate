@@ -54,6 +54,8 @@ def main() -> int:
     marker = Path(marker_value) if marker_value else None
     release_marker_value = os.environ.get("DEVLEGATE_TEST_OPERATOR_RELEASE_MARKER")
     release_marker = Path(release_marker_value) if release_marker_value else None
+    product_target_value = os.environ.get("DEVLEGATE_TEST_POST_CHECKPOINT_PRODUCT")
+    product_target = Path(product_target_value) if product_target_value else None
 
     def crash() -> None:
         if marker is not None:
@@ -70,6 +72,19 @@ def main() -> int:
             engine._state_write_uncertain = True
             raise OSError("test stall state write outcome uncertain")
         original_save(phase, **fields)
+        if (
+            fields.get("execution_stage") == "post-checkpoint"
+            and product_target is not None
+            and product_target.is_file()
+        ):
+            # Install the separately published product revision on the serialized
+            # owner path, before the real post-checkpoint product observation.
+            target = product_target.read_text().strip()
+            git = engine._git_runtime
+            git(engine.repo, "fetch", engine.remote_name, engine.remote_branch)
+            assert git(engine.repo, "rev-parse", "FETCH_HEAD").stdout.strip() == target
+            git(engine.repo, "reset", "--hard", target)
+            product_target.unlink()
         if point == phase and point in {"agent_pending", "merge_pending"}:
             crash()
         if point is not None and point == fields.get("execution_stage"):
