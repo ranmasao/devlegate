@@ -18,6 +18,7 @@ from devlegate.git import push_refs, remote_ref, resolve_ref_commit
 from devlegate.resource_binding import (
     ResourceBinding,
     _identity,
+    _publish_once,
     _read,
     _safe_path,
     _sync_directory,
@@ -72,7 +73,7 @@ def _log_digest(path: Path) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def create_pin(binding: ResourceBinding, ref: str, head: str) -> None:
+def create_pin(binding: ResourceBinding, ref: str, head: str, *, replay=False) -> None:
     """Create once with a reflog witness. Never receipt an existing foreign pin."""
     binding._validate_intent()
     directory = _directory(binding, ref)
@@ -80,6 +81,9 @@ def create_pin(binding: ResourceBinding, ref: str, head: str) -> None:
     runner, repo = binding.manager._runner, binding.manager.repo
     if (directory / "local.json").exists():
         require_pin(binding, {"location": "local", "ref": ref, "head": head})
+        return
+    if replay:
+        _create_replayable_pin(binding, ref, head, directory)
         return
     if directory.exists() or resolve_ref_commit(repo, ref, runner=runner) is not None:
         raise EvidenceError("existing pin has no independent creation receipt")
@@ -102,7 +106,42 @@ def create_pin(binding: ResourceBinding, ref: str, head: str) -> None:
     })
 
 
-def publish_pin(binding: ResourceBinding, ref: str, head: str) -> None:
+def _create_replayable_pin(binding, ref, head, directory):
+    runner, repo = binding.manager._runner, binding.manager.repo
+    path = directory / "intent.json"
+    intent = {"generation": binding.intent["generation"], "ref": ref, "head": head}
+    log = Path(str(binding.intent["common"])) / "logs" / ref
+    _safe_path(log)
+    current = resolve_ref_commit(repo, ref, runner=runner)
+    if not path.exists():
+        if current is not None or log.exists():
+            raise EvidenceError("existing pin has no independent creation intent")
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        _sync_directory(directory.parent)
+        _publish_once(path, intent)
+    if _read(path) != intent:
+        raise EvidenceError("pin creation intent differs")
+    label = f"devlegate pin {binding.intent['generation']}"
+    if current is None and not log.exists():
+        runner(repo, "update-ref", "--no-deref", "--create-reflog", "-m", label,
+               ref, head, "0" * len(head), check=False)
+    if resolve_ref_commit(repo, ref, runner=runner) != head or not log.is_file():
+        raise EvidenceError("pin creation is unproved")
+    content = log.read_bytes()
+    if (len(content.splitlines()) != 1
+            or not content.startswith(f"{'0' * len(head)} {head} ".encode())
+            or not content.endswith(f"\t{label}\n".encode())
+            or runner(repo, "symbolic-ref", "-q", ref, check=False).returncode != 1):
+        raise EvidenceError("pin creation reflog differs")
+    witness = directory / "witness"
+    if not witness.exists():
+        os.link(log, witness, follow_symlinks=False)
+    if _identity(log) != _identity(witness):
+        raise EvidenceError("pin creation witness differs")
+    _publish_once(directory / "local.json", {**intent, "log_sha256": _log_digest(log)})
+
+
+def publish_pin(binding: ResourceBinding, ref: str, head: str, *, replay=False) -> None:
     pin = {"location": "local", "ref": ref, "head": head}
     require_pin(binding, pin)
     directory = _directory(binding, ref)
@@ -113,18 +152,25 @@ def publish_pin(binding: ResourceBinding, ref: str, head: str) -> None:
         if remote_ref(repo, remote, ref, runner=runner) != head:
             raise EvidenceError("published pin changed")
         return
-    if (directory / "remote-intent.json").exists() or remote_ref(
-        repo, remote, ref, runner=runner
-    ) is not None:
-        raise EvidenceError("remote pin creation is unowned or uncertain")
     intent = {"generation": binding.intent["generation"], "ref": ref,
               "before": None, "after": head}
-    _write_once(directory / "remote-intent.json", intent)
-    pushed = push_refs(repo, remote, f"{head}:{ref}",
-                       options=(f"--force-with-lease={ref}:",), runner=runner)
-    if pushed.returncode or remote_ref(repo, remote, ref, runner=runner) != head:
+    path = directory / "remote-intent.json"
+    observed = remote_ref(repo, remote, ref, runner=runner)
+    if path.exists():
+        if not replay or _read(path) != intent or observed not in {None, head}:
+            raise EvidenceError("remote pin creation is unowned or uncertain")
+    else:
+        if observed is not None:
+            raise EvidenceError("remote pin creation is unowned or uncertain")
+        _publish_once(path, intent)
+    if observed is None:
+        pushed = push_refs(repo, remote, f"{head}:{ref}",
+                            options=(f"--force-with-lease={ref}:",), runner=runner)
+        if pushed.returncode and not replay:
+            raise EvidenceError("remote pin publication is uncertain")
+    if remote_ref(repo, remote, ref, runner=runner) != head:
         raise EvidenceError("remote pin publication is uncertain")
-    _write_once(directory / "remote.json", intent)
+    _publish_once(directory / "remote.json", intent)
 
 
 def require_pin(binding: ResourceBinding, pin: dict) -> dict:

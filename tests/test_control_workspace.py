@@ -3411,111 +3411,6 @@ def test_same_ticket_lineage_reuses_published_branch_for_later_attempt(
     assert len({report.workspace_head for report in reports}) == 3
 
 
-def test_rework_ports_linear_multi_commit_delta_and_replays_exactly(tmp_path):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    key = next(state.glob("worktrees/*"))
-    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(working, key, "T-1")
-    old_workspace = manager.prepare(old_base)
-    for name in ("first.txt", "second.txt"):
-        (old_workspace.path / name).write_text(f"{name}\n")
-        git(old_workspace.path, "add", name)
-        git(old_workspace.path, "commit", "-m", f"add {name}")
-    old_checkpoint = git(old_workspace.path, "rev-parse", "HEAD").stdout.strip()
-    (working / "new-base.txt").write_text("new base\n")
-    git(working, "add", "new-base.txt")
-    git(working, "commit", "-m", "advance product")
-    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
-
-    ported = manager.prepare_rework(new_base, old_base, old_checkpoint)
-    replayed = manager.prepare_rework(new_base, old_base, old_checkpoint)
-
-    assert (ported.path / "first.txt").read_text() == "first.txt\n"
-    assert (ported.path / "second.txt").read_text() == "second.txt\n"
-    assert (ported.path / "new-base.txt").read_text() == "new base\n"
-    assert replayed.head == ported.head
-    ported_commits = git(
-        ported.path, "rev-list", f"{new_base}..HEAD"
-    ).stdout.splitlines()
-    assert len(ported_commits) == 2
-
-
-def test_rework_failed_ancestry_does_not_retire_or_move_workspace(
-    tmp_path, monkeypatch
-):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    key = next(state.glob("worktrees/*"))
-    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(working, key, "T-1")
-    workspace = manager.prepare(old_base)
-    (workspace.path / "implementation.txt").write_text("checkpoint\n")
-    git(workspace.path, "add", "implementation.txt")
-    git(workspace.path, "commit", "-m", "checkpoint")
-    old_checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-    (working / "new-base.txt").write_text("new base\n")
-    git(working, "add", "new-base.txt")
-    git(working, "commit", "-m", "advance product")
-    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    original_git = execution_workspace_module._git
-
-    def failed_ancestry(cwd, *args, **kwargs):
-        if args[:2] == ("merge-base", "--is-ancestor"):
-            return subprocess.CompletedProcess(args, 128, "", "repository unreadable")
-        return original_git(cwd, *args, **kwargs)
-
-    monkeypatch.setattr(execution_workspace_module, "_git", failed_ancestry)
-
-    with pytest.raises(
-        ExecutionWorkspaceError, match="cannot prove previous execution"
-    ):
-        manager.prepare_rework(new_base, old_base, old_checkpoint)
-
-    assert workspace.path.exists()
-    branch_head = git(
-        working, "rev-parse", f"refs/heads/{workspace.branch}"
-    ).stdout.strip()
-    assert branch_head == old_checkpoint
-
-
-def test_rework_malformed_patch_proof_does_not_move_replayed_workspace(
-    tmp_path, monkeypatch
-):
-    working, config, state = control_fixture(tmp_path)
-    assert invoke(working, "control", "init", config=config).returncode == 0
-    key = next(state.glob("worktrees/*"))
-    old_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    manager = ExecutionWorkspaceManager(working, key, "T-1")
-    workspace = manager.prepare(old_base)
-    (workspace.path / "implementation.txt").write_text("checkpoint\n")
-    git(workspace.path, "add", "implementation.txt")
-    git(workspace.path, "commit", "-m", "checkpoint")
-    old_checkpoint = git(workspace.path, "rev-parse", "HEAD").stdout.strip()
-    (working / "new-base.txt").write_text("new base\n")
-    git(working, "add", "new-base.txt")
-    git(working, "commit", "-m", "advance product")
-    new_base = git(working, "rev-parse", "HEAD").stdout.strip()
-    replayed = manager.prepare_rework(new_base, old_base, old_checkpoint)
-    original_git = execution_workspace_module._git
-
-    def malformed_patch_proof(cwd, *args, **kwargs):
-        if args[:1] == ("cherry",):
-            return subprocess.CompletedProcess(args, 0, "not a cherry record\n", "")
-        return original_git(cwd, *args, **kwargs)
-
-    monkeypatch.setattr(execution_workspace_module, "_git", malformed_patch_proof)
-
-    with pytest.raises(ExecutionWorkspaceError, match="cannot prove replay patch"):
-        manager.prepare_rework(new_base, old_base, old_checkpoint)
-
-    assert replayed.path.exists()
-    branch_head = git(
-        working, "rev-parse", f"refs/heads/{replayed.branch}"
-    ).stdout.strip()
-    assert branch_head == replayed.head
-
-
 @pytest.mark.parametrize(
     ("artifact_kind", "error"),
     [
@@ -3896,13 +3791,15 @@ def test_review_backlog_deferral_preserves_feedback_binding(
     prompt = view["observation"]["worker_prompt"]
     assert prompt["status"] == "present", prompt
     assert prompt["review_binding"] == "verified"
-    assert prompt["directive"] == ("rework" if restart == "no" else "resume")
+    assert prompt["directive"] == "rework"
     assert prompt["text"] == prompts[1]
 
 
 def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     tmp_path, monkeypatch
 ):
+    import devlegate.rework_transfer as transaction
+
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -3938,10 +3835,10 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     git(control, "commit", "-m", "return ticket for rework")
     git(control, "push", "origin", "devlegate/control")
 
-    original_prepare = devlegate._prepare_rework_remote_evidence
+    original_prepare = transaction.publish_pin
 
-    def prepare_then_drift(*args):
-        original_prepare(*args)
+    def prepare_then_drift(*args, **kwargs):
+        original_prepare(*args, **kwargs)
         foreign = git(
             working,
             "commit-tree",
@@ -3954,12 +3851,12 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
         git(working, "push", "origin", f"{foreign}:refs/heads/devlegate/work/T-1")
 
     monkeypatch.setattr(
-        devlegate, "_prepare_rework_remote_evidence", prepare_then_drift
+        transaction, "publish_pin", prepare_then_drift
     )
 
     with pytest.raises(
         runtime_module.WorkspacePreparationBlockedError,
-        match="remote execution branch changed after evidence publication",
+        match="remote changed before installation|upstream predecessor changed",
     ):
         run_test_iteration(devlegate)
 
@@ -3968,7 +3865,7 @@ def test_rework_remote_drift_after_evidence_preserves_old_workspace(
     assert git(working, "rev-parse", "devlegate/work/T-1").stdout.strip() == previous
     assert devlegate._state["phase"] == "agent_pending"
     assert devlegate._state["rework_provenance"]["preparation_stage"] == (
-        "remote_evidence_published"
+        "admitted"
     )
 
 
@@ -4016,14 +3913,15 @@ def test_restart_resumes_dirty_published_rework_workspace_once(tmp_path, monkeyp
     # iteration to execute preparation and crash at the publication boundary.
     monkeypatch.setattr(devlegate, "_stop_before_admission", lambda: False)
 
-    original_install = devlegate._prepare_rework_remote_predecessor
+    original_save = devlegate._save_state
 
-    def install_then_crash(*args):
-        original_install(*args)
-        raise RuntimeError("simulated process loss after predecessor publication")
+    def install_then_crash(*args, **kwargs):
+        original_save(*args, **kwargs)
+        if (kwargs.get("rework_provenance") or {}).get("candidate"):
+            raise RuntimeError("simulated process loss after predecessor publication")
 
     monkeypatch.setattr(
-        devlegate, "_prepare_rework_remote_predecessor", install_then_crash
+        devlegate, "_save_state", install_then_crash
     )
     with pytest.raises(RuntimeError, match="simulated process loss"):
         run_test_iteration(devlegate)

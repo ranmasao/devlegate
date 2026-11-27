@@ -261,7 +261,9 @@ def dispatch_mutation(
             kwargs["rewrite_published"] = True
         return engine.submit_reconcile_update_base(ticket_id, onto, **kwargs)
     if request.method == "reconcile-resume":
-        if set(request.payload) != {"ticket_id"}:
+        if set(request.payload) not in (
+            {"ticket_id"}, {"ticket_id", "resolve_candidate", "candidate_digest"},
+        ):
             raise IPCProtocolError(
                 "invalid_request", "reconciliation resume payload fields are invalid"
             )
@@ -269,6 +271,18 @@ def dispatch_mutation(
         if not isinstance(ticket_id, str) or not ticket_id:
             raise IPCProtocolError(
                 "invalid_request", "reconciliation ticket_id must be non-empty text"
+            )
+        if "resolve_candidate" in request.payload:
+            candidate = request.payload["resolve_candidate"]
+            digest = request.payload["candidate_digest"]
+            if (not isinstance(candidate, str) or not candidate or "\0" in candidate
+                    or not isinstance(digest, str)):
+                raise IPCProtocolError(
+                    "invalid_request", "invalid resolution candidate path or digest",
+                )
+            return engine.submit_reconcile_resume(
+                ticket_id, request_id=request.request_id, resolve_candidate=candidate,
+                candidate_digest=digest,
             )
         return engine.submit_reconcile_resume(ticket_id, request_id=request.request_id)
     if request.method == "reconcile-auto":

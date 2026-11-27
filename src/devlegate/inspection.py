@@ -565,6 +565,18 @@ def inspect_object(
         from devlegate.ticket_reset import response
 
         observation["reset"] = response(reset)
+    rework = owner._state.get("rework_provenance")
+    if (
+        object_type == "ticket"
+        and owner._state.get("phase") == "agent_pending"
+        and owner._state.get("execution_ticket_id") == object_id
+        and isinstance(rework, dict)
+        and isinstance(rework.get("conflict"), dict)
+    ):
+        from devlegate.rework_transfer import waiting_message
+
+        observation["rework_conflict"] = rework["conflict"]
+        blockers.append(waiting_message(rework["conflict"]))
     return InspectionView(
         f"devlegate.inspect-{object_type}.v1", object_type, object_id,
         observation, tuple(sorted(set(blockers))),

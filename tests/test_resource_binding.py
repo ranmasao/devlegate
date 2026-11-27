@@ -580,6 +580,9 @@ def test_zero_delta_rework_after_ordinary_retirement(
 ):
     previous = resources
     workspace = previous.prepare(remote_head=None)
+    previous.begin_operation("worker", {"start": workspace.head})
+    previous.finish_operation("worker", {"group_retired": True})
+    previous.record_worker_retirement()
     manager = previous.manager
     manager.retire(workspace, workspace.head)
     run_git(
@@ -596,41 +599,36 @@ def test_zero_delta_rework_after_ordinary_retirement(
 
     def create(repo, *args, **kwargs):
         result = original(repo, *args, **kwargs)
-        if interrupted == "worktree" and args[:2] == ("worktree", "add"):
+        if interrupted == "worktree" and args[2:4] == ("worktree", "add"):
             raise OSError("interrupted creation")
         return result
 
     monkeypatch.setattr(manager, "_runner", create)
     if interrupted == "receipt":
         import devlegate.resource_binding as module
-        write = module._write_once
+        write = module._publish_once
 
         def receipt(path, value):
             write(path, value)
             if path.name == "receipt.json":
                 raise OSError("interrupted receipt")
 
-        monkeypatch.setattr(module, "_write_once", receipt)
+        monkeypatch.setattr(module, "_publish_once", receipt)
+
+    def install():
+        return current.install_rework(
+            previous, workspace.head, workspace.head, workspace.head,
+            require_current=lambda: None,
+        )
+
     if interrupted:
         with pytest.raises(OSError, match="interrupted"):
-            current.prepare_rework(
-                previous, workspace.head, workspace.head, remote_head=None,
-            )
+            install()
         monkeypatch.undo()
-    if interrupted == "worktree":
-        before = snapshot(manager.root.parent)
-        with pytest.raises(ExecutionWorkspaceError):
-            current.prepare_rework(
-                previous, workspace.head, workspace.head, remote_head=None,
-            )
-        assert snapshot(manager.root.parent) == before
-    else:
-        recreated = current.prepare_rework(
-            previous, workspace.head, workspace.head, remote_head=None,
-        )
-        assert recreated.head == workspace.head
-        assert proof(current).local_state == "proved"
-        assert proof(previous).local_state != "proved"
+    recreated = install()
+    assert recreated.head == workspace.head
+    assert proof(current).local_state == "proved"
+    assert proof(previous).local_state != "proved"
 
 
 def test_repeatable_operations_do_not_reuse_uncertain_attempts(resources):
@@ -652,37 +650,6 @@ def test_repeatable_operations_do_not_reuse_uncertain_attempts(resources):
         restarted.begin_operation("rewrite", {"before": workspace.head})
     assert "receipt missing" in proof(restarted).reason
     assert snapshot(binding.manager.root.parent) == before
-
-
-@pytest.mark.parametrize("interrupted", [False, True])
-def test_no_branch_rework_manager_uses_generation_creator(
-    resources, monkeypatch, interrupted
-):
-    binding = resources
-    base = str(binding.intent["base"])
-    called = []
-
-    def create(admitted):
-        called.append(admitted)
-        return binding.prepare(remote_head=None)
-
-    if interrupted:
-        monkeypatch.setattr(
-            binding, "_record_creation",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("lost receipt")),
-        )
-        with pytest.raises(OSError, match="lost receipt"):
-            binding.manager.prepare_rework(base, base, base, creator=create)
-        monkeypatch.undo()
-        before = snapshot(binding.manager.root.parent)
-        with pytest.raises(ExecutionWorkspaceError, match="ambiguous"):
-            binding.prepare(remote_head=None)
-        assert snapshot(binding.manager.root.parent) == before
-    else:
-        workspace = binding.manager.prepare_rework(base, base, base, creator=create)
-        assert workspace.head == base
-        assert proof(binding).local_state == "proved"
-    assert called == [base]
 
 
 def test_failed_rebase_cannot_receipt_an_unexpected_branch_change(resources):

@@ -17,7 +17,12 @@ from runtime_helpers import run_test_iteration
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.execution_workspace import ExecutionWorkspaceError
 from devlegate.resource_binding import ResourceBinding
-from devlegate.runtime import DevlegateError, WorkflowBlockedError
+from devlegate.rework_transfer import ReworkTransfer
+from devlegate.runtime import (
+    DevlegateError,
+    WorkflowBlockedError,
+    WorkspacePreparationBlockedError,
+)
 from devlegate.worker_egress import WorkerClaim, WorkerRunResult
 from devlegate.worker_supervisor import _capture_worker_identity
 
@@ -28,6 +33,315 @@ class ProcessLoss(BaseException):
 
 def completed():
     return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+
+def publish_rework(owner, report):
+    control = owner.control_worktree
+    artifact = control / "reviews" / "T-1" / f"{report.execution_id}.md"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        "<!-- devlegate-review-v1\n"
+        "ticket: T-1\n"
+        f"execution: {report.execution_id}\n"
+        f"checkpoint: {report.workspace_head}\n"
+        f"control: {report.control_head}\n"
+        "disposition: rework\n-->\nKeep both implementation commits.\n"
+    )
+    git(control, "mv", "kanban/review/T-1.md", "kanban/todo/T-1.md")
+    git(control, "add", str(artifact.relative_to(control)))
+    git(control, "commit", "-m", "request rework")
+    git(control, "push", "origin", "devlegate/control")
+
+
+@pytest.fixture
+def multi_commit_rework(tmp_path, monkeypatch):
+    repo, config, _ = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+
+    for name in ("first.txt", "second.txt"):
+        def work(workspace, _prompt, *, filename=name, **_kwargs):
+            (workspace.path / filename).write_text(filename + "\n")
+            return completed()
+
+        monkeypatch.setattr(owner._workers, "run", work)
+        assert run_test_iteration(owner) == 0
+        report = ExecutionReportStore(owner.control_worktree).read(
+            "T-1", owner._state["execution_id"],
+        )
+        publish_rework(owner, report)
+    return owner, config, report
+
+
+def advance_product(repo):
+    (repo / "advanced.txt").write_text("new product\n")
+    git(repo, "add", "advanced.txt")
+    git(repo, "commit", "-m", "advance product")
+    git(repo, "push", "origin", "HEAD:main")
+    return git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+@pytest.mark.parametrize("source_kind", ["no-op", "retired-no-op", "incorporated"])
+def test_rework_tree_already_present(tmp_path, monkeypatch, source_kind):
+    repo, config, _ = control_fixture(tmp_path)
+    assert invoke(repo, "control", "init", config=config).returncode == 0
+    monkeypatch.chdir(repo)
+    owner = Devlegate(config)
+
+    def first(workspace, _prompt, **_kwargs):
+        if source_kind == "incorporated":
+            (workspace.path / "implementation.txt").write_text("already included\n")
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", first)
+    assert run_test_iteration(owner) == 0
+    control = owner.control_worktree
+    source = ExecutionReportStore(control).list("T-1")[0]
+    if source_kind == "retired-no-op":
+        with owner._lock():
+            owner._retire_zero_delta_execution(source)
+        assert not Path(source.execution_path).exists()
+    if source_kind == "incorporated":
+        git(repo, "merge", "--ff-only", source.workspace_head)
+    target = advance_product(repo)
+    publish_rework(owner, source)
+    launches = []
+
+    def second(workspace, prompt, **_kwargs):
+        launches.append(workspace.head)
+        assert workspace.base_head == workspace.head == target
+        assert "REWORK" in prompt and "Keep both implementation commits" in prompt
+        return completed()
+
+    monkeypatch.setattr(owner._workers, "run", second)
+    assert run_test_iteration(owner) == 0
+    assert launches == [target]
+    reports = ExecutionReportStore(control).list("T-1")
+    assert len(reports) == 2 and source in reports
+    new = next(item for item in reports if item != source)
+    assert new.resource_generation != source.resource_generation
+    assert new.workspace_head == new.code_base_head == target
+
+
+@pytest.mark.parametrize("change", [
+    "product", "control", "remote", "unretired", "foreign", "edited",
+])
+def test_waiting_rework_refuses_stale_or_unowned_handoff(
+    multi_commit_rework, monkeypatch, change,
+):
+    from devlegate.implementation_transfer import source_resolution_digest
+
+    owner, config, source = multi_commit_rework
+    repo = owner.repo
+    (repo / "first.txt").write_text("product version\n")
+    git(repo, "add", "first.txt")
+    git(repo, "commit", "-m", "conflict with first implementation commit")
+    git(repo, "push", "origin", "HEAD:main")
+
+    def no_launch(*_args, **_kwargs):
+        pytest.fail("a waiting or stale candidate must never launch a worker")
+
+    monkeypatch.setattr(owner._workers, "run", no_launch)
+    with pytest.raises(WorkspacePreparationBlockedError, match="waiting for source"):
+        run_test_iteration(owner)
+    pending = owner._state["rework_provenance"]
+    reports = ExecutionReportStore(owner.control_worktree).list("T-1")
+    path = Path(pending["conflict"]["path"])
+    original = Path(source.execution_path)
+    (path / "first.txt").write_text("resolved\n")
+    digest = source_resolution_digest(path)
+    ref = f"refs/heads/{source.execution_branch}"
+    if change == "product":
+        advance_product(repo)
+        expected = "stale REWORK target"
+    elif change == "control":
+        control = owner.control_worktree
+        ticket = control / "kanban/todo/T-1.md"
+        ticket.write_text(ticket.read_text() + "New assignment.\n")
+        git(control, "commit", "-am", "change assignment")
+        git(control, "push", "origin", "devlegate/control")
+        expected = "stale REWORK (control|admission)"
+    elif change == "remote":
+        git(repo, "push", f"--force-with-lease={ref}:{source.workspace_head}",
+            "origin", f"HEAD:{ref}")
+        expected = "remote changed"
+    elif change == "unretired":
+        # Missing independent group retirement must refuse even though the
+        # successor's pending state has no worker identity of its own.
+        prior = ResourceBinding.for_execution(
+            owner._execution_generation_binding().manager, source.execution_id,
+        )
+        next(prior.directory.glob("worker-retired.*.json")).unlink()
+        expected = "retirement is unproven"
+    elif change == "foreign":
+        git(repo, "worktree", "remove", str(original))
+        git(repo, "worktree", "add", str(original), source.execution_branch)
+        expected = "conflict changed"
+    else:
+        (path / "added.txt").write_text("changed after observation\n")
+        expected = "candidate changed since confirmation"
+
+    restarted = Devlegate(config)
+    with restarted._lock():
+        transaction = ReworkTransfer(
+            restarted, restarted._execution_generation_binding(), pending,
+        )
+        with pytest.raises(ExecutionWorkspaceError, match=expected):
+            transaction.resolve(str(path), digest)
+    assert (path / "first.txt").read_text() == "resolved\n"
+    assert git(original, "rev-parse", "HEAD").stdout.strip() == source.workspace_head
+    assert restarted._state["execution_id"] == owner._state["execution_id"]
+    assert ExecutionReportStore(owner.control_worktree).list("T-1") == reports
+
+
+def test_reset_discards_waiting_rework_without_using_candidate(
+    multi_commit_rework, monkeypatch,
+):
+    from devlegate.ticket_reset import admit
+
+    owner, config, source = multi_commit_rework
+    (owner.repo / "first.txt").write_text("canonical product\n")
+    git(owner.repo, "add", "first.txt")
+    git(owner.repo, "commit", "-m", "produce a conflict")
+    git(owner.repo, "push", "origin", "HEAD:main")
+    monkeypatch.setattr(owner._workers, "run", lambda *_a, **_k: pytest.fail("launch"))
+    with pytest.raises(WorkspacePreparationBlockedError, match="waiting for source"):
+        run_test_iteration(owner)
+    candidate = Path(owner._state["rework_provenance"]["conflict"]["path"])
+    (candidate / "first.txt").write_text("unapproved edit\n")
+    with owner._lock():
+        assert admit(owner, "T-1")["accepted"] is True
+
+    restarted = Devlegate(config)
+    launches = []
+
+    def fresh(workspace, prompt, **_kwargs):
+        launches.append(restarted._state["execution_id"])
+        assert "FRESH" in prompt and "Keep both implementation commits" not in prompt
+        assert not (workspace.path / "second.txt").exists()
+        assert (workspace.path / "first.txt").read_text() == "canonical product\n"
+        return completed()
+
+    monkeypatch.setattr(restarted._workers, "run", fresh)
+    for _ in range(3):
+        assert run_test_iteration(restarted) == 0
+        if launches:
+            break
+    assert len(launches) == 1
+    assert (candidate / "first.txt").read_text() == "unapproved edit\n"
+    assert source in ExecutionReportStore(owner.control_worktree).list("T-1")
+
+
+@pytest.mark.parametrize(("point", "timing"), [
+    ("pin", "before"), ("pin", "after"),
+    ("evidence", "before"), ("evidence", "after"), ("evidence", "lost-ack"),
+    ("retire", "before"), ("retire", "after"),
+    ("cas", "before"), ("cas", "after"),
+    ("register", "before"), ("register", "after"),
+    ("creation", "before"), ("creation", "after"),
+    ("predecessor", "before"), ("predecessor", "after"), ("predecessor", "lost-ack"),
+    ("publication", "before"), ("publication", "after"),
+])
+def test_rework_effect_replay(multi_commit_rework, monkeypatch, point, timing):
+    import devlegate.resource_binding as resources
+    import devlegate.runtime as runtime
+
+    owner, config, source = multi_commit_rework
+    target = advance_product(owner.repo)
+    pin = f"refs/devlegate/recovery/workspace/T-1/{source.execution_id}"
+    ref = f"refs/heads/{source.execution_branch}"
+    calls = []
+    original_git = runtime._git
+    original_publish = resources._publish_once
+    fired = False
+    state_at_fault = None
+
+    def boundary(name, effect):
+        nonlocal fired, state_at_fault
+        calls.append(name)
+        if point != name or fired:
+            return effect()
+        fired = True
+        state_at_fault = copy.deepcopy(owner._state)
+        if timing == "before":
+            raise ProcessLoss()
+        result = effect()
+        if timing == "after":
+            raise ProcessLoss()
+        assert result.returncode == 0
+        return subprocess.CompletedProcess(result.args, 1, "", "lost acknowledgement")
+
+    def interrupt_git(repo, *args, **kwargs):
+        name = None
+        if args[0] == "update-ref":
+            if pin in args:
+                name = "pin"
+            elif ref in args:
+                name = "cas"
+        elif args[:2] == ("worktree", "remove"):
+            name = "retire"
+        elif args[2:4] == ("worktree", "add"):
+            name = "register"
+        elif args[0] == "push":
+            if any(arg.endswith(f":{pin}") for arg in args):
+                name = "evidence"
+            elif f"--force-with-lease={ref}:{source.workspace_head}" in args:
+                name = "predecessor"
+        def effect():
+            return original_git(repo, *args, **kwargs)
+
+        return boundary(name, effect) if name else effect()
+
+    def interrupt_record(path, value):
+        name = {
+            "receipt.json": "creation",
+            "predecessor-publication-receipt.json": "publication",
+        }.get(path.name)
+        if name:
+            return boundary(name, lambda: original_publish(path, value))
+        return original_publish(path, value)
+
+    launches = []
+
+    def worker(workspace, prompt, *, execution_id, **_kwargs):
+        launches.append(execution_id)
+        assert "Keep both implementation commits" in prompt and "REWORK" in prompt
+        assert workspace.base_head == target
+        assert git(workspace.path, "rev-list", "--count", f"{target}..HEAD").stdout == (
+            "2\n"
+        )
+        for name in ("first.txt", "second.txt", "advanced.txt"):
+            assert (workspace.path / name).is_file()
+        return completed()
+
+    monkeypatch.setattr(runtime, "_git", interrupt_git)
+    monkeypatch.setattr(resources, "_publish_once", interrupt_record)
+    monkeypatch.setattr(owner._workers, "run", worker)
+    if timing == "lost-ack":
+        assert run_test_iteration(owner) == 0
+    else:
+        with pytest.raises(ProcessLoss):
+            run_test_iteration(owner)
+        assert not launches
+        restarted = Devlegate(config)
+        monkeypatch.setattr(restarted._workers, "run", worker)
+        assert run_test_iteration(restarted) == 0
+    assert state_at_fault is not None and launches == [state_at_fault["execution_id"]]
+    assert calls.count(point) == (2 if timing == "before" else 1)
+    for effect in ("retire", "cas", "register", "predecessor"):
+        expected = 2 if timing == "before" and effect == point else 1
+        assert calls.count(effect) == expected
+    reports = ExecutionReportStore(owner.control_worktree).list("T-1")
+    assert len(reports) == 3 and source in reports
+    new = next(item for item in reports if item.execution_id == launches[0])
+    assert new.resource_generation == (
+        state_at_fault["execution_resource_binding"]["generation"]
+    )
+    assert new.resource_generation != source.resource_generation
+    for reference, head in ((ref, new.workspace_head), (pin, source.workspace_head)):
+        remote = git(owner.repo, "ls-remote", "origin", reference).stdout.split()[0]
+        assert remote == head
 
 
 @pytest.mark.parametrize("change", ["edit", "unrelated", "delete", "move"])
@@ -471,11 +785,11 @@ def test_rework_process_loss_replays_same_admitted_handoff(
 
     monkeypatch.setattr(final._workers, "run", worker)
     monkeypatch.setattr(
-        final, "_prepare_rework_remote_predecessor",
+        ReworkTransfer, "publish_predecessor",
         lambda *_a: pytest.fail("duplicate reviewed predecessor publication"),
     )
     monkeypatch.setattr(
-        final, "_prepare_rework_remote_evidence",
+        ReworkTransfer, "prepare",
         lambda *_a: pytest.fail("duplicate review evidence publication"),
     )
     assert run_test_iteration(final) == 0
@@ -541,7 +855,7 @@ def test_repeated_rework_process_loss_uses_immediate_resource_predecessor(
         resumed = Devlegate(config)
         monkeypatch.setattr(resumed._workers, "run", owner._workers.run)
         monkeypatch.setattr(
-            resumed, "_prepare_rework_remote_predecessor",
+            ReworkTransfer, "publish_predecessor",
             lambda *_a: pytest.fail("duplicate predecessor publication"),
         )
         with pytest.raises(ProcessLoss):
