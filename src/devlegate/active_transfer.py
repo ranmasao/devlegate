@@ -19,7 +19,6 @@ from devlegate.transfer_transaction import (
     TransferTransaction,
     automatic_target,
     origin_digest,
-    require_unlaunched_install,
     synchronize_target,
     waiting_message,
 )
@@ -41,6 +40,15 @@ def _origin(reconciliation, rewrite_published, automatic=False):
 
 class ActiveTransfer(TransferTransaction):
     origin = "update-base"
+
+    @classmethod
+    def admitted(cls, owner, source, reconciliation):
+        progress = owner._state["transfer_progress"]
+        return cls(
+            owner, ResourceBinding(source.manager, progress["active_binding"]),
+            source, reconciliation, progress["rewrite_published"],
+            progress.get("automatic", False),
+        )
 
     def __init__(self, owner, binding, source, reconciliation, rewrite_published,
                  automatic=False):
@@ -105,7 +113,7 @@ class ActiveTransfer(TransferTransaction):
         if self.reconciliation.get("installed_source") is None:
             super().require_source_retirement()
         else:
-            require_unlaunched_install(self.source, self.identity.checkpoint)
+            self.source.require_unlaunched_install(self.identity.checkpoint)
 
     def require_source(self, identity):
         if not self.installation_started:
@@ -238,12 +246,13 @@ def retain_stale_install(owner, value):
     target = automatic_target(owner, base, product)
     if value.get("externally_resolved"):
         raise ExecutionWorkspaceError(
-            "installed human resolution retained; decide explicitly how to continue"
+            "installed human resolution retained; preserve its edits before "
+            f"choosing devlegate reset {value['ticket_id']}"
         )
     ticket = value["ticket_id"]
     require_control(owner, value["control_head"], ticket)
     binding = owner._execution_generation_binding()
-    require_unlaunched_install(binding, checkpoint)
+    binding.require_unlaunched_install(checkpoint)
     if binding.require_local(clean=True).head != checkpoint:
         raise ExecutionWorkspaceError("installed checkpoint changed before reuse")
     execution = binding.intent["execution_id"]
@@ -268,11 +277,7 @@ def advance_pending(owner):
     intent = progress.get("active_binding")
     source = owner._execution_generation_binding()
     if intent:
-        binding = ResourceBinding(source.manager, intent)
-        transaction = ActiveTransfer(
-            owner, binding, source, value, progress["rewrite_published"],
-            progress.get("automatic", False),
-        )
+        transaction = ActiveTransfer.admitted(owner, source, value)
         if transaction.installation_started or not transaction.automatic:
             if progress.get("conflict") and not progress.get("confirmation"):
                 transaction.require_authority()
@@ -299,7 +304,7 @@ def advance_pending(owner):
     if value.get("installed_source") is None:
         source.require_worker_retirement()
     else:
-        require_unlaunched_install(source, value["worker_checkpoint"])
+        source.require_unlaunched_install(value["worker_checkpoint"])
     require_pin(source, {
         "location": "local", "ref": value["evidence_ref"],
         "head": value["worker_checkpoint"],
@@ -319,9 +324,8 @@ def advance_pending(owner):
 
 
 def _waiting(progress):
-    message = waiting_message(progress["conflict"], "update-base")
-    error = progress.get("resolution_error")
-    return f"{error}; {message}" if error else message
+    return waiting_message(progress["conflict"], "update-base",
+                           progress.get("resolution_error"))
 
 
 def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False,
@@ -385,6 +389,11 @@ def update_base(owner, ticket_id, onto, *, rewrite_published=False, replay=False
         require_control(owner, control, ticket_id)
         if source.latest_remote(source.intent["prior_remote"]) != before:
             raise ExecutionWorkspaceError("active upstream predecessor is unproven")
+        if (automatic and before is not None
+                and source.abandonment_remote_authority() != before):
+            raise ExecutionWorkspaceError(
+                "published execution ref ownership is unproved"
+            )
         if before is not None and (
             (before == base and not (automatic and before == checkpoint))
             or not owner._is_ancestor_runtime(owner.repo, base, before)

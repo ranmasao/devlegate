@@ -45,16 +45,26 @@ def origin_digest(provenance):
 def conflict_record(conflict):
     record = asdict(conflict)
     record.pop("unmerged")  # Internal replay evidence, not operator identity.
+    if any(entry.startswith("160000 ") for entry in conflict.unmerged):
+        record["gitlink"] = True
     return {**record, "path": str(conflict.path)}
 
 
-def waiting_message(conflict, origin="REWORK"):
+def waiting_message(conflict, origin="REWORK", error=None):
     identity = conflict["identity"]
-    return (
+    message = (
         f"{origin} waiting for source resolution: {conflict['path']} "
         f"(attempt {identity['attempt']}, A={identity['original_base']}, "
         f"B={identity['target']}, H={identity['checkpoint']}, "
         f"step {conflict['step'] + 1}, commit {conflict['source_commit']}); "
+    )
+    if conflict.get("gitlink"):
+        return message + (
+            "source-only resolution cannot select a gitlink commit; "
+            f"use devlegate reset {identity['ticket']} only if the original "
+            "generation is safe to retire; otherwise preserve the candidate"
+        )
+    return (f"{error}; " if error else "") + message + (
         f"edit source files, then run reconcile resume {identity['ticket']} "
         "--resolve-candidate with the candidate path"
     )
@@ -85,15 +95,6 @@ def automatic_target(owner, base, product):
             "local product is not on the observed forward path; synchronize explicitly"
         )
     return target
-
-
-def require_unlaunched_install(binding, checkpoint):
-    binding._validate_intent()
-    binding._require_settled()
-    if (not (binding.directory / "transfer-started.json").exists()
-            or binding._expected_head() != checkpoint
-            or any(operation == "worker" for _, operation, _ in binding._attempts())):
-        raise ExecutionWorkspaceError("installed transfer launch absence is unproved")
 
 
 def synchronize_target(owner, product, target):
@@ -188,7 +189,9 @@ class TransferTransaction:
         if (self.progress.get("conflict") or self.progress.get("confirmation")
                 or self.transfer.intent.exists() and not self._untouched_ready()):
             raise ExecutionWorkspaceError(
-                "stale candidate retained; explicitly decide how to preserve its edits"
+                "stale candidate retained; preserve any edits before choosing "
+                f"devlegate reset {self.identity.ticket} if the source is safe to "
+                "retire"
             )
 
     def _untouched_ready(self):
@@ -246,18 +249,14 @@ class TransferTransaction:
                     conflict=record, confirmation=None,
                     resolution_error=resolution_error,
                 )
-            message = waiting_message(record, self.origin)
             raise ExecutionWorkspaceError(
-                f"{resolution_error}; {message}" if resolution_error else message
+                waiting_message(record, self.origin, resolution_error)
             )
         if not isinstance(result, TransferReady):
             raise ExecutionWorkspaceError(
                 f"{self.origin} candidate refused: {result.reason}"
             )
         self.require_eligible_result(result)
-        if confirmation is not None:
-            self.save(conflict=None, confirmation=None, resolution_error=None)
-
         receipt = binding.directory / "receipt.json"
         if not receipt.exists():
             self.require_before_install()
@@ -302,7 +301,8 @@ class TransferTransaction:
         return workspace
 
     def save_installed(self, candidate):
-        self.save(conflict=None, candidate=candidate)
+        self.save(conflict=None, confirmation=None, resolution_error=None,
+                  candidate=candidate)
 
     def require_eligible_result(self, result):
         """Origin-specific policy beyond the common proof of exact C."""
@@ -442,7 +442,7 @@ class ReworkTransfer(TransferTransaction):
 
     def require_source_retirement(self):
         if self.installed_source:
-            require_unlaunched_install(self.source, self.identity.checkpoint)
+            self.source.require_unlaunched_install(self.identity.checkpoint)
         else:
             super().require_source_retirement()
 
@@ -462,7 +462,8 @@ class ReworkTransfer(TransferTransaction):
         super().require_source(identity)
 
     def save_installed(self, candidate):
-        self.progress = {**self.progress, "conflict": None, "candidate": candidate}
+        self.progress = {**self.progress, "conflict": None, "confirmation": None,
+                         "resolution_error": None, "candidate": candidate}
         self.owner._save_state(
             "agent_pending", transfer_progress=self.progress,
             execution_remote_head=self.binding.latest_remote(self.binding.intent["prior_remote"]),
@@ -485,12 +486,13 @@ class ReworkTransfer(TransferTransaction):
             if not self.installed:
                 self.prepare()
                 return
+            workspace = self.prepare()
             if self.progress["candidate"]["resolved"]:
                 raise ExecutionWorkspaceError(
-                    "installed human REWORK resolution retained; decide how to continue"
+                    "installed human REWORK resolution retained; preserve its edits "
+                    f"before choosing devlegate reset {identity.ticket}"
                 )
-            workspace = self.prepare()
-            require_unlaunched_install(binding, workspace.head)
+            binding.require_unlaunched_install(workspace.head)
             remote = binding.latest_remote(binding.intent["prior_remote"])
             evidence = owner._workspace_recovery_ref(
                 identity.ticket, binding.intent["execution_id"],

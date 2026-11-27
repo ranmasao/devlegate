@@ -89,6 +89,12 @@ def main() -> int:
             crash()
         if point is not None and point == fields.get("execution_stage"):
             crash()
+        if (point == "same_base_resolving"
+                and (fields.get("reconciliation") or {}).get("status") == "resolving"):
+            crash()
+        if (point == "resolved_transfer" and phase == "agent_pending"
+                and (fields.get("reconciliation") or {}).get("externally_resolved")):
+            crash()
         if point == "stall_classified" and fields.get(
             "execution_interruption_kind"
         ) == "worker_stalled":

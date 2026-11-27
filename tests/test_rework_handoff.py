@@ -271,6 +271,19 @@ def test_published_active_transfer_replay(multi_commit_rework, monkeypatch, boun
     assert {report.execution_id for report in new_reports} - {
         report.execution_id for report in reports
     } == set(launches)
+    if boundary == "chain":
+        binding = restarted._execution_generation_binding()
+        report = next(r for r in new_reports if r.execution_id == final_execution)
+        assert binding.abandonment_remote_authority() == report.workspace_head
+        intermediate = ResourceBinding(binding.manager, intent)
+        with pytest.raises(ExecutionWorkspaceError, match="worker outcome is unknown"):
+            intermediate.require_worker_retirement()
+        release = binding.manager.root / "transfers" / (
+            f"{intent['generation']}.released.json"
+        )
+        release.unlink()
+        with pytest.raises(ExecutionWorkspaceError, match="transfer evidence missing"):
+            binding.abandonment_remote_authority()
 
 
 @pytest.mark.parametrize("source_kind", ["no-op", "retired-no-op", "incorporated"])

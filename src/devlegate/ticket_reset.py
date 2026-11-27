@@ -318,7 +318,28 @@ def admit(owner, ticket_id):
             raise ValueError(f"reset blocked by pending owner transaction: {key}")
     reconciliation = owner._state.get("reconciliation")
     transfer = owner._state.get("transfer_progress") or {}
-    if reconciliation is not None:
+    settled_human_install = reconciliation is not None and (
+        reconciliation.get("status") == "resolved"
+        and reconciliation.get("automatic") is True
+        and reconciliation.get("externally_resolved") is True
+        and reconciliation["ticket_id"] == ticket_id
+        and reconciliation.get("resumed_execution_id")
+        == owner._state.get("execution_id")
+        and owner._state.get("phase") == "agent_pending"
+        and owner._state.get("worker_identity") is None
+    )
+    if settled_human_install:
+        installed = owner._execution_generation_binding()
+        checkpoint = reconciliation["worker_checkpoint"]
+        installed.require_unlaunched_install(checkpoint)
+        if installed.require_local(clean=True).head != checkpoint or (
+            owner._execution_remote_head(installed.manager.branch)
+            != reconciliation["execution_remote_head"]
+        ):
+            raise ValueError(
+                "reset installed resolution checkpoint or upstream changed"
+            )
+    elif reconciliation is not None:
         active_binding = transfer.get("active_binding")
         if not (
             reconciliation.get("status") == "pending"
@@ -333,19 +354,15 @@ def admit(owner, ticket_id):
         from devlegate.active_transfer import ActiveTransfer
 
         predecessor = owner._execution_generation_binding()
-        destination = ResourceBinding(predecessor.manager, active_binding)
-        transaction = ActiveTransfer(
-            owner, destination, predecessor, reconciliation,
-            transfer["rewrite_published"],
-        )
+        transaction = ActiveTransfer.admitted(owner, predecessor, reconciliation)
         if transaction.installation_started or (
-            destination.directory / "receipt.json"
+            transaction.binding.directory / "receipt.json"
         ).exists():
             raise ValueError(
                 "reset blocked while active transfer installation is settling"
             )
         transaction.require_source(transaction.identity)
-        if destination.intent["prior_remote"] not in {
+        if transaction.binding.intent["prior_remote"] not in {
             None, transaction.identity.checkpoint,
         }:
             raise ValueError("reset remote ref does not match the exact generation")
@@ -580,7 +597,10 @@ def advance(owner):
                     binding = ResourceBinding(_manager(owner, intent["ticket_id"]),
                                               intent["binding"])
                     binding._validate_intent()
-                    if binding.intent["execution_id"] != execution_id:
+                    unlaunched = binding.is_unlaunched_transfer()
+                    if unlaunched:
+                        binding.require_unlaunched_install()
+                    elif binding.intent["execution_id"] != execution_id:
                         # Waiting REWORK targets the retired reviewed generation.
                         # Its own pending execution never reached worker admission.
                         binding.require_worker_retirement()
@@ -592,16 +612,17 @@ def advance(owner):
                         # proves this pre-worker attempt never owned a process.
                         binding.begin_operation("worker", {"reset_not_launched": True})
                         binding.finish_operation("worker", {"reset_not_launched": True})
-                    if binding.operation_pending("worker"):
-                        binding.finish_operation("worker", {"reset": True,
-                                                            "group_retired": True})
-                    receipt = binding.operation_receipt("worker")
-                    retirement = binding.directory / (
-                        f"worker-retired.{receipt['sequence']:08d}.json"
-                    )
-                    if not retirement.exists():
-                        binding.record_worker_retirement()
-                    binding.require_worker_retirement()
+                    if not unlaunched:
+                        if binding.operation_pending("worker"):
+                            binding.finish_operation("worker", {"reset": True,
+                                                                 "group_retired": True})
+                        receipt = binding.operation_receipt("worker")
+                        retirement = binding.directory / (
+                            f"worker-retired.{receipt['sequence']:08d}.json"
+                        )
+                        if not retirement.exists():
+                            binding.record_worker_retirement()
+                        binding.require_worker_retirement()
             _save(owner, intent, status="retiring-old-generation", blocker=None)
             intent = owner._state["ticket_reset"]
             log_progress(intent, "worker retirement proven")

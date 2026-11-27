@@ -219,6 +219,7 @@ from devlegate.tickets import (
 )
 from devlegate.transfer_transaction import (
     ReworkTransfer,
+    automatic_target,
     origin_digest,
     waiting_message,
 )
@@ -3246,9 +3247,8 @@ class ServiceEngine:
         ):
             message = waiting_message(
                 progress["conflict"], "update-base" if active_transfer else "REWORK",
+                progress.get("resolution_error"),
             )
-            if progress.get("resolution_error"):
-                message = f"{progress['resolution_error']}; {message}"
             preparation_blocker = (self._state.get("execution_id"), message)
         if (
             preparation_blocker is not None
@@ -13087,24 +13087,27 @@ class ServiceEngine:
                 raise DevlegateError("requested ticket does not match reconciliation")
             original_base = str(reconciliation["original_base"])
             checkpoint = str(reconciliation["worker_checkpoint"])
-            self._assert_product_checkout_unchanged(self.current_branch, original_base)
+            was_resolving = reconciliation["status"] == "resolving"
+            pending_report = reconciliation.get("execution_report")
             product = self._observe_product_generation(original_base)
             if not product["stable"]:
-                if product["classification"] == "unobservable":
+                if not (was_resolving and isinstance(pending_report, dict)):
                     raise DevlegateError(
-                        "product remote could not be observed; "
-                        "retry when connectivity returns"
+                        f"same-base reconciliation cannot resume: {product['reason']}"
                     )
-                raise DevlegateError(
-                    "same-base reconciliation requires a clean unchanged product "
-                    "generation"
-                )
+                # The resume intent alone admitted no publication. Re-enter the
+                # common recovery stage; it will settle any exact publication WAL
+                # first, or preserve H for transfer if publication never began.
+                automatic_target(self, original_base, product)
             self._validate_control_worktree()
             recorded_control = str(reconciliation["control_head"])
             control_head = resolve_commit(
                 self.control_worktree, "HEAD", runner=self._git_runtime
             )
-            if control_head != recorded_control:
+            if (control_head != recorded_control or (
+                was_resolving and self._execution_remote_head(self.control_branch)
+                != recorded_control
+            )):
                 raise DevlegateError("control revision changed during reconciliation")
             store = self._ticket_store(head=control_head, require_clean=True)
             ticket = store.by_id.get(ticket_id)
@@ -13141,12 +13144,15 @@ class ServiceEngine:
                 )
             if expected_remote is not None and not _is_git_identity(expected_remote):
                 raise DevlegateError("execution predecessor identity is invalid")
-            was_resolving = reconciliation["status"] == "resolving"
             remote = self._execution_remote_head(manager.branch)
             if not (
                 (expected_remote is None and remote is None)
                 or (isinstance(expected_remote, str) and remote == expected_remote)
-                or (was_resolving and remote == checkpoint)
+                or (was_resolving and remote == checkpoint and (
+                    not isinstance(pending_report, dict)
+                    or self.recovery_has_pending_publication()
+                    or self.recovery_has_recorded_publication()
+                ))
             ):
                 raise DevlegateError(
                     "execution remote changed or has divergent lineage"
@@ -13177,19 +13183,20 @@ class ServiceEngine:
             # Re-observe immediately after the durable write-ahead intent.
             product = self._observe_product_generation(original_base)
             if not product["stable"]:
-                if product["classification"] == "unobservable":
+                if not isinstance(pending_report, dict):
                     raise DevlegateError(
-                        "product remote could not be observed; "
-                        "retry when connectivity returns"
+                        "product generation changed before publication: "
+                        f"{product['reason']}"
                     )
-                raise DevlegateError("product generation changed before publication")
+                automatic_target(self, original_base, product)
             reobserved_remote = self._execution_remote_head(manager.branch)
             if reobserved_remote != remote:
                 if not (was_resolving and reobserved_remote == checkpoint):
                     raise DevlegateError("execution remote changed before publication")
-            pending_report = reconciliation.get("execution_report")
             if isinstance(pending_report, dict):
                 report = ExecutionReport.from_dict(pending_report)
+                stage = ("post-publication" if self.recovery_has_recorded_publication()
+                         else "post-checkpoint")
                 self._save_state(
                     "agent_running",
                     local_head=original_base,
@@ -13206,7 +13213,7 @@ class ServiceEngine:
                     execution_id=report.execution_id,
                     execution_remote_head=expected_remote,
                     execution_start_head=original_base,
-                    execution_stage="post-checkpoint",
+                    execution_stage=stage,
                     pending_execution_report=report.as_dict(),
                     worker_identity=None,
                     execution_interruption_kind=reconciliation.get("interruption_kind"),
