@@ -48,8 +48,19 @@ from devlegate.abandonment_publication import (
     verify_terminal,
     verify_transaction,
 )
-from devlegate.abandonment_refs import create_pin, inventory, publish_pin, require_pin
-from devlegate.active_transfer import require_target_lineage, update_base
+from devlegate.abandonment_refs import (
+    create_pin,
+    inventory,
+    publish_checkpoint,
+    publish_pin,
+    require_pin,
+)
+from devlegate.active_transfer import (
+    advance_pending,
+    require_target_lineage,
+    retain_stale_install,
+    update_base,
+)
 from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
@@ -3240,11 +3251,14 @@ class ServiceEngine:
                 message = f"{progress['resolution_error']}; {message}"
             preparation_blocker = (self._state.get("execution_id"), message)
         if (
-            blocked_reason is None
-            and preparation_blocker is not None
-            and (self._state.get("phase") == "agent_pending" or active_transfer)
+            preparation_blocker is not None
             and self._state.get("execution_id") == preparation_blocker[0]
-            and (snapshot.plan.action == "run-worker" or active_transfer)
+            and (
+                self._has_pending_reconciliation()
+                or self._has_recoverable_execution_stage()
+                or (self._state.get("phase") == "agent_pending"
+                    and snapshot.plan.action in {"run-worker", "blocked"})
+            )
         ):
             # Preparation refusals leave durable execution identity unchanged.
             # Retain only that owner-scoped diagnostic across read-only refreshes.
@@ -4226,28 +4240,62 @@ class ServiceEngine:
             if plan.action == "none":
                 _log(f"no worker scheduled: {plan.reason}")
             return self._recover_accepted_integration()
-        progress = self._state.get("transfer_progress") or {}
-        active_transfer = progress.get("active_binding")
-        if active_transfer is not None:
-            if progress.get("conflict") and not progress.get("confirmation"):
-                return 0
+        reconciliation = self._state.get("reconciliation") or {}
+        if (
+            self._state.get("phase") == "idle"
+            and reconciliation.get("status") == "pending"
+        ):
             try:
-                return self._reconcile_update_base_owned(
-                    active_transfer["ticket_id"], active_transfer["base"], _replay=True,
-                )
-            except DevlegateError as error:
+                if queued_reset is not None:
+                    raise DevlegateError("ticket reset takes priority over transfer")
+                return advance_pending(self)
+            except (DevlegateError, ExecutionWorkspaceError, EvidenceError,
+                    GitObservationError, GitAncestryError, OSError,
+                    subprocess.CalledProcessError) as error:
                 raise WorkspacePreparationBlockedError(str(error)) from error
-        if self._state.get("phase") == "idle":
-            self._reconcile_workspace_backlog()
-        reconciliation = self._state.get("reconciliation")
+        if (
+            self._state.get("phase") == "agent_pending"
+            and isinstance(reconciliation, dict)
+            and reconciliation.get("automatic") is True
+            and reconciliation.get("resumed_execution_id")
+            == self._state.get("execution_id")
+        ):
+            try:
+                if retain_stale_install(self, reconciliation):
+                    return 0
+            except (DevlegateError, ExecutionWorkspaceError, EvidenceError,
+                    GitObservationError, GitAncestryError, OSError,
+                    subprocess.CalledProcessError) as error:
+                raise WorkspacePreparationBlockedError(str(error)) from error
         if (
             self._state.get("phase") == "idle"
             and isinstance(reconciliation, dict)
             and reconciliation.get("status") == "resolving"
         ):
-            return self._reconcile_resume_owned(
-                str(reconciliation.get("ticket_id", "")), _take_lock=False
-            )
+            try:
+                return self._reconcile_resume_owned(reconciliation["ticket_id"])
+            except (DevlegateError, ExecutionWorkspaceError, GitObservationError,
+                    OSError) as error:
+                raise WorkspacePreparationBlockedError(str(error)) from error
+        if self._state.get("phase") == "idle":
+            self._reconcile_workspace_backlog()
+        rework = self._state.get("rework_provenance")
+        intent = self._state.get("execution_resource_binding") or {}
+        if (self._state.get("phase") == "agent_pending" and isinstance(rework, dict)
+                and intent.get("transfer_origin") and queued_reset is None
+                and not intent.get("predecessor_execution")):
+            try:
+                product = self._observe_product_generation(rework["admitted_base_head"])
+                if not product["stable"]:
+                    transfer = ReworkTransfer(
+                        self, self._execution_generation_binding(), rework,
+                    )
+                    transfer.advance_stale(rework, product)
+                    return 0
+            except (DevlegateError, ExecutionWorkspaceError, EvidenceError,
+                    GitObservationError, GitAncestryError, OSError,
+                    subprocess.CalledProcessError) as error:
+                raise WorkspacePreparationBlockedError(str(error)) from error
         if self._state.get("phase") == "agent_running":
             if self._stop_requested():
                 return 0
@@ -5702,7 +5750,7 @@ class ServiceEngine:
             # recovery boundary. The scheduler's next pass owns admission.
             return 0
         try:
-            self._require_execution_generation(clean=False, remote=True)
+            self._require_execution_generation(clean=False, remote=False)
             manager = ExecutionWorkspaceManager(
                 self.repo,
                 self.execution_worktree_root,
@@ -5755,6 +5803,7 @@ class ServiceEngine:
             "agent_running",
             execution_stage="checkpointing",
             pending_execution_report=execution_result.as_dict(),
+            execution_interruption_kind=worker_run.interruption_kind,
         )
         self._refresh_published_status()
         try:
@@ -5832,32 +5881,20 @@ class ServiceEngine:
                 )
                 self._refresh_published_status()
                 return self._complete_execution_lifecycle(report)
-            if self._safe_running_product_descendant(workspace.base_head, product):
-                # The worker checkout and checkpoint remain pinned to its admitted
-                # base.  A later shared product revision is only an integration
-                # observation; it is merged after acceptance, never rebased into
-                # the worker's worktree.
-                self._save_state(
-                    "agent_running",
-                    execution_validated_product_head=product["remote_head"],
-                )
-            else:
-                reconciliation_product = self._persist_product_reconciliation(
-                    report, product, execution_remote_head, allow_base_fallback=True
-                )
-                self._refresh_published_status()
-                reason = (
-                    f"reconciliation required: ticket {selected_ticket.id}; "
-                    f"original base {workspace.base_head}; "
-                    f"observed product {reconciliation_product}; "
-                    f"product state {product['reason']}; "
-                    f"worker checkpoint {checkpoint.after_head}"
-                )
-                self._publish_service_snapshot(
-                    lifecycle="blocked", blocked_reason=reason
-                )
-                _log(reason)
-                return 1
+            reconciliation_product = self._persist_product_reconciliation(
+                report, product, execution_remote_head, allow_base_fallback=True
+            )
+            self._refresh_published_status()
+            reason = (
+                f"reconciliation required: ticket {selected_ticket.id}; "
+                f"original base {workspace.base_head}; "
+                f"observed product {reconciliation_product}; "
+                f"product state {product['reason']}; "
+                f"worker checkpoint {checkpoint.after_head}"
+            )
+            self._publish_service_snapshot(lifecycle="blocked", blocked_reason=reason)
+            _log(reason)
+            return 1
         self._save_state("agent_running", execution_stage="publishing")
         self._refresh_published_status()
         try:
@@ -6158,7 +6195,8 @@ class ServiceEngine:
         checkpoint: str | None,
         product: dict[str, object],
     ) -> bool:
-        if checkpoint != admitted_base or not product.get("target_eligible"):
+        if (checkpoint != admitted_base or not product.get("target_eligible")
+                or self._state.get("execution_interruption_kind")):
             return False
         local_head = product.get("local_head")
         remote_head = product.get("remote_head")
@@ -6377,6 +6415,14 @@ class ServiceEngine:
             "execution_control_head": control_head,
             "failed_executions": failed_executions,
         }
+        reconciliation = self._state.get("reconciliation") or {}
+        if (apply_conclusion and reconciliation.get("status") == "resolving"
+                and reconciliation.get("execution_id") == report.execution_id
+                and reconciliation.get("worker_checkpoint") == report.workspace_head):
+            fields.update(
+                reconciliation={**reconciliation, "status": "resolved"},
+                execution_remote_head=report.workspace_head,
+            )
         if automatic_retry is _UNSET:
             current_retry = self._state.get("automatic_retry")
             if (
@@ -7171,10 +7217,6 @@ class ServiceEngine:
         checkpoint_head: str,
         expected_remote_head: str | None,
     ) -> None:
-        binding = None
-        if getattr(self, "_state", {}).get("execution_resource_binding") is not None:
-            self._require_execution_generation(clean=True, remote=False)
-            binding = self._execution_generation_binding()
         # An already admitted execution must drain its checkpoint publication.
         # Other callers must not begin publication after shutdown is requested.
         if self._stop_requested():
@@ -7187,11 +7229,6 @@ class ServiceEngine:
         observed = self._resolve_commit_runtime(workspace.path, "HEAD")
         if observed != checkpoint_head:
             raise DevlegateError("execution HEAD changed before branch publication")
-        observed_remote_head = self._execution_remote_head(workspace.branch)
-        if observed_remote_head != expected_remote_head:
-            raise DevlegateError(
-                "execution branch remote changed during worker execution"
-            )
         if expected_remote_head is not None:
             try:
                 predecessor_is_ancestor = is_ancestor(
@@ -7208,13 +7245,22 @@ class ServiceEngine:
                 raise DevlegateError(
                     "execution predecessor is not an ancestor of checkpoint"
                 )
-        lease = f"refs/heads/{workspace.branch}:{expected_remote_head or ''}"
-        if binding is not None:
-            binding.begin_operation(
-                "publication", {
-                    "before": expected_remote_head, "after": checkpoint_head,
-                },
+        if getattr(self, "_state", {}).get("execution_resource_binding") is not None:
+            try:
+                binding = self._execution_generation_binding()
+                if workspace.branch != binding.manager.branch:
+                    raise ExecutionWorkspaceError("publication branch differs")
+                binding.require_worker_retirement()
+                publish_checkpoint(binding, checkpoint_head, expected_remote_head)
+            except (EvidenceError, ExecutionWorkspaceError,
+                    GitObservationError) as error:
+                raise DevlegateError(str(error)) from error
+            return
+        if self._execution_remote_head(workspace.branch) != expected_remote_head:
+            raise DevlegateError(
+                "execution branch remote changed during worker execution"
             )
+        lease = f"refs/heads/{workspace.branch}:{expected_remote_head or ''}"
         pushed = push_refs(
             workspace.path,
             self.remote_name,
@@ -7225,27 +7271,12 @@ class ServiceEngine:
         if pushed.returncode:
             current_remote_head = self._execution_remote_head(workspace.branch)
             if current_remote_head == checkpoint_head:
-                if binding is None:
-                    return
-                raise DevlegateError(
-                    "publication result is ambiguous; matching upstream SHA is not "
-                    "a generation receipt"
-                )
+                return
             if current_remote_head == expected_remote_head:
                 raise DevlegateError(
                     pushed.stderr.strip() or "execution checkpoint publication failed"
                 )
             raise DevlegateError("execution branch remote changed during publication")
-        if binding is not None:
-            if self._execution_remote_head(workspace.branch) != checkpoint_head:
-                raise DevlegateError(
-                    "execution branch changed before publication receipt"
-                )
-            binding.finish_operation(
-                "publication", {
-                    "before": expected_remote_head, "after": checkpoint_head,
-                },
-            )
 
     def _execution_remote_head(self, branch: str) -> str | None:
         ref = branch if branch.startswith("refs/") else f"refs/heads/{branch}"
@@ -9626,37 +9657,6 @@ class ServiceEngine:
             "reason": "; ".join(observation) if observation else "stable",
         }
 
-    def _safe_running_product_descendant(
-        self, admitted_base: str, product: dict[str, object]
-    ) -> bool:
-        """Return whether a running worker can defer a product advance safely.
-
-        The product checkout may still name the admitted base or may already be
-        cleanly fast-forwarded by another owner.  Neither case permits changing
-        the worker checkout; acceptance performs the only controlled merge.
-        """
-        remote = product.get("remote_head")
-        local = product.get("local_head")
-        if (
-            product.get("classification") != "changed"
-            or not isinstance(remote, str)
-            or not remote
-            or not isinstance(local, str)
-            or not local
-            or remote == admitted_base
-            or product.get("branch") != self.current_branch
-            or product.get("dirty")
-        ):
-            return False
-        if local != admitted_base:
-            return False
-        try:
-            return is_ancestor(
-                self.repo, admitted_base, remote, runner=self._git_runtime
-            )
-        except GitAncestryError:
-            return False
-
     def _merge_accepted_product_descendant(
         self,
         checkpoint: str,
@@ -9886,6 +9886,7 @@ class ServiceEngine:
             "product_observation": product["reason"],
             "product_target_eligible": product["target_eligible"],
             "execution_report": report.as_dict(),
+            "interruption_kind": self._state.get("execution_interruption_kind"),
         }
         self._save_state(
             "idle",
@@ -10030,9 +10031,10 @@ class ServiceEngine:
             if self._state.get("execution_resource_binding") is not None:
                 binding = self._execution_generation_binding()
                 binding.require_worker_retirement()
-                binding.require_local(
-                    clean=self._state.get("execution_stage") != "checkpointing"
-                )
+                if not self.recovery_has_pending_publication():
+                    binding.require_local(
+                        clean=self._state.get("execution_stage") != "checkpointing"
+                    )
             recover_checkpoint_publication(self)
         except (WorkflowRecoveryError, ExecutionWorkspaceError, OSError) as error:
             raise WorkflowBlockedError(str(error)) from error
@@ -10501,9 +10503,9 @@ class ServiceEngine:
 
     def _has_pending_reconciliation(self) -> bool:
         reconciliation = self._state.get("reconciliation")
-        return isinstance(reconciliation, dict) and reconciliation.get("status") == (
-            "pending"
-        )
+        return isinstance(reconciliation, dict) and reconciliation.get("status") in {
+            "pending", "resolving",
+        }
 
     def _has_pending_accepted_integration(self) -> bool:
         return isinstance(self._state.get("accepted_integration"), dict)
@@ -10741,16 +10743,16 @@ class ServiceEngine:
                             or self._has_blocked_execution_stage()
                             or self._has_operator_recovery_required()
                         ):
-                            if (
-                                self._has_blocked_execution_stage()
-                                or self._has_operator_recovery_required()
-                            ):
-                                workflow_blocked = True
-                                self._publish_service_snapshot(
-                                    lifecycle="blocked",
-                                    worker_running=False,
-                                    blocked_reason=str(error),
+                            workflow_blocked = True
+                            execution_id = self._state.get("execution_id")
+                            if isinstance(execution_id, str):
+                                self._workspace_preparation_blocker = (
+                                    execution_id, str(error),
                                 )
+                            self._publish_service_snapshot(
+                                lifecycle="blocked", worker_running=False,
+                                blocked_reason=str(error),
+                            )
                             self._iteration_diagnostic = f"execution failed: {error}"
                             status = 1
                         else:
@@ -10811,9 +10813,10 @@ class ServiceEngine:
                     and not self._stop_before_admission()
                 ):
                     continue
+                interval = max(int(self.poll_interval), int(workflow_blocked))
                 if stop_event is not None:
                     if self._wait_for_service_event(
-                        stop_event, int(self.poll_interval)
+                        stop_event, interval,
                     ):
                         self._service_shutdown.set()
                         self._reject_pending_operator_command_on_shutdown()
@@ -10821,7 +10824,7 @@ class ServiceEngine:
                         self._refresh_published_status()
                         return 0
                 else:
-                    self._service_wake.wait(int(self.poll_interval))
+                    self._service_wake.wait(interval)
                     self._service_wake.clear()
 
     def _wake_when_stopped(self, stop_event: threading.Event) -> None:
@@ -12897,13 +12900,31 @@ class ServiceEngine:
         self._report_matches_execution_state(report)
 
     def recovery_workspace(self):
+        if self.recovery_has_pending_publication():
+            report = ExecutionReport.from_dict(self._state["pending_execution_report"])
+            binding = self._execution_generation_binding()
+            return binding.require_checkpoint_for_publication(report.workspace_head)
         return self._execution_workspace_for_recovery()
+
+    def recovery_has_pending_publication(self) -> bool:
+        return (
+            self._state.get("execution_stage") == "publishing"
+            and self._state.get("execution_resource_binding") is not None
+            and self._execution_generation_binding().operation_pending("publication")
+        )
+
+    def recovery_has_recorded_publication(self) -> bool:
+        if self._state.get("execution_resource_binding") is None:
+            return False
+        binding = self._execution_generation_binding()
+        return any(name == "publication" for _, name, _ in binding._attempts())
 
     def recovery_product(self, base: str) -> dict[str, object]:
         return self._observe_product_generation(base)
 
     def recovery_prove_product(self) -> None:
-        self._prove_product_generation()
+        if self._state.get("execution_resource_binding") is None:
+            self._prove_product_generation()
 
     def recovery_zero_delta(
         self, report: ExecutionReport, product: dict[str, object]
@@ -13151,7 +13172,8 @@ class ServiceEngine:
                 "status": "resolving",
                 "resolution": "resume",
             }
-            self._save_state("idle", reconciliation=resolving)
+            if not was_resolving:
+                self._save_state("idle", reconciliation=resolving)
             # Re-observe immediately after the durable write-ahead intent.
             product = self._observe_product_generation(original_base)
             if not product["stable"]:
@@ -13187,17 +13209,11 @@ class ServiceEngine:
                     execution_stage="post-checkpoint",
                     pending_execution_report=report.as_dict(),
                     worker_identity=None,
+                    execution_interruption_kind=reconciliation.get("interruption_kind"),
                 )
                 self._recover_checkpoint_publication()
                 report = self._recover_lifecycle_report()
-                lifecycle_head = self._apply_execution_lifecycle(report)
-                self._finalize_execution_lifecycle(report, lifecycle_head)
-                self._save_state(
-                    "idle",
-                    reconciliation={**resolving, "status": "resolved"},
-                    execution_remote_head=checkpoint,
-                )
-                return 0 if report.result.conclusion != "failed" else 1
+                return self._complete_execution_lifecycle(report)
             if reobserved_remote != checkpoint:
                 self._publish_execution_branch(
                     self._execution_workspace_for_recovery(),

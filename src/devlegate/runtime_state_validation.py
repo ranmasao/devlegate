@@ -373,8 +373,33 @@ def validate_state_invariant(state: dict[str, object]) -> None:
         ):
             raise DevlegateError("invalid reconciled transfer continuation")
         if "execution_report" in reconciliation:
+            report_binding = reconciliation
+            while "installed_source" in report_binding:
+                prior = report_binding["installed_source"]
+                source_head = (report_binding.get("displaced_checkpoint")
+                               if report_binding.get("resumed_execution_id")
+                               else report_binding["worker_checkpoint"])
+                if (
+                    not isinstance(prior, dict)
+                    or prior.get("status") != "resolved"
+                    or prior.get("automatic") is not True
+                    or prior.get("externally_resolved") is not False
+                    or not has_valid_evidence_identity(prior)
+                    or prior.get("resumed_execution_id")
+                    != report_binding.get("execution_id")
+                    or prior.get("effective_base") != report_binding["original_base"]
+                    or prior.get("worker_checkpoint") != source_head
+                    or prior.get("execution_report")
+                    != reconciliation["execution_report"]
+                    or any(prior.get(key) != reconciliation[key] for key in (
+                        "ticket_id", "control_head", "execution_branch",
+                        "execution_path",
+                    ))
+                ):
+                    raise DevlegateError("invalid installed reconciliation source")
+                report_binding = prior
             checkpoint_field = (
-                "displaced_checkpoint" if reconciliation.get("resumed_execution_id")
+                "displaced_checkpoint" if report_binding.get("resumed_execution_id")
                 else "worker_checkpoint"
             )
             try:
@@ -386,7 +411,7 @@ def validate_state_invariant(state: dict[str, object]) -> None:
                     "invalid retained reconciliation report"
                 ) from error
             if not all(
-                actual == reconciliation[expected]
+                actual == report_binding.get(expected)
                 for actual, expected in (
                     (report.ticket_id, "ticket_id"),
                     (report.execution_id, "execution_id"),
@@ -752,7 +777,7 @@ def _validate_transfer_progress(state):
         return
     if not isinstance(progress, dict) or not progress.keys() <= {
         "active_binding", "rewrite_published", "conflict", "confirmation",
-        "resolution_error", "candidate",
+        "resolution_error", "candidate", "automatic",
     }:
         raise DevlegateError("invalid transfer progress")
     active = progress.get("active_binding")
@@ -768,11 +793,12 @@ def _validate_transfer_progress(state):
             or active.get("base") == source.get("original_base")
             or active.get("prior_remote") != source.get("execution_remote_head")
             or not isinstance(progress.get("rewrite_published"), bool)
+            or ("automatic" in progress and progress["automatic"] is not True)
             or (active.get("prior_remote") and not progress["rewrite_published"])
         ):
             raise DevlegateError("invalid active transfer admission")
     elif (state.get("phase") != "agent_pending" or not isinstance(rework, dict)
-          or "rewrite_published" in progress):
+          or "rewrite_published" in progress or "automatic" in progress):
         raise DevlegateError("invalid reviewed transfer admission")
     conflict, candidate = progress.get("conflict"), progress.get("candidate")
     if conflict is not None and (

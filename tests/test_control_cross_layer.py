@@ -630,21 +630,12 @@ def test_resolving_reconciliation_restart_recovers_retained_report(
     monkeypatch.setattr(devlegate._workers, "run", worker)
     assert run_test_iteration(devlegate) == 1
     reconciliation = dict(devlegate._state["reconciliation"])
-    original_base = reconciliation["original_base"]
     checkpoint = reconciliation["worker_checkpoint"]
     execution = next((state / "worktrees").glob("*/work/T-1"))
     if published_before_restart:
         fixture_publication(devlegate, execution, checkpoint)
-    else:
-        git(
-            execution,
-            "push",
-            "origin",
-            f"{original_base}:refs/heads/{reconciliation['execution_branch']}",
-        )
     reconciliation["status"] = "resolving"
     reconciliation["resolution"] = "resume"
-    reconciliation["execution_remote_head"] = original_base
     devlegate._save_state("idle", reconciliation=reconciliation)
     (working / "dirty-product.txt").unlink()
 
