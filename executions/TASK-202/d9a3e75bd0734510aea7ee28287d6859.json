@@ -1,0 +1,30 @@
+{
+  "code_base_head": "4aadc2ef200eefcd50113f1d36d9c927fd9f6407",
+  "conclusion": "completed",
+  "control_head": "2344e76940af2fde2b38ef1e1e024cf6f41d520c",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-202",
+  "execution_id": "d9a3e75bd0734510aea7ee28287d6859",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-202",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-202/d9a3e75bd0734510aea7ee28287d6859.md",
+  "report_sha256": "d4cf94a926125aa9e8b8ab6ff0c57dac040f022fd8f2c15f6173411e040c14ee",
+  "resource_generation": "8322869fedf5a11ce767090b08dcc56ee30dbe416c874d3de4b2dc35e4a81f8d",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-202",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused local CLI, live IPC, restart/replay, transfer, recovery, and authority regressions passed, as did ./dev lint and git diff --check. Exact-checkpoint hosted CI is owned by Devlegate and was not run by this worker.",
+    "summary": "Removed routine reconciliation CLI and IPC commands and their request paths. Kept exact conflict confirmation and product and control lineage authorization under the service owner, with ordinary transfer and replay automatic and explicit retry for operator-abort holds. Updated operator guidance and regression coverage."
+  },
+  "workspace_head": "4d5e61fb9ac04ea904a196df024026cf5815de3e"
+}
