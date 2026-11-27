@@ -2684,8 +2684,11 @@ def test_real_service_transaction_stage_restart_preserves_execution(
         service.stop()
 
 
+@pytest.mark.parametrize(
+    "renewed_drift", [None, "same_base_resolving", "publication_ack_lost"],
+)
 def test_real_service_resumes_same_base_when_checkout_is_clean_again(
-    git_fixture, monkeypatch,
+    git_fixture, monkeypatch, renewed_drift,
 ):
     repo = git_fixture["working"]
     monkeypatch.chdir(repo)
@@ -2704,16 +2707,45 @@ def test_real_service_resumes_same_base_when_checkout_is_clean_again(
         ))
         assert attempts.read_text().splitlines() == ["attempt"]
         assert not (engine.control_worktree / "kanban/review/T-1.md").exists()
+        if renewed_drift:
+            service.stop()
         dirty.unlink()
+        if renewed_drift:
+            monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", renewed_drift)
+            service.start()
+            _wait_process_death(service)
+            state = _disk_state(config)
+            original = state["reconciliation"]
+            assert original["status"] == "resolving"
+            assert attempts.read_text().splitlines() == ["attempt"]
+            branch = f"refs/heads/{original['execution_branch']}"
+            upstream = git(repo, "ls-remote", "origin", branch).stdout.split()
+            if renewed_drift == "publication_ack_lost":
+                assert upstream[0] == original["worker_checkpoint"]
+            else:
+                assert not upstream
+            _advance_product(git_fixture)
+            monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+            service.restart()
         service.wait_for(lambda: (
             (_disk_state(config).get("reconciliation") or {}).get("status")
             == "resolved"
         ))
+        service.wait_for((engine.control_worktree / "kanban/review/T-1.md").is_file)
         reports = ExecutionReportStore(engine.control_worktree).list("T-1")
         assert len(reports) == 1
-        assert reports[0].execution_id == crashed["execution_id"]
         assert reports[0].result.conclusion == "completed"
-        assert attempts.read_text().splitlines() == ["attempt"]
+        if renewed_drift:
+            assert reports[0].execution_id != crashed["execution_id"]
+            target = git(repo, "rev-parse", "HEAD").stdout.strip()
+            assert reports[0].code_base_head == target
+            assert git(repo, "rev-parse", original["evidence_ref"]).stdout.strip() == (
+                original["worker_checkpoint"]
+            )
+            assert attempts.read_text().splitlines() == ["attempt", "attempt"]
+        else:
+            assert reports[0].execution_id == crashed["execution_id"]
+            assert attempts.read_text().splitlines() == ["attempt"]
     finally:
         service.stop()
 
@@ -2796,6 +2828,9 @@ def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
 @pytest.mark.parametrize("case, transfer_fault", [
     ("descendant", None), ("published", None), ("no-op", None), ("conflict", None),
     ("stale-conflict", None),
+    ("reset-conflict", None), ("reset-stale", None), ("reset-foreign", None),
+    ("reset-ineligible", None), ("reset-chain", "transfer_creation"),
+    ("reset-settled", None),
     ("unrelated", None), ("divergent", None), ("same-parent", None),
     ("published", "transfer_candidate"), ("published", "transfer_install_intent"),
     ("published", "transfer_creation"), ("published", "transfer_receipt"),
@@ -2842,7 +2877,7 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
     git(repo, "push", "origin", "HEAD:main")
     base = git(repo, "rev-parse", "HEAD").stdout.strip()
     published = None
-    if case == "published":
+    if case in {"published", "reset-chain", "reset-ineligible"}:
         from test_rework_handoff import completed, publish_rework
 
         def seed(workspace, *_args, **_kwargs):
@@ -2855,7 +2890,10 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
         publish_rework(engine, published)
     publisher = _ensure_publisher(git_fixture)
     ineligible = case in {"unrelated", "divergent", "same-parent"}
-    conflicting = case in {"conflict", "stale-conflict"}
+    conflicting = case in {
+        "conflict", "stale-conflict", "reset-conflict", "reset-stale",
+        "reset-foreign", "reset-ineligible", "reset-settled",
+    }
 
     with ExitStack() as cleanup:
         service = LiveService(repo, config, command=_recovery_driver(config))
@@ -2898,9 +2936,12 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
         release.touch()
         if case == "no-op":
             review = engine.control_worktree / "kanban/review/T-1.md"
-            service.wait_for(review.is_file)
+            service.wait_for(lambda: (
+                review.is_file() and _disk_state(config)["phase"] == "idle"
+            ), timeout=45)
             reports = ExecutionReportStore(engine.control_worktree).list("T-1")
             assert len(reports) == 2
+            assert worker.with_suffix(".attempts").read_text() == "attempt\nattempt\n"
             stale = next(r for r in reports if r.code_base_head == base)
             assert stale.workspace_head == base
             fresh = next(r for r in reports if r.code_base_head == target)
@@ -2935,8 +2976,14 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
             crashed_transfer = _disk_state(config)["transfer_progress"]
             attempt = crashed_transfer["active_binding"]["execution_id"]
             monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+        if case == "reset-chain":
+            (publisher / "implementation.txt").write_text("product C\n")
+            git(publisher, "add", "implementation.txt")
+            git(publisher, "commit", "-m", "advance product into conflict")
+            git(publisher, "push", "origin", "HEAD:main")
+            conflicting = True
         service.restart()
-        if ineligible or conflicting:
+        if ineligible or (conflicting and case != "reset-chain"):
             assert _disk_state(config)["reconciliation"] == pending_before
         if ineligible:
             if case == "same-parent":
@@ -2974,13 +3021,90 @@ def test_real_service_owner_reconciles_without_cli_when_lineage_is_safe(
                 (_disk_state(config).get("transfer_progress") or {}).get("conflict")
             ))
             progress = _disk_state(config)["transfer_progress"]
+            waiting = _disk_state(config)["reconciliation"]
             candidate = Path(progress["conflict"]["path"])
             assert git(execution, "rev-parse", "HEAD").stdout.strip() == (
-                pending_before["worker_checkpoint"]
+                waiting["worker_checkpoint"]
             )
+            if case == "reset-chain":
+                assert waiting["installed_source"]["resumed_execution_id"] == attempt
             service.kill()
+            if case == "reset-settled":
+                monkeypatch.setenv("DEVLEGATE_TEST_CRASH_POINT", "resolved_transfer")
             service.restart()
             assert _disk_state(config)["transfer_progress"] == progress
+            if case.startswith("reset-"):
+                ref = f"refs/heads/{waiting['execution_branch']}"
+                if case == "reset-foreign":
+                    git(publisher, "push", "origin", f"{target}:{ref}")
+                if case == "reset-stale":
+                    (candidate / "implementation.txt").write_text("keep manual edits\n")
+                    git(publisher, "commit", "--allow-empty", "-m", "advance again")
+                    git(publisher, "push", "origin", "HEAD:main")
+                    confirmation = service.cli(
+                        "reconcile", "resume", "T-1",
+                        "--resolve-candidate", str(candidate),
+                    )
+                    assert confirmation.returncode == 0, confirmation.stderr
+                    assert _disk_state(config)["transfer_progress"]["confirmation"]
+                    service.restart()
+                if case == "reset-settled":
+                    (candidate / "implementation.txt").write_text("manual resolution\n")
+                    confirmation = service.cli(
+                        "reconcile", "resume", "T-1",
+                        "--resolve-candidate", str(candidate),
+                    )
+                    assert confirmation.returncode == 0, confirmation.stderr
+                    _wait_process_death(service)
+                    waiting = _disk_state(config)["reconciliation"]
+                    assert waiting["status"] == "resolved"
+                    assert waiting["externally_resolved"]
+                    git(publisher, "commit", "--allow-empty", "-m", "advance again")
+                    git(publisher, "push", "origin", "HEAD:main")
+                    monkeypatch.delenv("DEVLEGATE_TEST_CRASH_POINT")
+                    service.restart()
+                    service.wait_for(lambda: "installed human resolution retained" in (
+                        service.cli("status", "--json").stdout
+                    ))
+                result = service.cli("reset", "T-1", "--json")
+                if case in {"reset-foreign", "reset-ineligible"}:
+                    assert result.returncode != 0
+                    expected = {
+                        "reset-foreign": "upstream predecessor changed",
+                        "reset-ineligible": "does not match the exact generation",
+                    }
+                    assert expected[case] in result.stderr
+                    assert _disk_state(config)["transfer_progress"] == progress
+                    assert not worker.with_suffix(".resume").exists()
+                    assert git(execution, "rev-parse", "HEAD").stdout.strip() == source
+                    return
+                assert result.returncode == 0, result.stderr
+                service.wait_for(lambda: (
+                    (_disk_state(config).get("ticket_reset") or {}).get("status")
+                    == "started"
+                ))
+                reset = _disk_state(config)["ticket_reset"]
+                assert reset["binding"]["execution_id"] == waiting.get(
+                    "resumed_execution_id", waiting["execution_id"],
+                )
+                assert reset["fresh_execution_id"] != (
+                    progress["active_binding"]["execution_id"]
+                )
+                if case == "reset-settled":
+                    manual = git(
+                        repo, "show", f"{waiting['evidence_ref']}:implementation.txt",
+                    )
+                    assert manual.stdout == "manual resolution\n"
+                else:
+                    assert candidate.is_dir()
+                pin = git(repo, "rev-parse", pending_before["evidence_ref"])
+                assert pin.stdout.strip() == source
+                if case == "reset-stale":
+                    assert (candidate / "implementation.txt").read_text() == (
+                        "keep manual edits\n"
+                    )
+                assert (execution / "implementation.txt").read_text() != "worker work\n"
+                return
             (candidate / "implementation.txt").write_text("confirmed source\n")
             if case == "stale-conflict":
                 git(publisher, "commit", "--allow-empty", "-m", "advance past conflict")

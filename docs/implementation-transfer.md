@@ -143,7 +143,9 @@ remote outcome only with the corresponding independent publication intent.
 
 The serialized owner advances proved reconciliation before ordinary scheduling.
 Same-base active reconciliation retakes the checkpoint/publication path. A
-linear product advance can fast-forward the clean product checkout to the fresh
+renewed forward product advance before publication preserves H for transfer;
+an already admitted publication settles its exact journal before that transfer.
+A linear product advance can fast-forward the clean product checkout to the fresh
 remote HEAD, then admit that exact agreed target. A published execution ref
 may be replaced only by a transfer retaining its source and proving the exact
 owned ref and predecessor lease. The binding's origin digest and transfer
@@ -160,7 +162,10 @@ and ambiguous edits stay available for a decision. Once installation has an
 intent, the owner finishes that exact candidate and lease first. An installed,
 unlaunched mechanical result can become the next source with its own custody
 proof; earlier checkpoints, reports, and review inputs remain attributed to
-their original generations. The owner advances one transaction per pass and
+their original generations. Reset of a later waiting conflict and abandonment
+authority through a replaced generation use the same proof of a completed
+install with no worker launch. Missing launch metadata alone is not that proof.
+The owner advances one transaction per pass and
 does not schedule a worker against a stale target.
 
 Checkpoint publication uses an atomic Git push of the leased execution ref and

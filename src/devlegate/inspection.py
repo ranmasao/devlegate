@@ -578,6 +578,7 @@ def inspect_object(
         observation[key] = progress["conflict"]
         blockers.append(waiting_message(
             progress["conflict"], "update-base" if active else "REWORK",
+            progress.get("resolution_error"),
         ))
     return InspectionView(
         f"devlegate.inspect-{object_type}.v1", object_type, object_id,

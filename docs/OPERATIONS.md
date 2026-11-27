@@ -302,7 +302,9 @@ edits onto a different target. Do not rebase, reset, or force-push the
 execution checkout to finish the handoff. Source-only confirmation cannot select
 a gitlink commit. To discard a waiting transfer, use `devlegate reset "$TICKET_ID"`
 before installation, if the owner can still prove the exact source is safe to
-retire. A refusal preserves the checkpoint and candidate. See the
+retire. If a human resolution already installed but the product advanced before
+validation could launch, reset can instead retire that settled generation while
+retaining its checkpoint. A refusal preserves the checkpoint and candidate. See the
 [transfer contract](implementation-transfer.md) for the clean upgrade boundary.
 
 Ticket IDs start with an ASCII letter or digit and may also contain ASCII

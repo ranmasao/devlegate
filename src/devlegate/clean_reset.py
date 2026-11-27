@@ -459,7 +459,13 @@ def retire_ticket_generation(owner, binding):
         journal = intent["retirement"]
         binding._validate_intent()
         binding._require_settled()
-        binding.require_worker_retirement()
+        if binding.is_unlaunched_transfer():
+            reconciliation = owner._state.get("reconciliation") or {}
+            binding.require_unlaunched_install(
+                journal.get("head") or reconciliation.get("worker_checkpoint"),
+            )
+        else:
+            binding.require_worker_retirement()
         manager = binding.manager
         receipt = _read(binding.directory / "receipt.json")
         if _identity(Path(str(binding.intent["common"]))) != receipt["common_identity"]:
@@ -473,7 +479,9 @@ def retire_ticket_generation(owner, binding):
             )
             reconciliation = owner._state.get("reconciliation")
             if reconciliation is not None and (
-                reconciliation["execution_id"] != binding.intent["execution_id"]
+                (reconciliation.get("resumed_execution_id")
+                 if reconciliation["status"] == "resolved"
+                 else reconciliation["execution_id"]) != binding.intent["execution_id"]
                 or reconciliation["worker_checkpoint"] != workspace.head
                 or reconciliation["execution_remote_head"] != upstream
             ):

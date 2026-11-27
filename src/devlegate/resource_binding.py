@@ -599,6 +599,78 @@ class ResourceBinding:
                 "worker retirement receipt differs from handoff"
             )
 
+    def is_unlaunched_transfer(self) -> bool:
+        # Classification only. Callers must also prove the completed install.
+        return (
+            bool(self.intent.get("transfer_origin"))
+            and not any(operation == "worker" for _, operation, _ in self._attempts())
+        )
+
+    def require_unlaunched_install(self, checkpoint: str | None = None) -> None:
+        """Prove an installed generation never entered the worker launch WAL.
+
+        Historical installations have relinquished the checkout. Use independent
+        custody, creation and handoff receipts, not today's mutable branch tip.
+        Live callers separately prove the current checkout and ref.
+        """
+        self._validate_intent()
+        self._require_settled()
+        if (not self.is_unlaunched_transfer()
+                or any(self.directory.glob("worker-retired.*.json"))):
+            raise UnprovenResource("installed transfer launch absence is unproved")
+        def evidence(path):
+            try:
+                return _read(path)
+            except FileNotFoundError as error:
+                raise UnprovenResource(
+                    f"installed transfer evidence missing: {path.name}"
+                ) from error
+
+        started = evidence(self.directory / "transfer-started.json")
+        receipt = evidence(self.directory / "receipt.json")
+        reserved = evidence(self.directory / "transfer-reservation.json")
+        head = started.get("candidate")
+        predecessor = started.get("predecessor")
+        if not isinstance(predecessor, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", predecessor,
+        ) or predecessor == self.intent["generation"]:
+            raise UnprovenResource("installed transfer predecessor is unproved")
+        prior = ResourceBinding(
+            self.manager, evidence(self.directory.parent / predecessor / "intent.json"),
+        )
+        prior._validate_intent()
+        prior_remote = prior.latest_remote(prior.intent["prior_remote"])
+        claim = evidence(self.manager.root / "transfers" / (
+            f"{self.intent['generation']}.released.json"
+        )).get("claim")
+        identity = claim.get("identity") if isinstance(claim, dict) else None
+        if (
+            not isinstance(identity, dict)
+            or prior.intent["generation"] != predecessor
+            or started.get("checkpoint") != prior._expected_head()
+            or self.intent["prior_local"] not in {None, started.get("checkpoint")}
+            or (self.intent["prior_local"] is None
+                and started.get("checkpoint") != prior.intent["base"])
+            or self.intent["prior_remote"] != prior_remote
+            or not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head)
+            or (checkpoint is not None and head != checkpoint)
+            or self._expected_head() != head
+            or receipt.get("head") != head
+            or receipt.get("generation") != self.intent["generation"]
+            or receipt.get("path_identity") != reserved.get("identity")
+            or receipt.get("common_identity")
+            != _identity(Path(str(self.intent["common"])))
+            or evidence(self.directory / "witness-marker") != self.intent
+            or claim.get("head") != head
+            or any(identity.get(key) != value for key, value in {
+                "ticket": self.intent["ticket_id"],
+                "attempt": self.intent["generation"],
+                "source_generation": predecessor, "original_base": prior.intent["base"],
+                "checkpoint": started.get("checkpoint"), "target": self.intent["base"],
+            }.items())
+        ):
+            raise UnprovenResource("installed transfer custody or lineage differs")
+
     def latest_remote(self, initial: str | None) -> str | None:
         self._require_settled()
         for _sequence, operation, path in reversed(self._attempts()):
@@ -622,7 +694,10 @@ class ResourceBinding:
         """
         self._validate_intent()
         self._require_settled()
-        self.require_worker_retirement()
+        if self.is_unlaunched_transfer():
+            self.require_unlaunched_install()
+        else:
+            self.require_worker_retirement()
         seen = set() if seen is None else set(seen)
         token = str(self.intent["generation"])
         if token in seen:
