@@ -1583,7 +1583,10 @@ def test_engine_reconciliation_and_update_base_resumes(tmp_path, monkeypatch):
         devlegate.reconcile_update_base("T-1", reconciliation["observed_product"]) == 0
     )
     assert devlegate._state["reconciliation"]["status"] == "resolved"
-    assert devlegate._state["resume_required"]["status"] == "required"
+    assert devlegate._state["execution_id"] != old_id
+    assert devlegate._state["reconciliation"]["execution_report"] == (
+        reconciliation["execution_report"]
+    )
     assert git(execution, "rev-parse", "HEAD^").returncode == 0
 
     resumed = Devlegate(config)
@@ -2101,6 +2104,9 @@ def test_reconcile_resume_rejects_malformed_retained_report(tmp_path, monkeypatc
 def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     tmp_path, monkeypatch
 ):
+    from devlegate.implementation_transfer import source_resolution_digest
+    from devlegate.runtime import OperatorCommand
+
     working, config, state = control_fixture(tmp_path)
     assert invoke(working, "control", "init", config=config).returncode == 0
     monkeypatch.chdir(working)
@@ -2138,7 +2144,7 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
     assert target_parent == original_parent
     git(working, "reset", "--hard", reconciliation["observed_product"])
 
-    with pytest.raises(DevlegateError, match="manual/advanced reconciliation"):
+    with pytest.raises(DevlegateError, match="waiting for source resolution"):
         devlegate.reconcile_update_base("T-1", reconciliation["observed_product"])
     assert git(execution, "rev-parse", "HEAD").stdout.strip() == original_head
     assert not git(execution, "status", "--porcelain").stdout
@@ -2147,6 +2153,30 @@ def test_engine_reconcile_update_base_conflict_preserves_original_checkpoint(
         == original_head
     )
     assert devlegate._state["reconciliation"]["status"] == "pending"
+
+    candidate = Path(devlegate._state["transfer_progress"]["conflict"]["path"])
+    (candidate / "shared.txt").write_text("explicit resolution\n")
+    restarted = Devlegate(config)
+    with restarted._lock():
+        restarted._admit_operator_command(OperatorCommand(
+            request_id="resolution", fingerprint="resolution",
+            method="reconcile-resume",
+            ticket_id="T-1", onto=str(candidate),
+            plan_digest=source_resolution_digest(candidate),
+        ))
+    assert run_test_iteration(restarted) == 0
+    assert restarted._state["reconciliation"]["externally_resolved"] is True
+    assert (execution / "shared.txt").read_text() == "explicit resolution\n"
+    pinned = git(execution, "rev-parse", reconciliation["evidence_ref"]).stdout.strip()
+    assert pinned == original_head
+
+    def revalidate(workspace, prompt, **_kwargs):
+        assert workspace.base_head == reconciliation["observed_product"]
+        assert "Continue the existing implementation" in prompt
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(restarted._workers, "run", revalidate)
+    assert run_test_iteration(restarted) == 0
 
 def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
     tmp_path, monkeypatch
@@ -2192,7 +2222,7 @@ def test_engine_reconcile_update_base_same_parent_replacement_succeeds(
     assert resolved["resolution"] == "update-base"
     assert resolved["effective_base"] == target
     assert resolved["displaced_evidence_ref"] == evidence
-    assert resolved["rewritten_evidence_ref"] == resolved["evidence_ref"]
+    assert resolved["displaced_checkpoint"] == original_checkpoint
     assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
     assert git(working, "rev-parse", evidence).stdout.strip() == original_checkpoint
     assert resolved["evidence_ref"] != evidence

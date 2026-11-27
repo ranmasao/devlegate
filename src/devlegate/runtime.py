@@ -49,6 +49,7 @@ from devlegate.abandonment_publication import (
     verify_transaction,
 )
 from devlegate.abandonment_refs import create_pin, inventory, publish_pin, require_pin
+from devlegate.active_transfer import update_base
 from devlegate.agent_protocol import (
     AgentProtocolError,
     RenderContext,
@@ -110,7 +111,6 @@ from devlegate.git import (
     commit_changes,
     commit_parents,
     commit_range,
-    common_dir,
     compare_and_swap_ref,
     create_ref_if_absent,
     delete_branch,
@@ -161,10 +161,6 @@ from devlegate.reconciliation import (
     reconciliation_evidence_ref,
     same_parent_replacement,
 )
-from devlegate.reconciliation_transactions import (
-    ReconciliationTransactionError,
-    run_update_base,
-)
 from devlegate.recovery import classify_stage, has_pre_worker_absence_proof
 from devlegate.recovery_transactions import (
     reconcile_control_lineage,
@@ -187,7 +183,6 @@ from devlegate.review_provenance import (
     resolve_rework_review,
     restore_review_binding,
 )
-from devlegate.rework_transfer import ReworkTransfer, origin_digest, waiting_message
 from devlegate.runtime_locator import (
     RuntimeLocator,
     RuntimeLocatorError,
@@ -211,6 +206,11 @@ from devlegate.tickets import (
     is_canonical_ticket_name,
     load_ticket_store,
     validate_workflow_transition,
+)
+from devlegate.transfer_transaction import (
+    ReworkTransfer,
+    origin_digest,
+    waiting_message,
 )
 from devlegate.worker_activity import (
     WatchdogPolicy,
@@ -2142,6 +2142,8 @@ class ServiceEngine:
         return canonical
 
     def _validate_reconcile_auto_admission(self, command: OperatorCommand) -> None:
+        if (self._state.get("transfer_progress") or {}).get("active_binding"):
+            raise DevlegateError("update-base transfer already admitted")
         reconciliation = self._state.get("reconciliation")
         if (
             not isinstance(reconciliation, dict)
@@ -2265,6 +2267,8 @@ class ServiceEngine:
         )
 
     def _validate_reconcile_resume_admission(self, ticket_id: str) -> None:
+        if (self._state.get("transfer_progress") or {}).get("active_binding"):
+            raise DevlegateError("update-base transfer already admitted")
         reconciliation = self._state.get("reconciliation")
         if not isinstance(reconciliation, dict) or reconciliation.get("status") not in {
             "pending",
@@ -2411,10 +2415,12 @@ class ServiceEngine:
             if command.onto is None:
                 self._validate_reconcile_resume_admission(command.ticket_id)
                 return
-            rework = self._state.get("rework_provenance")
-            conflict = rework.get("conflict") if isinstance(rework, dict) else None
+            progress = self._state.get("transfer_progress") or {}
+            conflict = progress.get("conflict")
             if (
-                self._state.get("phase") != "agent_pending"
+                self._state.get("phase") != (
+                    "idle" if progress.get("active_binding") else "agent_pending"
+                )
                 or self._state.get("execution_ticket_id") != command.ticket_id
                 or self._state.get("worker_identity") is not None
                 or not isinstance(conflict, dict)
@@ -2422,8 +2428,8 @@ class ServiceEngine:
                 raise DevlegateError("ticket has no waiting REWORK candidate")
             if command.onto != conflict.get("path"):
                 raise DevlegateError("confirmation must name the waiting candidate")
-            if rework.get("confirmation") is not None:
-                raise DevlegateError("REWORK confirmation is already recorded")
+            if progress.get("confirmation") is not None:
+                raise DevlegateError("candidate confirmation is already recorded")
             return
         if command.method == "reconcile-control":
             if command.onto is None:
@@ -2648,13 +2654,13 @@ class ServiceEngine:
                 return
             updated[command.request_id] = receipt
             reconciliation = None
-            rework = None
+            transfer_progress = None
             if command.method == "reconcile-resume" and command.onto is not None:
                 # Persist the exact decision alongside its replay receipt. The
                 # scheduler validates and applies it under repository ownership,
                 # after admission and without the command lock.
-                rework = {
-                    **self._state["rework_provenance"],
+                transfer_progress = {
+                    **self._state["transfer_progress"],
                     "confirmation": {
                         "request_id": command.request_id,
                         "source_digest": command.plan_digest,
@@ -2714,7 +2720,8 @@ class ServiceEngine:
                     else {}
                 ),
                 **({"reconciliation": reconciliation} if reconciliation else {}),
-                **({"rework_provenance": rework} if rework else {}),
+                **({"transfer_progress": transfer_progress} if transfer_progress
+                   else {}),
             )
 
     def _workspace_cleanup_cohort(
@@ -3227,21 +3234,23 @@ class ServiceEngine:
                 )
         worker_running = service_snapshot.worker_running
         preparation_blocker = self._workspace_preparation_blocker
-        rework = self._state.get("rework_provenance")
+        progress = self._state.get("transfer_progress") or {}
+        active_transfer = progress.get("active_binding")
         if (
-            preparation_blocker is None and isinstance(rework, dict)
-            and isinstance(rework.get("conflict"), dict)
+            preparation_blocker is None and isinstance(progress.get("conflict"), dict)
         ):
-            message = waiting_message(rework["conflict"])
-            if rework.get("resolution_error"):
-                message = f"{rework['resolution_error']}; {message}"
+            message = waiting_message(
+                progress["conflict"], "update-base" if active_transfer else "REWORK",
+            )
+            if progress.get("resolution_error"):
+                message = f"{progress['resolution_error']}; {message}"
             preparation_blocker = (self._state.get("execution_id"), message)
         if (
             blocked_reason is None
             and preparation_blocker is not None
-            and self._state.get("phase") == "agent_pending"
+            and (self._state.get("phase") == "agent_pending" or active_transfer)
             and self._state.get("execution_id") == preparation_blocker[0]
-            and snapshot.plan.action == "run-worker"
+            and (snapshot.plan.action == "run-worker" or active_transfer)
         ):
             # Preparation refusals leave durable execution identity unchanged.
             # Retain only that owner-scoped diagnostic across read-only refreshes.
@@ -4223,6 +4232,17 @@ class ServiceEngine:
             if plan.action == "none":
                 _log(f"no worker scheduled: {plan.reason}")
             return self._recover_accepted_integration()
+        progress = self._state.get("transfer_progress") or {}
+        active_transfer = progress.get("active_binding")
+        if active_transfer is not None:
+            if progress.get("conflict") and not progress.get("confirmation"):
+                return 0
+            try:
+                return self._reconcile_update_base_owned(
+                    active_transfer["ticket_id"], active_transfer["base"], _replay=True,
+                )
+            except DevlegateError as error:
+                raise WorkspacePreparationBlockedError(str(error)) from error
         if self._state.get("phase") == "idle":
             self._reconcile_workspace_backlog()
         reconciliation = self._state.get("reconciliation")
@@ -5030,9 +5050,12 @@ class ServiceEngine:
                 and admitted_retry.get("status") == "admitted"
                 and admitted_retry.get("fresh_execution_id") == execution_id
             )
+            active_resume = (self._state.get("reconciliation") or {}).get(
+                "resumed_execution_id"
+            ) == execution_id
             if (
                 pending_agent_execution and rework_provenance is None
-                and not zero_delta_admitted
+                and not zero_delta_admitted and not active_resume
             ):
                 try:
                     pending_reports = ExecutionReportStore(self.control_worktree).list(
@@ -5133,7 +5156,6 @@ class ServiceEngine:
                         "previous_control_head": previous.control_head,
                         "admitted_base_head": execution_base_head,
                         "admitted_control_head": bound_execution_control,
-                        "preparation_stage": "admitted",
                         "review": review_binding.as_dict(),
                         "amended_continuation": amended,
                     }
@@ -5181,7 +5203,7 @@ class ServiceEngine:
                         "predecessor_generation": predecessor.intent["generation"],
                     })
                 elif rework_provenance is not None:
-                    resource_binding.intent["rework_origin"] = origin_digest(
+                    resource_binding.intent["transfer_origin"] = origin_digest(
                         rework_provenance,
                     )
             self._ticket_store(head=control_head, require_clean=True)
@@ -5306,6 +5328,8 @@ class ServiceEngine:
                 or resource_intent.get("predecessor_execution")
             ))
             or resume_required
+            or (self._state.get("reconciliation") or {}).get("resumed_execution_id")
+            == execution_id
             or (authorization is not None and authorization.is_automatic_resume)
             or (
                 authorization is not None
@@ -5439,6 +5463,14 @@ class ServiceEngine:
                 transfer.require_assignment()
             except ExecutionWorkspaceError as error:
                 raise WorkspacePreparationBlockedError(str(error)) from error
+        elif (self._state.get("reconciliation") or {}).get(
+            "resumed_execution_id"
+        ) == execution_id:
+            product = self._observe_product_generation(workspace.base_head)
+            if not product["stable"]:
+                raise WorkspacePreparationBlockedError(
+                    f"stale update-base target: {product['reason']}"
+                )
         self._require_execution_generation(clean=not workspace.dirty, remote=True)
         prompt_artifact = write_worker_prompt_artifact(
             self.state_dir,
@@ -5466,6 +5498,7 @@ class ServiceEngine:
         self._save_state(
             "agent_running",
             execution_stage="worker-launch",
+            transfer_progress=None,
             execution_start_head=workspace.head,
             execution_ticket_id=selected_ticket.id,
             execution_base_head=workspace.base_head,
@@ -6928,7 +6961,7 @@ class ServiceEngine:
                     )
                     if reference == reconciliation.get("displaced_evidence_ref"):
                         original = self._resolve_commit_runtime(self.repo, reference)
-                        if original:
+                        if original == reconciliation.get("displaced_checkpoint"):
                             displaced = (previous, Checkpoint(original, original_base))
             namespace = published_checkpoint_history(
                 workspace.path, self.control_worktree, workspace.base_head,
@@ -8083,7 +8116,11 @@ class ServiceEngine:
                 raise WorkflowBlockedError("accepted execution is still active")
 
         reconciliation = state.get("reconciliation")
-        if reconciliation is not None:
+        if reconciliation is not None and not (
+            isinstance(reconciliation, dict)
+            and reconciliation.get("status") == "resolved"
+            and reconciliation.get("resumed_execution_id")
+        ):
             if not isinstance(reconciliation, dict):
                 raise WorkflowBlockedError(
                     "reconciliation dependency identity is invalid"
@@ -9971,58 +10008,6 @@ class ServiceEngine:
                 f"cannot validate execution workspace recovery: {error}"
             ) from error
         return workspace
-
-    def _execution_workspace_for_rewrite_recovery(
-        self, manager: ExecutionWorkspaceManager
-    ) -> ExecutionWorkspace:
-        """Observe a staged rewrite without validating its persisted base yet."""
-        if self._state.get("execution_resource_binding") is not None:
-            binding = self._execution_generation_binding()
-            if binding.rebase_state():
-                binding.require_rebase_stage()
-                return ExecutionWorkspace(
-                    ticket_id=manager.ticket_id, branch=manager.branch,
-                    path=manager.path, head=str(binding._expected_head()),
-                    base_head=str(self._state.get("execution_base_head", "")),
-                    dirty=True,
-                )
-            return binding.require_local(clean=False)
-        expected_path = manager.path.resolve()
-        registrations = manager._registrations()
-        registration = registrations.get(expected_path)
-        if registration is None or registration.get("branch") != manager.branch:
-            raise WorkflowBlockedError(
-                "cannot validate staged execution rewrite worktree binding"
-            )
-        try:
-            common = common_dir(manager.path, runner=self._git_runtime)
-            root = worktree_root(manager.path, runner=self._git_runtime)
-            expected_common = common_dir(self.repo, runner=self._git_runtime)
-            observed_branch = branch_name(manager.path, runner=self._git_runtime)
-        except GitObservationError as error:
-            raise WorkflowBlockedError(str(error)) from error
-        if (
-            common != expected_common
-            or root != manager.path.resolve()
-            or observed_branch != manager.branch
-        ):
-            raise WorkflowBlockedError(
-                "staged execution rewrite worktree binding is invalid"
-            )
-        head_value = self._resolve_commit_runtime(manager.path, "HEAD")
-        status_value = self._status_runtime(manager.path)
-        if head_value is None or registration.get("head") != head_value:
-            raise WorkflowBlockedError(
-                "cannot observe staged execution rewrite worktree"
-            )
-        return ExecutionWorkspace(
-            ticket_id=manager.ticket_id,
-            branch=manager.branch,
-            path=manager.path,
-            head=head_value,
-            base_head=str(self._state.get("execution_base_head", "")),
-            dirty=bool(status_value),
-        )
 
     def _checkpoint_commit_is_exact(
         self, workspace: ExecutionWorkspace, commit: str, start_head: str
@@ -12605,7 +12590,7 @@ class ServiceEngine:
         rework = state.get("rework_provenance")
         if (
             isinstance(rework, dict)
-            and rework.get("preparation_stage") == "remote_predecessor_installed"
+            and (state.get("transfer_progress") or {}).get("candidate") is not None
         ):
             previous_execution = rework.get("previous_execution_id")
             previous_checkpoint = rework.get("previous_report_checkpoint")
@@ -13038,58 +13023,6 @@ class ServiceEngine:
         except ValueError as error:
             raise DevlegateError(str(error)) from error
 
-    # These observations form the capability boundary for the lineage
-    # transaction.  The transaction module owns their ordering; the service
-    # remains the only owner of Git, state, and workspace authority.
-    def reconciliation_git(
-        self, cwd: Path, *args: str, check: bool = False
-    ) -> subprocess.CompletedProcess[str]:
-        """Run a reconciliation Git command under service ownership policy."""
-        if self._stop_requested():
-            raise ShutdownInterrupted
-        binding = None
-        operation = None
-        if (
-            getattr(self, "_state", {}).get("execution_resource_binding") is not None
-            and args
-        ):
-            if args[0] == "rebase":
-                operation = "rewrite"
-            elif args[0] == "reset":
-                operation = "rollback"
-            if operation is not None:
-                binding = self._execution_generation_binding()
-                self._assert_repository_owner()
-                if cwd != binding.manager.path:
-                    raise ExecutionWorkspaceError(
-                        "reconciliation effect targets a different workspace"
-                    )
-                if args[0] == "rebase" and any(
-                    stage in args for stage in ("--continue", "--abort", "--skip")
-                ):
-                    binding.require_rebase_stage()
-                else:
-                    self._require_execution_generation(clean=True, remote=False)
-                binding.begin_operation(operation, {
-                    "before": binding._expected_head(),
-                    "arguments": list(args),
-                })
-        result = self._git_runtime(cwd, *args, check=check)
-        if binding is not None and operation is not None:
-            if args[0] == "rebase" and result.returncode != 0:
-                binding.finish_operation(operation, {
-                    "after": self._resolve_commit_runtime(
-                        self.repo, str(binding.intent["ref"])
-                    ),
-                    "returncode": result.returncode,
-                    "rebase_state": binding.rebase_state(),
-                })
-            elif result.returncode == 0:
-                binding.finish_operation(operation, {
-                    "after": self._resolve_commit_runtime(cwd, "HEAD"),
-                })
-        return result
-
     def reconciliation_pending(self) -> dict[str, object]:
         """Return detached pending evidence, never an alias of owner state."""
         reconciliation = self._state.get("reconciliation")
@@ -13097,123 +13030,10 @@ class ServiceEngine:
             not isinstance(reconciliation, dict)
             or reconciliation.get("status") != "pending"
         ):
-            raise ReconciliationTransactionError(
+            raise DevlegateError(
                 "reconciliation has no pending transaction"
             )
         return copy.deepcopy(reconciliation)
-
-    def reconciliation_target(self, value: str) -> str:
-        resolved = resolve_commit(
-            self.repo, value, check=False, runner=self.reconciliation_git
-        )
-        if resolved is None:
-            raise ReconciliationTransactionError(
-                "requested reconciliation target is not a commit"
-            )
-        return resolved
-
-    def reconciliation_product(self, base: str) -> dict[str, object]:
-        product = self._observe_product_generation(base, runner=self.reconciliation_git)
-        if product.get("branch") != self.current_branch:
-            raise ReconciliationTransactionError(
-                "product checkout is on the wrong branch"
-            )
-        return product
-
-    def reconciliation_target_is_descendant(self, base: str, target: str) -> bool:
-        try:
-            return is_ancestor(self.repo, base, target, runner=self.reconciliation_git)
-        except GitAncestryError as error:
-            raise ReconciliationTransactionError(str(error)) from error
-
-    def reconciliation_same_parent_replacement(self, base: str, target: str) -> bool:
-        return _is_same_parent_replacement(
-            self.repo, base, target, runner=self.reconciliation_git
-        )
-
-    def reconciliation_evidence_matches(self, reference: str, checkpoint: str) -> bool:
-        return self._resolve_commit_runtime(self.repo, reference) == checkpoint
-
-    def reconciliation_workspace_binding(
-        self, ticket_id: str, value: dict[str, object]
-    ) -> bool:
-        manager = ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
-        )
-        return (
-            value.get("execution_branch") == manager.branch
-            and Path(str(value.get("execution_path"))) == manager.path
-        )
-
-    def reconciliation_lock(self):
-        return self._lock()
-
-    def reconciliation_workspace_manager(self, ticket_id: str):
-        return ExecutionWorkspaceManager(
-            self.repo, self.execution_worktree_root, ticket_id, runner=self._git_runtime
-        )
-
-    def reconciliation_todo_fingerprint(self) -> str:
-        fingerprint, _count = _todo_fingerprint(self.control_worktree, self.todo_path)
-        return fingerprint
-
-    def reconciliation_publish_rewrite(
-        self, branch: str, rewritten_head: str, expected_remote: str
-    ) -> None:
-        reconciliation = self._state.get("reconciliation")
-        if not isinstance(reconciliation, dict):
-            raise DevlegateError("reconciliation workspace binding is unavailable")
-        workspace_path = Path(str(reconciliation.get("execution_path")))
-        binding = None
-        if self._state.get("execution_resource_binding") is not None:
-            self._require_execution_generation(clean=True, remote=False)
-            binding = self._execution_generation_binding()
-            binding.begin_operation("rewrite-publication", {
-                "before": expected_remote, "after": rewritten_head,
-            })
-        pushed = push_refs(
-            workspace_path,
-            self.remote_name,
-            f"{rewritten_head}:refs/heads/{branch}",
-            options=(f"--force-with-lease=refs/heads/{branch}:{expected_remote}",),
-            runner=self.reconciliation_git,
-        )
-        observed = self._execution_remote_head(branch)
-        if binding is not None and pushed.returncode:
-            raise DevlegateError(
-                "execution branch remote changed during publication or publication "
-                "outcome is uncertain; independent receipt missing"
-            )
-        if pushed.returncode and observed != rewritten_head:
-            raise DevlegateError(
-                pushed.stderr.strip() or "published execution rewrite failed"
-            )
-        if observed != rewritten_head:
-            raise DevlegateError("execution branch remote changed during publication")
-        if binding is not None:
-            binding.finish_operation("rewrite-publication", {
-                "before": expected_remote, "after": rewritten_head,
-            })
-
-    def reconciliation_pin_rewrite_evidence(
-        self, reference: str, rewritten_head: str
-    ) -> None:
-        if self._state.get("execution_resource_binding") is not None:
-            self._receipt_code_pin(
-                self._execution_generation_binding(), reference, rewritten_head,
-            )
-            return
-        pinned = compare_and_swap_ref(
-            self.repo,
-            reference,
-            rewritten_head,
-            "0" * 40,
-            runner=self.reconciliation_git,
-        )
-        if pinned.returncode:
-            existing = self._resolve_commit_runtime(self.repo, reference)
-            if existing != rewritten_head:
-                raise DevlegateError("rewritten execution evidence could not be pinned")
 
     def _reconcile_update_base_owned(
         self,
@@ -13222,17 +13042,17 @@ class ServiceEngine:
         *,
         rewrite_published: bool = False,
         _take_lock: bool = False,
+        _replay: bool = False,
     ) -> int:
         """Run the owner-held reconciliation transaction."""
         try:
-            return run_update_base(
-                self,
-                ticket_id,
-                onto,
-                rewrite_published=rewrite_published,
-                take_lock=_take_lock,
-            )
-        except (ReconciliationTransactionError, ExecutionWorkspaceError) as error:
+            with self._lock() if _take_lock else nullcontext():
+                return update_base(
+                    self, ticket_id, onto, rewrite_published=rewrite_published,
+                    replay=_replay,
+                )
+        except (ExecutionWorkspaceError, EvidenceError, GitObservationError,
+                GitAncestryError, OSError, subprocess.CalledProcessError) as error:
             raise DevlegateError(str(error)) from error
 
     def _reconcile_resume_owned(
@@ -13240,6 +13060,7 @@ class ServiceEngine:
     ) -> int:
         authority = self._lock() if _take_lock else nullcontext()
         with authority:
+            self._validate_reconcile_resume_admission(ticket_id)
             reconciliation = self._state.get("reconciliation")
             if not isinstance(reconciliation, dict) or reconciliation.get(
                 "status"

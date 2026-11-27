@@ -31,7 +31,7 @@ from devlegate.execution_workspace import (
 from devlegate.git import GitObservationError, GitRunner, remote_ref, resolve_ref_commit
 
 _OPERATIONS = (
-    "worker", "checkpoint", "publication", "rewrite", "rollback", "rewrite-publication",
+    "worker", "checkpoint", "publication",
     "predecessor-publication",
     "force-checkpoint",
 )
@@ -284,12 +284,12 @@ class ResourceBinding:
         _safe_path(self.directory)
         self.directory.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         _sync_directory(self.directory.parent.parent)
-        if self.intent.get("rework_origin") is not None:
+        if self.intent.get("transfer_origin") is not None:
             self.directory.mkdir(mode=0o700, exist_ok=True)
             _sync_directory(self.directory.parent)
             if any(not p.name.startswith(".pending-")
                    for p in self.directory.iterdir()):
-                raise ExecutionWorkspaceError("rework generation intent is not empty")
+                raise ExecutionWorkspaceError("transfer generation intent is not empty")
             _publish_once(self.directory / "intent.json", self.intent)
             return
         self.directory.mkdir(mode=0o700)
@@ -492,17 +492,7 @@ class ResourceBinding:
                 raise ExecutionWorkspaceError(
                     "worker receipt has wrong execution identity"
                 )
-        if operation == "rewrite" and details.get("returncode", 0) != 0:
-            self._validate_local_identity()
-            if details.get("after") != intent.get("before"):
-                raise ExecutionWorkspaceError(
-                    "failed rebase changed the bound branch; outcome is uncertain"
-                )
-            if details.get("after") != resolve_ref_commit(
-                self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
-            ):
-                raise ExecutionWorkspaceError("rebase branch changed before receipt")
-        elif operation in {"checkpoint", "rewrite", "rollback", "force-checkpoint"}:
+        if operation in {"checkpoint", "force-checkpoint"}:
             workspace = self._observe_local(clean=True)
             if workspace.head != details.get("after"):
                 raise ExecutionWorkspaceError(
@@ -584,7 +574,7 @@ class ResourceBinding:
         self._require_settled()
         for _sequence, operation, path in reversed(self._attempts()):
             if operation in {
-                "rewrite-publication", "publication", "predecessor-publication",
+                "publication", "predecessor-publication",
             }:
                 value = self._receipt(path).get("after")
                 if not isinstance(value, str):
@@ -616,7 +606,7 @@ class ResourceBinding:
         current = self.intent["prior_remote"]
         if current is not None:
             predecessor = None
-            for name in ("rework-started.json", "handoff-intent.json"):
+            for name in ("transfer-started.json", "handoff-intent.json"):
                 path = self.directory / name
                 if path.exists():
                     predecessor = _read(path).get("predecessor")
@@ -635,7 +625,7 @@ class ResourceBinding:
                 raise ExecutionWorkspaceError("remote predecessor receipt differs")
         for _sequence, operation, path in self._attempts():
             if operation in {
-                "publication", "rewrite-publication", "predecessor-publication",
+                "publication", "predecessor-publication",
             }:
                 receipt = self._receipt(path)
                 if receipt.get("before") != current or not isinstance(
@@ -779,7 +769,7 @@ class ResourceBinding:
         if not replay:
             self.require_local(clean=clean)
 
-    def install_rework(
+    def install_transfer(
         self, predecessor: ResourceBinding, previous_base: str, checkpoint: str,
         candidate: str, *, require_current,
     ) -> ExecutionWorkspace:
@@ -792,11 +782,11 @@ class ResourceBinding:
         log = common / "logs" / ref
         _safe_path(log)
         before = self.intent["prior_local"]
-        record = self.directory / "rework-started.json"
+        record = self.directory / "transfer-started.json"
         details = {"predecessor": predecessor.intent["generation"],
                    "checkpoint": checkpoint, "candidate": candidate}
         if not record.exists():
-            absent = predecessor.rework_source_absent(previous_base, checkpoint)
+            absent = predecessor.transfer_source_absent(previous_base, checkpoint)
             if before != (None if absent else checkpoint) or (
                 self.intent["prior_registration"]
                 != manager._registrations().get(manager.path)
@@ -811,9 +801,9 @@ class ResourceBinding:
         evidence = _read(record)
         if any(evidence.get(key) != value for key, value in details.items()):
             raise ExecutionWorkspaceError("candidate installation identity differs")
-        reservation = self.directory / "rework-reservation.json"
+        reservation = self.directory / "transfer-reservation.json"
         receipt = self.directory / "receipt.json"
-        label = f"devlegate rework {self.intent['generation']}"
+        label = f"devlegate transfer {self.intent['generation']}"
         if not receipt.exists():
             registrations = manager._registrations()
             if any(p != manager.path and item.get("branch") == manager.branch
@@ -863,7 +853,7 @@ class ResourceBinding:
                                check=False).returncode != 1:
                 raise ExecutionWorkspaceError("rework branch is not a direct ref")
             require_current()
-            workspace, identity = self._register_rework(candidate, label, reservation)
+            workspace, identity = self._register_transfer(candidate, label, reservation)
             require_current()
             self._record_creation(workspace, expected_identity=identity, replay=True)
         locked = self._validate_local_identity() / "locked"
@@ -878,11 +868,13 @@ class ResourceBinding:
             raise ExecutionWorkspaceError("installed rework checkpoint differs")
         return workspace
 
-    def _register_rework(self, candidate, label, reservation):
+    def _register_transfer(self, candidate, label, reservation):
         manager = self.manager
         if not reservation.exists():
             manager.path.parent.mkdir(parents=True, exist_ok=True)
-            scratch = Path(tempfile.mkdtemp(dir=manager.path.parent, prefix=".rework-"))
+            scratch = Path(tempfile.mkdtemp(
+                dir=manager.path.parent, prefix=".transfer-",
+            ))
             _sync_directory(scratch.parent)
             _publish_once(reservation, {
                 "name": scratch.name, "identity": _identity(scratch),
@@ -890,7 +882,9 @@ class ResourceBinding:
         reserved = _read(reservation)
         identity = reserved["identity"]
         name = reserved["name"]
-        if not isinstance(name, str) or not re.fullmatch(r"\.rework-[a-z0-9_]+", name):
+        if not isinstance(name, str) or not re.fullmatch(
+            r"\.transfer-[a-z0-9_]+", name,
+        ):
             raise ExecutionWorkspaceError("invalid rework reservation")
         scratch = manager.path.parent / name
         _safe_path(manager.path)
@@ -921,7 +915,7 @@ class ResourceBinding:
         manager._prepare_submodules(manager.path)
         return workspace, identity
 
-    def rework_source_absent(self, previous_base: str, checkpoint: str) -> bool:
+    def transfer_source_absent(self, previous_base: str, checkpoint: str) -> bool:
         """Recognize only a proven, ordinarily retired zero-delta predecessor."""
         self._validate_intent()
         self._require_settled()
@@ -1065,7 +1059,7 @@ class ResourceBinding:
     def _expected_head(self) -> object:
         expected = _read(self.directory / "receipt.json").get("head")
         for _sequence, operation, path in self._attempts():
-            if operation in {"checkpoint", "rewrite", "rollback", "force-checkpoint"}:
+            if operation in {"checkpoint", "force-checkpoint"}:
                 expected = self._receipt(path).get("after")
         return expected
 
@@ -1152,32 +1146,6 @@ class ResourceBinding:
                     f"execution Git resource is locked: {lock}"
                 )
         return admin
-
-    def rebase_state(self) -> dict[str, str]:
-        admin = self._validate_local_identity()
-        for name in ("rebase-merge", "rebase-apply"):
-            directory = admin / name
-            _safe_path(directory)
-            if directory.exists():
-                return {
-                    field: (directory / field).read_text().strip()
-                    for field in ("head-name", "orig-head", "onto")
-                }
-        return {}
-
-    def require_rebase_stage(self) -> None:
-        """Only an observed, receipted native rebase permits continue/abort."""
-        self._require_settled()
-        receipt = self.operation_receipt("rewrite")
-        observed = self.rebase_state()
-        if (
-            not observed or observed != receipt.get("rebase_state")
-            or observed["head-name"] != self.intent["ref"]
-            or resolve_ref_commit(
-                self.manager.repo, str(self.intent["ref"]), runner=self.manager._runner
-            ) != self._expected_head()
-        ):
-            raise ExecutionWorkspaceError("native rebase stage has no exact receipt")
 
     def _observe_local(
         self, *, clean: bool, read_only: bool = False, dirty_submodules: bool = False

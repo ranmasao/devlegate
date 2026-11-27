@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Read-only validation of persisted runtime state."""
 
+import re
+
 from devlegate.abandonment_admission import AbandonmentAdmission
 from devlegate.abandonment_evidence import EvidenceError
 from devlegate.clean_reset import validate_reset_intent
 from devlegate.execution_result import ExecutionReport, ExecutionReportError
+from devlegate.reconciliation import has_valid_evidence_identity
 from devlegate.review_provenance import ReviewProvenanceError, restore_review_binding
 from devlegate.ticket_reset import validate as validate_ticket_reset
 from devlegate.worker_supervisor import WorkerProcessIdentity
@@ -330,6 +333,8 @@ def validate_state_invariant(state: dict[str, object]) -> None:
         ):
             raise DevlegateError("invalid reconciliation identity")
         status = reconciliation["status"]
+        if "rewrite_stage" in reconciliation:
+            raise DevlegateError("finish the obsolete pending rewrite before upgrading")
         if status == "resolving" and reconciliation.get("resolution") != "resume":
             raise DevlegateError("resolving reconciliation must be a resume")
         if "resolution" in reconciliation and reconciliation["resolution"] not in {
@@ -355,7 +360,23 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             or _is_git_identity(reconciliation["execution_remote_head"])
         ):
             raise DevlegateError("invalid reconciliation execution remote identity")
+        resumed = reconciliation.get("resumed_execution_id")
+        if resumed is not None and (
+            not isinstance(resumed, str) or not re.fullmatch(r"[0-9a-f]{32}", resumed)
+            or resumed == reconciliation["execution_id"]
+            or status != "resolved" or reconciliation.get("resolution") != "update-base"
+            or not has_valid_evidence_identity(reconciliation)
+            or not _is_git_identity(reconciliation.get("effective_base"))
+            or not _is_git_identity(reconciliation.get("displaced_checkpoint"))
+            or not isinstance(reconciliation.get("externally_resolved"), bool)
+            or "execution_report" not in reconciliation
+        ):
+            raise DevlegateError("invalid reconciled transfer continuation")
         if "execution_report" in reconciliation:
+            checkpoint_field = (
+                "displaced_checkpoint" if reconciliation.get("resumed_execution_id")
+                else "worker_checkpoint"
+            )
             try:
                 report = ExecutionReport.from_dict(
                     reconciliation["execution_report"]
@@ -373,12 +394,13 @@ def validate_state_invariant(state: dict[str, object]) -> None:
                     (report.control_head, "control_head"),
                     (report.execution_branch, "execution_branch"),
                     (report.execution_path, "execution_path"),
-                    (report.workspace_head, "worker_checkpoint"),
+                    (report.workspace_head, checkpoint_field),
                 )
             ):
                 raise DevlegateError(
                     "retained reconciliation report binding is invalid"
                 )
+    _validate_transfer_progress(state)
     failures = state.get("failed_executions", {})
     if not isinstance(failures, dict) or not all(
         isinstance(ticket_id, str)
@@ -716,3 +738,59 @@ def validate_state_invariant(state: dict[str, object]) -> None:
             )
         except ReviewProvenanceError as error:
             raise DevlegateError(f"invalid state: {error}") from error
+
+
+def _validate_transfer_progress(state):
+    rework = state.get("rework_provenance")
+    obsolete = {"preparation_stage", "confirmation", "candidate", "conflict",
+                "resolution_error"}
+    if isinstance(rework, dict) and obsolete & rework.keys():
+        if state.get("phase") in {"agent_pending", "agent_running"}:
+            raise DevlegateError("finish the obsolete pending REWORK before upgrading")
+    progress = state.get("transfer_progress")
+    if progress is None:
+        return
+    if not isinstance(progress, dict) or not progress.keys() <= {
+        "active_binding", "rewrite_published", "conflict", "confirmation",
+        "resolution_error", "candidate",
+    }:
+        raise DevlegateError("invalid transfer progress")
+    active = progress.get("active_binding")
+    if active is not None:
+        source = state.get("reconciliation") or {}
+        if (
+            not isinstance(active, dict)
+            or state.get("phase") != "idle"
+            or source.get("status") != "pending"
+            or active.get("ticket_id") != source.get("ticket_id")
+            or active.get("execution_id") == source.get("execution_id")
+            or not _is_git_identity(active.get("base"))
+            or active.get("base") == source.get("original_base")
+            or active.get("prior_remote") != source.get("execution_remote_head")
+            or not isinstance(progress.get("rewrite_published"), bool)
+            or (active.get("prior_remote") and not progress["rewrite_published"])
+        ):
+            raise DevlegateError("invalid active transfer admission")
+    elif (state.get("phase") != "agent_pending" or not isinstance(rework, dict)
+          or "rewrite_published" in progress):
+        raise DevlegateError("invalid reviewed transfer admission")
+    conflict, candidate = progress.get("conflict"), progress.get("candidate")
+    if conflict is not None and (
+        not isinstance(conflict, dict) or candidate is not None
+    ):
+        raise DevlegateError("invalid transfer conflict")
+    confirmation = progress.get("confirmation")
+    if confirmation is not None and (
+        conflict is None or not isinstance(confirmation, dict)
+        or not isinstance(confirmation.get("request_id"), str)
+        or not isinstance(confirmation.get("source_digest"), str)
+    ):
+        raise DevlegateError("invalid transfer confirmation")
+    if candidate is not None and (
+        not isinstance(candidate, dict)
+        or candidate.keys() != {"path", "head", "tree", "effect", "resolved"}
+        or not _is_git_identity(candidate["head"])
+        or not _is_git_identity(candidate["tree"])
+        or not isinstance(candidate["resolved"], bool)
+    ):
+        raise DevlegateError("invalid installed transfer candidate")

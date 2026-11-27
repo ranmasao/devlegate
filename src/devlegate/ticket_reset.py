@@ -338,10 +338,11 @@ def admit(owner, ticket_id):
         current
     ) else None
     rework = owner._state.get("rework_provenance")
-    if (binding is not None and binding.get("rework_origin") is not None
+    if (isinstance(rework, dict) and binding is not None
+            and binding.get("transfer_origin") is not None
             and owner._state["phase"] == "agent_pending"
             and owner._state.get("worker_identity") is None):
-        from devlegate.rework_transfer import ReworkTransfer
+        from devlegate.transfer_transaction import ReworkTransfer
 
         transaction = ReworkTransfer(
             owner, ResourceBinding(_manager(owner, ticket_id), binding), rework,
@@ -659,6 +660,7 @@ def advance(owner):
             current = intent["prior_execution"] is not None
             if current:
                 fields["rework_provenance"] = None
+                fields["transfer_progress"] = None
                 fields["automatic_retry"] = None
                 fields["force_retry_authorization"] = None
                 fields["resume_required"] = None

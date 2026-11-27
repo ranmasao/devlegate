@@ -2739,8 +2739,9 @@ def test_real_service_crash_during_mutable_response_reports_uncertain_delivery(
     finally:
         service.stop()
 
+@pytest.mark.parametrize("conflict", [False, True])
 def test_real_service_process_executes_reconciliation_from_real_cli(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, conflict,
 ):
     monkeypatch.chdir(git_fixture["working"])
     config = _short_runtime_config(git_fixture)
@@ -2750,8 +2751,9 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
 
     def worker(workspace, _prompt, **_kwargs):
         (workspace.path / "implementation.txt").write_text("worker work\n")
-        (git_fixture["working"] / "product-change.txt").write_text("product B\n")
-        git(git_fixture["working"], "add", "product-change.txt")
+        product_file = "implementation.txt" if conflict else "product-change.txt"
+        (git_fixture["working"] / product_file).write_text("product B\n")
+        git(git_fixture["working"], "add", product_file)
         git(git_fixture["working"], "commit", "-m", "advance product")
         git(git_fixture["working"], "push", "origin", "HEAD:main")
         return WorkerRunResult(
@@ -2773,6 +2775,24 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         assert result.returncode == 0, result.stderr
         assert "reconciliation request accepted: T-1" in result.stdout
 
+        if conflict:
+            service.wait_for(lambda: bool(
+                (_disk_state(config).get("transfer_progress") or {}).get("conflict")
+            ))
+            progress = _disk_state(config)["transfer_progress"]
+            candidate = Path(progress["conflict"]["path"])
+            assert git(execution, "rev-parse", "HEAD").stdout.strip() == (
+                pending_before["worker_checkpoint"]
+            )
+            service.kill()
+            service.restart()
+            assert _disk_state(config)["transfer_progress"] == progress
+            (candidate / "implementation.txt").write_text("confirmed source\n")
+            confirmation = service.cli(
+                "reconcile", "resume", "T-1", "--resolve-candidate", str(candidate),
+            )
+            assert confirmation.returncode == 0, confirmation.stderr
+
         def resolved():
             status = service.cli("status", "--json")
             if status.returncode != 0:
@@ -2792,7 +2812,10 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         payload = json.loads(status.stdout)
         assert payload["reconciliation"]["effective_base"] == target
         assert git(execution, "rev-parse", "HEAD^").stdout.strip() == target
-        assert (execution / "implementation.txt").read_text() == "worker work\n"
+        expected = "confirmed source\n" if conflict else "worker work\n"
+        assert (execution / "implementation.txt").read_text() == expected
+        pinned = git(execution, "rev-parse", pending_before["evidence_ref"]).stdout
+        assert pinned.strip() == pending_before["worker_checkpoint"]
     database = next(engine.state_dir.glob("*.sqlite3"))
     connection = sqlite3.connect(database)
     persisted = json.loads(
@@ -2801,4 +2824,7 @@ def test_real_service_process_executes_reconciliation_from_real_cli(
         ]
     )
     connection.close()
-    assert persisted["resume_required"]["status"] == "required"
+    assert persisted["execution_id"] != pending_before["execution_id"]
+    resolved = persisted["reconciliation"]
+    assert persisted["execution_id"] == resolved["resumed_execution_id"]
+    assert resolved["execution_report"] == pending_before["execution_report"]
