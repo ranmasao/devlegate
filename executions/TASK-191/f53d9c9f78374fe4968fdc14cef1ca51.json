@@ -1,0 +1,30 @@
+{
+  "code_base_head": "1400e50ba593205b60b48fa9c2f889c301c0d07f",
+  "conclusion": "completed",
+  "control_head": "b7726929f9207bd97df8f003dbddb4101fd5a1fe",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-191",
+  "execution_id": "f53d9c9f78374fe4968fdc14cef1ca51",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-191",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-191/f53d9c9f78374fe4968fdc14cef1ca51.md",
+  "report_sha256": "7db1ac264b2aa0727e3ae963a1bb50176acba277e163f5a26ee96623f3c3ff04",
+  "resource_generation": "5af2e786b952274a24c59c15ed0c0e630a200685f6004ab78523dd9c4dca8671",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-191",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "93 focused tests passed, including the real service restart scenario; ./dev lint and git diff --check passed. Authoritative hosted CI has not run in this worker.",
+    "summary": "Ticket follow reads workflow state and report chronology from one committed control view, drains outgoing logs, and follows later executions until done or abandoned. Regression coverage exercises checkout rematerialization, delayed reports and logs, invalid committed evidence, and a real service restart."
+  },
+  "workspace_head": "fb135883ef3ec584f456fddedc8daf7f723f2553"
+}
