@@ -3,6 +3,10 @@
 "title": "Clarify reset disposition and post-reset worker scheduling"
 ---
 
+## Post-audit policy gate — 2026-11-28
+
+Phase II/III confirm that reset disposition remains an independent product decision, not a retirement-mechanics or process-separation change. Keep existing operational reset destination and scheduling semantics until curator chooses. Any later implementation must fully complete the selected durable disposition and ordinary scheduling in the same integrated ticket; no transient hold or future-ticket dependency. Do not resolve this policy implicitly in retirement consolidation.
+
 ## Milestone and scheduling
 
 Devlegate 0.5.7 — self-hosting operator workflow refinement, to be revisited during the current iteration. **Backlog until an explicit operator/Architect decision on semantics.** Do not schedule, automatically requeue or implement this ticket before that decision; creating it must not unblock or start any worker.

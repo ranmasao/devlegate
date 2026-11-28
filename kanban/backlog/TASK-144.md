@@ -4,6 +4,10 @@
 "depends_on": ["TASK-143"]
 ---
 
+## Superseded implementation direction — 2026-11-28
+
+**Frozen in backlog; do not schedule or implement this specification.** The three-phase audit and integrated TASK-198–202 supersede the historical repair/adoption chain. Ordinary continuation of a currently proved failed generation remains TASK-139. No historical lost-ownership adoption, native update-base recreation, synthetic receipts or new repair stages. The original text below is retained as historical context pending any explicit reviewed abandonment disposition; it is not current authorization. Do not move this ticket manually to a terminal board or mark it done.
+
 ## Milestone
 
 TASK-139 historical repair decomposition: 5/5 — actual resume of productive worker generation.

@@ -4,6 +4,10 @@
 "depends_on": ["TASK-071", "TASK-072", "TASK-078", "TASK-079", "TASK-080", "TASK-081", "TASK-165"]
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Retain the human-only acceptance gate and all existing criteria/dependencies. Phase I–III architectural audits do not establish a PASS/FAIL matrix for the Git story. TASK-165 must rebaseline after substantive substitutions and provide actual effect evidence; no acceptance by inference from CI or from the general architectural recommendation. Only explicit curator APPROVE may close this gate.
+
 ## Current scheduling decision — 2026-11-16: carry final acceptance to next iteration
 
 **The curator explicitly defers closure of this Git architectural story beyond

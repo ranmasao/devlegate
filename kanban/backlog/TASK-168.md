@@ -3,6 +3,10 @@
 "title": "Re-audit focused test coverage, placement and proof strength against current suite"
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Retain whole-suite proof audit after primary architectural substitutions. Phase II inspected only selected test groups, not the entire collected suite. The obsolete tests/FOCUSED_TEST_AUDIT.md is already absent at the audit baseline fb135883ef3ec584f456fddedc8daf7f723f2553; verify references and do not regenerate it. Explicitly distinguish fixtures sustaining obsolete live authority from modern behavioral tests and independent cross-layer proof. TASK-013 should consume this inventory for bounded missing-proof implementation, not repeat the full audit.
+
 ## Scheduling
 
 **Future iteration after release 0.5.7; backlog until explicitly scheduled by

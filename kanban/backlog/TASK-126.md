@@ -4,6 +4,10 @@
 "depends_on": ["TASK-125"]
 ---
 
+## Post-audit scope clarification — 2026-11-28
+
+Retain only the concrete TASK-073 incident and present-day recurrence test. Do not equate non-done retention with orphaning. Phase II did not observe actual managed resources; establish current cause and exact ownership independently. If historical-only, prefer no production change and, only if demonstrably safe, a separately authorized stopped one-shot. Do not revive historical adoption or generic retirement; coordinate with L4/G0/R and TASK-165. Backlog until explicit scheduling.
+
 ## Purpose
 TASK-073 is a deferred human-only final Git-architecture acceptance gate in `kanban/backlog`, not durably done. Its historical worktree, local ref and upstream ref remain. Two incomplete execution reports exist: `9ada49c1cd904f18b90e63c0b5be7b02` and `b69e17a85bd04c25b0348a6db8fb77b5`. Earlier control-state moves changed ticket blob provenance. Do not assume resources are garbage merely because this ticket is non-done.
 

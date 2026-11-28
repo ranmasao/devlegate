@@ -123,3 +123,11 @@ Former entries UX-006 and UX-007 were reclassified as functional defects and tra
 ## Boundaries
 
 This is a persistent backlog register, **not** an implementation authorization. No owner runtime, ticket worktree, release branch, immutable review/report, archival asset, Git ref or systemd resource is to be modified by adding or updating this document. Keep user observations and hypotheses distinguishable and avoid unnecessary historical-data migrations.
+
+
+### UX-006 — Graceful stop prevents effective forced escalation
+
+- **Status:** Assigned to TASK-207 (S1); do not duplicate implementation in this register.
+- **Observed:** Operator reports that pending `devlegate stop` blocks effective subsequent `devlegate stop --force`. Exact host/interleaving unproved.
+- **Evidence:** Phase III at fb135883ef3ec584f456fddedc8daf7f723f2553 reproduced same-request late ACK overwriting completion in a deterministic host experiment; identified manager submission and owner delay boundaries. This is not proof of the original incident's precise cause.
+- **Desired/regression:** Monotonic same-intent escalation and truthful terminal outcome with independently established containment retirement; direct/internal/systemd, requester loss and uncertain effects. TASK-207 owns vertical fix; measure any residual S2 delays separately.

@@ -3,6 +3,10 @@
 "title": "Repeat Git architecture and command-effect audit on current integrated product"
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Retain the full independent Git architecture/effect audit and TASK-073 crosswalk. Phase I–III identify local static effect maps and known legacy paths but do not account for all executed commands, conditional effects, runner semantics or full traces. Schedule after principal L/C/I and observation substitutions so evidence reflects the architecture actually retained. Each intervening implementation must still verify its own changed Git effects, authority and crash cuts. Include TASK-198–202, TASK-191 and subsequent committed-read paths; re-evaluate raw runtime runner/shutdown behavior, CAS, remote leases, exact effect acknowledgement and local-vs-remote classification. Use observed disposable traces, not source call-site estimates as measured counts. Do not conflate TASK-163 optimization with correctness of this architecture. Negative or unknown conclusions remain valid findings, not automatic TASK-073 approval.
+
 ## Scheduling
 
 **Next development iteration after Devlegate 0.5.7; backlog only until

@@ -4,6 +4,10 @@
 "depends_on": ["TASK-165", "TASK-168"]
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Retain dependencies on TASK-165 and TASK-168 and rebaseline after the principal architecture substitutions. Phase I–III identify owner callbacks and state coupling but do not supply a complete import SCC/type-only/deferred-edge inventory. Use actual removed authority, effect, state and dependency edges rather than physical line movement. The selected working process direction is one mutation owner plus independently scheduled lifecycle intake/read contexts (A+C); reassess supervisor separation only if residual measured problems justify it. No predetermined extraction plan or forced microservice architecture.
+
 ## Scheduling
 
 Research only, after current Git effect inventory (TASK-165) and test proof inventory (TASK-168) are completed. Do not directly refactor `runtime.py` in this audit.

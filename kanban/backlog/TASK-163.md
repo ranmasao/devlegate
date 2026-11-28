@@ -3,6 +3,10 @@
 "title": "Future Git read-path optimization and native local object reader architecture"
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Rebaseline only after TASK-206/212 and relevant TASK-165 measurements. TASK-195/196 committed graph caching and TASK-191 committed log following changed the read-path baseline. First reuse existing immutable observation helpers and measure ordinary reads; a native Git object parser or persistent Git subprocess needs a separate positive cost/correctness case. Neither is required for observation separation, mutation authority, or TASK-073 closure. Keep this research deferred.
+
 ## Scheduling: deferred to future development iterations
 
 **Architectural research backlog only — explicitly not authorized for current iterations.**

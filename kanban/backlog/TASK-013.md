@@ -1,8 +1,12 @@
 ---
 "type": "devlegate.ticket"
 "title": "Harden runtime coverage from the current decomposed test baseline"
-"depends_on": ["TASK-010", "TASK-050", "TASK-053"]
+"depends_on": ["TASK-010", "TASK-050", "TASK-053", "TASK-168"]
 ---
+
+## Post-audit scope and scheduling — 2026-11-28
+
+Consume TASK-168's fresh test-proof inventory and exact baseline instead of repeating a whole-suite audit. Refresh only affected invariants when intervening changes invalidate evidence. Select a bounded highest-value proof gap or split independent gaps into separate follow-ups; don't preserve synthetic legacy live mutation positives merely to raise coverage. Existing historical counts below are not today's baseline. Keep the prior deferred QA scheduling policy; explicitly schedule only after TASK-168 and review of the resulting priorities.
 
 ## Milestone
 

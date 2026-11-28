@@ -3,6 +3,10 @@
 "title": "Isolate the OpenCode adapter from worker supervision"
 ---
 
+## Post-audit scope and scheduling — 2026-11-28
+
+Phase III does not authorize a separate execution-supervisor process. This ticket remains the OpenCode adapter versus generic worker-supervision boundary, not a process-lifetime redesign. Rebaseline installed runtime and tool contracts when scheduled; preserve current containment, reporting, worker tools and all hosting forms. Do not expand the scope into P2 worker survival or a new supervisor protocol.
+
 ## Milestone
 
 Post-0.6 architecture cleanup.
