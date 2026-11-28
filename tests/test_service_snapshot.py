@@ -267,7 +267,7 @@ def test_stop_callback_can_reenter_state_save(tmp_path, monkeypatch):
 
     class Stop:
         def request(self, kind, *, source):
-            assert kind == source == "operator_abort"
+            assert kind == "operator_abort" and source == "force"
             assert engine._runtime_store.load()["execution_interruption_kind"] == kind
             engine._save_state("agent_running", local_head="callback")
 

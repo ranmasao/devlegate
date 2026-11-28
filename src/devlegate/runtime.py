@@ -930,9 +930,11 @@ class ServiceEngine:
     def _record_forced_lifecycle_abort_locked(self) -> None:
         if self._state.get("phase") == "agent_running" and self._state.get(
             "execution_stage"
-        ) not in {"worker-launch", "worker-running"}:
-            # Force cannot retroactively cancel an already retired worker or
-            # reclassify an admitted checkpoint/publication effect.
+        ) in {
+            "checkpointing", "post-checkpoint", "publishing",
+            "post-publication", "lifecycle",
+        }:
+            # Force cannot reclassify an admitted checkpoint/publication effect.
             return
         if self._state.get("phase") not in {"agent_pending", "agent_running"}:
             analysis = self._state.get("abandonment_analysis")
@@ -1012,20 +1014,45 @@ class ServiceEngine:
         with self._state_write_lock:
             if self._state_write_uncertain:
                 raise DevlegateError("runtime state write outcome uncertain")
-            if (
-                self._workers.active_count
-                or self._state.get("worker_identity") is not None
+            identity = _worker_identity_from_value(
+                self._state.get("worker_identity"), self._state.get("execution_id")
+            )
+            if self._workers.active_count or (
+                self._state.get("worker_identity") is not None and identity is None
             ):
                 raise DevlegateError("worker retirement is unproven")
+            if identity is not None:
+                if identity.containment_id is None:
+                    raise DevlegateError("worker retirement is unproven")
+                deadline = time.monotonic() + 2
+                while True:
+                    retired = (
+                        self._workers.observe(identity) == "absent"
+                        and observe_worker_identity(identity, exact_leader=True)
+                        == "absent"
+                    )
+                    if retired:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise DevlegateError("worker retirement is unproven")
+                    time.sleep(0.05)
             if self._state.get("phase") == "agent_running":
-                if self._state.get("execution_stage") not in {
-                    "post-worker", "checkpointing", "post-checkpoint",
-                    "publishing", "post-publication", "lifecycle",
+                stage = self._state.get("execution_stage")
+                if stage not in {
+                    "worker-launch", "worker-running", "post-worker",
+                    "checkpointing", "post-checkpoint", "publishing",
+                    "post-publication", "lifecycle",
                 }:
                     raise DevlegateError(
                         "worker retirement is unproven: launch WAL remains"
                     )
-                self._execution_generation_binding().require_worker_retirement()
+                binding = self._execution_generation_binding()
+                if identity is None and (
+                    stage != "worker-launch" or any(
+                        operation == "worker" for _, operation, _ in binding._attempts()
+                    )
+                ):
+                    binding.require_worker_retirement()
             analysis = self._state.get("abandonment_analysis")
             if isinstance(analysis, dict) and analysis.get("stage") == "running":
                 raise DevlegateError("analysis worker retirement is unproven")

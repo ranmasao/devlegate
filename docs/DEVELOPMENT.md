@@ -93,7 +93,9 @@ The host writes exact lifecycle evidence under `STATE_DIR/lifecycle`, keyed by
 the state key and a digest of the IPC instance and canonical request ID. The
 existing state-key-only file is the latest-outcome view used by native-install
 inventory. IPC acknowledgements and SIGTERM do not publish `accepted` files.
-`completed` for stop records proved worker retirement; the client separately
+`completed` for stop records proved worker retirement: the bound generation
+WAL's worker-retired receipt, an exact identity and containment observation of
+absence, or a durable WAL showing no launch was admitted. The client separately
 requires release of the owner lock and, for a managed unit, manager inactivity
 with no main process or job. `failed` is a refusal, even if the endpoint and
 lock disappear. Missing or indeterminate proof is not success. Internal restart
