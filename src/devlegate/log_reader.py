@@ -5,18 +5,23 @@
 
 from __future__ import annotations
 
-import ctypes
-import os
+import hashlib
+import json
 import re
 import stat
-import struct
 import subprocess
 import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from devlegate.execution_result import ExecutionReportError, ExecutionReportStore
-from devlegate.git import GitObservationError, history_changes, run_git
+from devlegate.abandonment_evidence import EvidenceError
+from devlegate.clean_preview import _blob, _tree, observe_git
+from devlegate.execution_result import (
+    ExecutionReport,
+    ExecutionReportError,
+    ExecutionReportStore,
+)
+from devlegate.git import GitObservationError, file_history_commit, history_changes
 from devlegate.operational_log import OperationalLogError, execution_log_path
 from devlegate.runtime_store import RuntimeStoreError, SQLiteRuntimeStore
 
@@ -27,17 +32,7 @@ class LogReaderError(RuntimeError):
 
 _TICKET_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _POLL_INTERVAL = 0.1
-# Allow a checkout or report publication to settle, without masking persistent
-# invalid evidence. Only inconsistent observations get this grace period.
-_INCONCLUSIVE_POLLS = 20
-
-
-class _TicketLocationError(LogReaderError):
-    """A non-atomic workflow scan found zero or multiple locations."""
-
-
-class _ReportPublicationRace(LogReaderError):
-    """A report appeared during observation or before its chronology commit."""
+_sleep = time.sleep
 
 
 def _lines(value: int | None) -> int | None:
@@ -313,10 +308,14 @@ def _ticket_observation(
         if not stat.S_ISREG(mode):
             raise LogReaderError(f"ticket state is unsafe: {path}")
         locations.append(state)
+    return _unique_ticket_state(ticket_id, locations)
+
+
+def _unique_ticket_state(ticket_id, locations):
     if len(locations) != 1:
         if not locations:
-            raise _TicketLocationError(f"ticket not found: {ticket_id}")
-        raise _TicketLocationError(
+            raise LogReaderError(f"ticket not found: {ticket_id}")
+        raise LogReaderError(
             f"ticket state is ambiguous: {ticket_id} ({', '.join(locations)})"
         )
     return locations[0]
@@ -329,27 +328,15 @@ def _ticket_reports(control_worktree: Path, ticket_id: str):
         raise LogReaderError(str(error)) from error
 
 
-def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
+def _ordered_ticket_reports(control_worktree, ticket_id, active=None):
     reports = _ticket_reports(control_worktree, ticket_id)
     if len(reports) < 2:
         return reports
-    by_id = {report.execution_id: report for report in reports}
-    if len(order) == len(reports) and set(order) == set(by_id):
-        return [by_id[execution] for execution in order]
     by_path = {
         f"executions/{ticket_id}/{report.execution_id}.json": report
         for report in reports
     }
-    def first_parent_history(cwd, *args, **kwargs):
-        return run_git(cwd, args[0], "--first-parent", *args[1:], **kwargs)
-
-    try:
-        history = history_changes(
-            control_worktree, "HEAD", f"executions/{ticket_id}",
-            runner=first_parent_history,
-        )
-    except (GitObservationError, OSError) as error:
-        raise LogReaderError("cannot establish execution chronology") from error
+    history = _report_history(control_worktree, "HEAD", f"executions/{ticket_id}")
     ordered = []
     seen = set()
     for _, changes in reversed(history):
@@ -365,181 +352,133 @@ def _ordered_ticket_reports(control_worktree, ticket_id, active=None, order=()):
     missing = [report for path, report in by_path.items() if path not in seen]
     if len(missing) == 1 and missing[0].execution_id == active:
         ordered.extend(missing)
-    elif len(missing) == 1:
-        raise _ReportPublicationRace("cannot establish execution chronology")
     elif missing:
         raise LogReaderError("cannot establish execution chronology")
     return ordered
 
 
-class _TicketReportObservation:
-    """Cache immutable evidence, invalidated by directory events and Git HEAD.
+def _first_parent_git(cwd, command, *args, **kwargs):
+    return observe_git(cwd, command, "--first-parent", *args, **kwargs)
 
-    The control worktree is assumed to be a local filesystem with working
-    inotify notifications. Historical evidence must not be changed through
-    mmap, remote filesystem clients, or other paths bypassing inotify.
-    Queue overflow or loss of the watch fails closed. Notifications are installed
-    before validation so changes racing validation cannot be silently cached.
-    """
 
-    def __init__(self, control_worktree: Path, ticket_id: str):
-        self.control_worktree = control_worktree
+def _report_history(control, head, scope):
+    try:
+        return history_changes(control, head, scope, runner=_first_parent_git)
+    except (GitObservationError, OSError, subprocess.SubprocessError) as error:
+        raise LogReaderError("cannot establish execution chronology") from error
+
+
+class _TicketControlObservation:
+    """Read ticket location, report identities and chronology at one control commit."""
+
+    def __init__(self, control, ticket_id, workflow_paths):
+        if not _TICKET_ID.fullmatch(ticket_id):
+            raise LogReaderError(f"invalid ticket ID: {ticket_id}")
+        self.control = control
         self.ticket_id = ticket_id
-        self.reports = None
-        self.directory = None
-        self.evidence = {}
-        self.active = None
+        self.locations = tuple(
+            (f"{path}/{ticket_id}.md", state) for state, path in workflow_paths.items()
+        )
+        self.scope = f"executions/{ticket_id}"
         self.head = None
-        self.fd = None
-        self.watched = None
-        self.dirty = False
+        self.report_tip = None
+        self.inventory = {}
+        self.publications = ()
+        self.reports = ()
 
-    def close(self):
-        if self.fd is not None:
-            os.close(self.fd)
-            self.fd = None
-
-    def _watch(self, directory):
-        if directory is None or self.watched is not None:
-            return
-        libc = ctypes.CDLL(None, use_errno=True)
-        fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
-        if fd < 0:
-            raise LogReaderError("cannot monitor execution report evidence")
-        path = self.control_worktree / "executions" / self.ticket_id
-        # Modify, attribute, close-write, move, create, delete and watch loss.
-        mask = 0x2 | 0x4 | 0x8 | 0x40 | 0x80 | 0x100 | 0x200 | 0x400 | 0x800
-        # Require a directory and do not follow a replaced symlink.
-        if libc.inotify_add_watch(fd, os.fsencode(path), mask | 0x03000000) < 0:
-            os.close(fd)
-            raise LogReaderError("cannot monitor execution report evidence")
-        self.fd, self.watched = fd, directory[:2]
-
-    def _events(self):
-        if self.fd is None:
-            return False
-        changed = False
-        while True:
-            try:
-                data = os.read(self.fd, 65536)
-            except BlockingIOError:
-                return changed
-            except OSError as error:
-                raise LogReaderError(
-                    "cannot monitor execution report evidence"
-                ) from error
-            if not data:
-                raise LogReaderError("execution report evidence watch lost")
-            offset = 0
-            while offset < len(data):
-                _, mask, _, length = struct.unpack_from("iIII", data, offset)
-                if mask & (0x4000 | 0x8000 | 0x400 | 0x800):
-                    raise LogReaderError("execution report evidence watch lost")
-                changed = True
-                offset += 16 + length
-
-    def _head(self, reports):
-        if len(reports) < 2:
-            return None
+    def observe(self):
         try:
-            result = run_git(self.control_worktree, "rev-parse", "--verify", "HEAD")
-        except (OSError, subprocess.CalledProcessError) as error:
-            raise LogReaderError("cannot establish execution chronology") from error
-        head = result.stdout.strip()
-        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head):
-            raise LogReaderError("cannot establish execution chronology")
-        return head
-
-    @staticmethod
-    def _stat(path: Path):
-        try:
-            value = path.lstat()
-        except FileNotFoundError:
-            return None
-        except OSError as error:
+            head = observe_git(
+                self.control, "rev-parse", "--verify", "HEAD^{commit}",
+            ).stdout.strip()
+            if head == self.head:
+                return self.state, self.reports
+            if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head):
+                raise LogReaderError("invalid control commit identity")
+            tree = _tree(self.control, head, *(path for path, _ in self.locations),
+                         self.scope)
+        except (
+            EvidenceError, OSError, UnicodeError, subprocess.SubprocessError,
+        ) as error:
             raise LogReaderError(
-                f"cannot inspect execution evidence: {path}"
+                f"cannot read committed ticket or log evidence: {error}"
             ) from error
-        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
-                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-
-    def _directory(self):
-        root = self.control_worktree / "executions"
-        parent = self._stat(self.control_worktree)
-        root_stat = self._stat(root)
-        ticket_stat = self._stat(root / self.ticket_id)
-        for value in (parent, root_stat, ticket_stat):
-            if value is not None and not stat.S_ISDIR(value[2]):
-                raise LogReaderError("execution report directory is unsafe")
-        # Changes in unrelated ticket directories do not invalidate this ticket.
-        return (parent[:5] if parent else None, root_stat[:5] if root_stat else None,
-                ticket_stat)
-
-    def _evidence(self, reports):
-        root = self.control_worktree / "executions" / self.ticket_id
-        result = {}
-        for report in reports:
-            path = root / f"{report.execution_id}.json"
-            result[path] = self._stat(path)
-            if report.report_artifact is not None:
-                artifact = path.with_suffix(".md")
-                result[artifact] = self._stat(artifact)
-        return result
-
-    def _candidate_evidence(self):
-        root = self.control_worktree / "executions" / self.ticket_id
-        try:
-            paths = tuple(root.glob("*.json")) if root.is_dir() else ()
-            return {
-                candidate: self._stat(candidate)
-                for path in paths
-                for candidate in (path, path.with_suffix(".md"))
-            }
-        except OSError as error:
-            raise LogReaderError("cannot enumerate execution evidence") from error
-
-    def observe(self, active):
-        directory = self._directory()
-        ticket_directory = directory[2]
-        if self.watched is not None and (
-            ticket_directory is None or ticket_directory[:2] != self.watched
-        ):
-            raise LogReaderError("execution report evidence changed or is inaccessible")
-        self._watch(ticket_directory)
-        changed = self._events()
-        head = self._head(self.reports) if self.reports is not None else None
-        if self.reports is not None:
-            if (changed or self.dirty) and (
-                self._evidence(self.reports) != self.evidence
-            ):
-                raise LogReaderError(
-                    "execution report evidence changed or is inaccessible"
-                )
-            if (not changed and not self.dirty and directory == self.directory
-                    and active == self.active and head == self.head):
-                return self.reports
-        self.dirty = True
-        before = self._candidate_evidence()
-        # Bind chronology to a stable HEAD across the history walk.
-        head_before = self._head([path for path in before if path.suffix == ".json"])
-        reports = _ordered_ticket_reports(self.control_worktree, self.ticket_id, active)
-        head_after = self._head(reports)
-        evidence = self._evidence(reports)
-        if (
-            any(value is None for value in evidence.values())
-            or self._directory() != directory
-            or self._candidate_evidence() != before
-            or self._events()
-            or (head_before is not None and head_before != head_after)
-        ):
-            raise _ReportPublicationRace(
-                "execution report evidence changed during observation"
+        locations = [state for path, state in self.locations if path in tree]
+        state = _unique_ticket_state(self.ticket_id, locations)
+        if self.scope in tree:
+            raise LogReaderError(f"committed report directory is unsafe: {self.scope}")
+        inventory = {
+            path: oid for path, oid in tree.items() if path.startswith(self.scope + "/")
+        }
+        if self.inventory.items() - inventory.items():
+            raise LogReaderError(
+                "committed execution report evidence changed or was removed"
             )
-        self.reports, self.directory, self.evidence = reports, directory, evidence
-        self.active = active
-        self.head = head_after
-        self.dirty = False
-        return reports
+
+        # A workflow-only advance need not walk the report history again. Compare
+        # the publication commit even when the tree bytes match, to catch rewrites.
+        try:
+            tip = file_history_commit(
+                self.control, head, self.scope, runner=_first_parent_git,
+            )
+        except (GitObservationError, OSError, subprocess.SubprocessError) as exc:
+            raise LogReaderError("cannot establish execution chronology") from exc
+        if tip == self.report_tip and inventory == self.inventory:
+            self.head, self.state = head, state
+            return state, self.reports
+
+        publications = []
+        seen = set()
+        if tip is not None:
+            history = _report_history(self.control, tip, self.scope)
+            for commit, changes in reversed(history):
+                added = []
+                for change in changes:
+                    status, path = change.split("\t", 1)
+                    if path not in inventory or status != "A" or path in seen:
+                        raise LogReaderError(f"invalid execution chronology: {path}")
+                    seen.add(path)
+                    if path.endswith(".json"):
+                        added.append(path)
+                if len(added) > 1:
+                    raise LogReaderError("ambiguous execution chronology")
+                if added:
+                    publications.append((commit, added[0]))
+        previous_count = len(self.publications)
+        if (seen != inventory.keys()
+                or tuple(publications[:previous_count]) != self.publications):
+            raise LogReaderError("execution chronology changed or is incomplete")
+
+        reports = self.reports + tuple(
+            self._read_report(path, inventory)
+            for _, path in publications[previous_count:]
+        )
+        self.head, self.state, self.inventory = head, state, inventory
+        self.publications, self.reports = tuple(publications), reports
+        self.report_tip = tip
+        return state, reports
+
+    def _read_report(self, path, inventory):
+        try:
+            payload = _blob(self.control, inventory[path])
+            report = ExecutionReport.from_dict(json.loads(payload))
+            if (path != f"{self.scope}/{report.execution_id}.json"
+                    or report.ticket_id != self.ticket_id):
+                raise ExecutionReportError("report identity does not match path")
+            if report.report_artifact is not None:
+                oid = inventory.get(report.report_artifact)
+                if oid is None:
+                    raise ExecutionReportError("execution report artifact is missing")
+                content = _blob(self.control, oid)
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                if digest != report.report_sha256:
+                    raise ExecutionReportError("report artifact integrity mismatch")
+        except (ExecutionReportError, OSError, UnicodeError, json.JSONDecodeError,
+                subprocess.SubprocessError) as error:
+            raise LogReaderError(
+                f"cannot read committed execution report {path}: {error}"
+            ) from error
+        return report
 
 
 def _active_ticket_execution(
@@ -558,18 +497,16 @@ def _execution_header(execution: str, conclusion: str | None) -> str:
 
 def _ticket_selection(
     state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
-    *, allow_pending_log=False, observation=None,
+    *, observation=None,
 ):
     """Select one chronological snapshot, with a single global line budget."""
-    state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
     active = _active_ticket_execution(state_dir, state_key, ticket_id)
-    reports = (
-        observation.observe(active) if observation is not None
-        else _ordered_ticket_reports(control_worktree, ticket_id, active)
-    )
+    if observation is None:
+        state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
+        reports = _ordered_ticket_reports(control_worktree, ticket_id, active)
+    else:
+        state, reports = observation.observe()
     entries = [(r.execution_id, r.result.conclusion) for r in reports]
-    if active is not None:
-        entries.sort(key=lambda entry: entry[0] == active)
     if active is not None and active not in {item[0] for item in entries}:
         entries.append((active, None))
     selected = []
@@ -578,7 +515,8 @@ def _ticket_selection(
     try:
         for execution, conclusion in reversed(entries):
             path = execution_log_path(state_dir, state_key, execution)
-            if allow_pending_log and execution == active and not _log_exists(path):
+            if (observation is not None and execution == active
+                    and not _log_exists(path)):
                 selected.append((execution, conclusion, ()))
                 continue
             if remaining == 0 and execution != active:
@@ -650,7 +588,7 @@ def follow_ticket(
     *, markers: bool = True, final_marker: bool = False,
 ) -> int:
     """Follow all executions for a ticket until it reaches its terminal state."""
-    observation = _TicketReportObservation(control_worktree, ticket_id)
+    observation = _TicketControlObservation(control_worktree, ticket_id, workflow_paths)
     try:
         return _follow_ticket(
             state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
@@ -658,8 +596,6 @@ def follow_ticket(
         )
     except KeyboardInterrupt:
         return 130
-    finally:
-        observation.close()
 
 
 def _follow_ticket(
@@ -668,12 +604,12 @@ def _follow_ticket(
 ):
     _, active, selected, cursor = _ticket_selection(
         state_dir, state_key, control_worktree, ticket_id, lines, workflow_paths,
-        allow_pending_log=True, observation=observation,
+        observation=observation,
     )
     terminal_states = {"done": "done (integrated)", "abandoned": "abandoned"}
     printed: set[str] = set()
     current = active
-    location_misses = report_misses = 0
+    pending: dict[str, None] = {}
 
     def emit(execution, conclusion, records):
         if markers:
@@ -705,31 +641,8 @@ def _follow_ticket(
                 printed.add(execution)
 
         while True:
-            try:
-                state = _ticket_observation(control_worktree, ticket_id, workflow_paths)
-                if state in terminal_states and state != _ticket_observation(
-                    control_worktree, ticket_id, workflow_paths
-                ):
-                    state = None
-                location_misses = 0
-            except _TicketLocationError:
-                location_misses += 1
-                if location_misses >= _INCONCLUSIVE_POLLS:
-                    raise
-                state = None
-
             active = _active_ticket_execution(state_dir, state_key, ticket_id)
-            try:
-                reports = observation.observe(active)
-                report_misses = 0
-            except _ReportPublicationRace:
-                report_misses += 1
-                if report_misses >= _INCONCLUSIVE_POLLS:
-                    raise
-                drain_current({})
-                time.sleep(_POLL_INTERVAL)
-                continue
-
+            state, reports = observation.observe()
             terminal = state in terminal_states
             conclusions = {r.execution_id: r.result.conclusion for r in reports}
             later_reports = [
@@ -740,16 +653,30 @@ def _follow_ticket(
                 # Observe departure first, then drain the retiring log before
                 # emitting any newer header. Retain the cursor through idle so
                 # a restart or a late report cannot reopen it at the beginning.
-                drain_current(conclusions, ended=True)
+                drain_current(conclusions, ended=terminal)
                 if active is not None or later_reports:
                     if cursor is not None:
                         cursor.close()
                         cursor = None
                         printed.add(current)
+                    else:
+                        pending[current] = None
                     current = None
+
+            for execution in tuple(pending):
+                if execution == active or execution in later_reports:
+                    del pending[execution]
+                    continue
+                path = execution_log_path(state_dir, state_key, execution)
+                if _log_exists(path):
+                    emit(execution, None, _read_file(path, None))
+                    printed.add(execution)
+                    del pending[execution]
 
             for execution in later_reports:
                 path = execution_log_path(state_dir, state_key, execution)
+                if not terminal and not _log_exists(path):
+                    continue
                 emit(execution, conclusions[execution], _read_file(path, None))
                 printed.add(execution)
 
@@ -761,7 +688,7 @@ def _follow_ticket(
                 if markers and final_marker:
                     print(f"\n===== ticket {ticket_id}: {terminal_states[state]} =====")
                 return 0
-            time.sleep(_POLL_INTERVAL)
+            _sleep(_POLL_INTERVAL)
     finally:
         if cursor is not None:
             cursor.close()

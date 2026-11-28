@@ -1523,6 +1523,16 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
     service.start()
     service.wait_ready()
     conflicting = rework in {"conflict", "lost-confirmation"}
+    follower = None
+    followed = bytearray()
+
+    def followed_execution(execution):
+        assert follower is not None and follower.stdout is not None
+        if select.select([follower.stdout], [], [], 0)[0]:
+            followed.extend(os.read(follower.stdout.fileno(), 65536))
+        assert follower.poll() is None, followed.decode(errors="replace")
+        return f"===== execution {execution} ".encode() in followed
+
     try:
         service.wait_for(
             lambda: (
@@ -1533,6 +1543,10 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             ),
             timeout=30,
         )
+        if rework == "same-base":
+            interrupted_execution = _disk_state(config)["execution_id"]
+            follower = service.start_cli("logs", "ticket", "T-1", "--follow")
+            service.wait_for(lambda: followed_execution(interrupted_execution))
         service.kill()
         os.kill(int(pid_file.read_text()), signal.SIGKILL)
         service.start()
@@ -1768,6 +1782,19 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
         reports = ExecutionReportStore(engine.control_worktree).list("T-1")
         assert len(reports) == 2 and report in reports
         reworked = next(item for item in reports if item != report)
+        if follower is not None:
+            service.wait_for(lambda: followed_execution(reworked.execution_id))
+            follower.send_signal(signal.SIGINT)
+            output, errors = follower.communicate(timeout=10)
+            followed.extend(output.encode())
+            assert follower.returncode == 130 and not errors, errors
+            observed = (
+                interrupted_execution, report.execution_id, reworked.execution_id,
+            )
+            assert len(set(observed)) == len(observed)
+            for execution in observed:
+                assert followed.count(f"===== execution {execution} ".encode()) == 1
+            assert b"===== ticket T-1: done" not in followed
         assert reworked.code_base_head == base and reworked.control_head == control_head
         assert reworked.resource_generation != report.resource_generation
         assert "Re-run the recovered generation" in prompts.read_text()
@@ -1784,6 +1811,9 @@ def test_real_service_auto_resume_survives_review_barrier_and_reschedules(
             assert confirm() == {"accepted": True, "ticket_id": "T-1"}
         assert service.process is not None and service.process.poll() is None
     finally:
+        if follower is not None and follower.poll() is None:
+            follower.kill()
+            follower.communicate(timeout=10)
         if service.process is not None and service.process.poll() is None:
             service.stop()
 

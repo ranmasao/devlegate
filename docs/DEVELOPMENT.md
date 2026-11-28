@@ -204,10 +204,34 @@ The owner does not persist a separate cycle registry.
 - `abandonment_admission.py` scopes target resources to the current cycle and
   keeps attributable prior-cycle pins out of disposal scope; the terminal
   publication and lease proofs are unchanged.
-- `log_reader.py` is deliberately ticket history, ordered by publication, with
-  exact-execution mode and the existing terminal follow behavior. It does not
-  select evidence for admission. The existing DAG uses current `done` for new
-  admissions but does not recalculate historical integration of dependents.
+- `log_reader.py` is deliberately ticket history, ordered by publication. A
+  ticket follower spans execution changes until canonical `done` or `abandoned`.
+  Exact-execution mode stays bound to one attempt. The log reader does not select
+  evidence for admission. The existing DAG uses current `done` for new admissions
+  but does not recalculate historical integration of dependents.
+
+### Ticket log follow during control synchronization
+
+The report-evidence error seen during TASK-200 can be reproduced in a disposable
+control repository: start with two committed reports, attach a follower, move
+the report directory aside, rematerialize it with `git checkout-index`, and
+fast-forward to a report from an independent publisher. The prior reports have
+identical bytes. The old observer rejected the changed directory identity;
+it also treated changed cached file stat metadata as evidence corruption.
+This reproduces the error, but does not establish the original incident's
+interleaving.
+
+Ticket follow now reads location and report identities from one exact local
+control commit, using the existing Git tree and blob readers. A mutable checkout
+move, missing worktree file, or recreated inode cannot change that sample.
+Each idle poll resolves the commit once. A new control commit checks the ticket
+paths and the latest first-parent report publication; the report history is
+walked only when the evidence or its publication tip changes. Previously
+validated blobs are reused by identity. Removal, changed blob identities,
+rewritten publication history, and malformed or unreadable newly referenced
+evidence still produce errors. Runtime SQLite and the local logs are read
+separately: a departure allows the reader to drain the old log without
+inventing a successful outcome or waiting on a report.
 
 ### Representative owner read-path measurement
 

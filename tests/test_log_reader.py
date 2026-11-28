@@ -56,6 +56,14 @@ def _ticket(control: Path, ticket: str, state: str) -> None:
     path = control / "kanban" / state / f"{ticket}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(ticket)
+    _commit_ticket_state(control)
+
+
+def _commit_ticket_state(control):
+    if not (control / ".git").exists():
+        _git(control, "init", "-q")
+    _git(control, "add", "-A", "kanban")
+    _git(control, "commit", "-qm", "Publish ticket state")
 
 
 def _commit_reports(control: Path) -> None:
@@ -67,6 +75,14 @@ def _commit_reports(control: Path) -> None:
          "user.email=test@example.com", "commit", "-qm", "Publish execution"],
         check=True,
     )
+
+
+def _git(control, *args):
+    return subprocess.run(
+        ["git", "-C", str(control), "-c", "user.name=Test", "-c",
+         "user.email=test@example.com", *args],
+        check=True, text=True, capture_output=True,
+    ).stdout.strip()
 
 
 def test_execution_prefix_requires_unique_report(tmp_path):
@@ -494,14 +510,13 @@ def test_ticket_follow_ignores_unrelated_invalid_report(tmp_path, monkeypatch, c
         calls += 1
         if calls == 1:
             _report(control, identifier, ticket="T-1")
+            _commit_reports(control)
             SQLiteRuntimeStore(state, "key").replace({"phase": "idle"})
         elif calls == 2:
-            (control / "kanban" / "todo" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
+            _move(control, "todo", "done")
 
     (control / "kanban" / "done").mkdir(parents=True)
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    monkeypatch.setattr("devlegate.log_reader._sleep", advance)
     assert (
         follow_ticket(
             state,
@@ -557,12 +572,9 @@ def test_ticket_follow_does_not_replay_report_before_state_transition(
             _report(control, second, ticket="T-1")
             _commit_reports(control)
         elif calls == 4:
-            (control / "kanban" / "done").mkdir(parents=True)
-            (control / "kanban" / "todo" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
+            _move(control, "todo", "done")
 
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    monkeypatch.setattr("devlegate.log_reader._sleep", advance)
     assert (
         follow_ticket(
             state,
@@ -730,12 +742,10 @@ def test_ticket_follow_waits_in_accepted_until_done(tmp_path, monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 2:
-            (control / "kanban" / "accepted" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
+            _move(control, "accepted", "done")
 
     (control / "kanban" / "done").mkdir(parents=True)
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    monkeypatch.setattr("devlegate.log_reader._sleep", advance)
 
     assert (
         follow_ticket(
@@ -766,11 +776,11 @@ def test_ticket_follow_idle_reuses_reports_and_detects_new_report(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(execution[0] + "\n")
     calls = {"reports": 0, "history": 0, "sleep": 0}
-    original_reports, original_history = reader._ticket_reports, reader.history_changes
+    original_blob, original_history = reader._blob, reader.history_changes
 
     def reports(*args):
         calls["reports"] += 1
-        return original_reports(*args)
+        return original_blob(*args)
 
     def history(*args, **kwargs):
         calls["history"] += 1
@@ -779,56 +789,72 @@ def test_ticket_follow_idle_reuses_reports_and_detects_new_report(
     def advance(_seconds):
         calls["sleep"] += 1
         if calls["sleep"] == 4:
-            assert calls["reports"] == 1
+            assert calls["reports"] == 2
             assert calls["history"] == 1
             _report(control, new, ticket="T-1")
             _commit_reports(control)
             execution_log_path(state, "key", new).write_text("c\n")
         elif calls["sleep"] == 5:
-            (control / "kanban" / "done").mkdir()
-            (control / "kanban" / "accepted" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
+            _move(control, "accepted", "done")
 
-    monkeypatch.setattr(reader, "_ticket_reports", reports)
+    monkeypatch.setattr(reader, "_blob", reports)
     monkeypatch.setattr(reader, "history_changes", history)
-    monkeypatch.setattr(reader.time, "sleep", advance)
+    monkeypatch.setattr(reader, "_sleep", advance)
     assert follow_ticket(state, "key", control, "T-1", 1,
                          {"accepted": "kanban/accepted", "done": "kanban/done"},
                          markers=False) == 0
     assert capsys.readouterr().out == "b\nc\n"
-    assert calls["reports"] == 2
+    assert calls["reports"] == 3
     assert calls["history"] == 2
 
 
-@pytest.mark.parametrize("change", ["corrupt", "remove"])
+@pytest.mark.parametrize("change", ["alter", "remove", "malformed", "inaccessible"])
 def test_ticket_follow_rejects_changed_cached_evidence(tmp_path, monkeypatch, change):
     state, control = tmp_path / "state", tmp_path / "control"
     _ticket(control, "T-1", "accepted")
     execution = "a" * 32
     _report(control, execution, ticket="T-1")
+    _commit_reports(control)
     path = execution_log_path(state, "key", execution)
     path.parent.mkdir(parents=True)
     path.write_text("record\n")
     report = control / "executions" / "T-1" / f"{execution}.json"
 
-    def advance(_seconds):
-        if change == "corrupt":
-            report.write_text("corrupt")
-        else:
+    def advance():
+        if change == "alter":
+            report.write_text(report.read_text() + "\n")
+        elif change == "remove":
             report.unlink()
+        else:
+            new = "b" * 32
+            _report(control, new, ticket="T-1")
+            new_report = report.with_name(f"{new}.json")
+            if change == "malformed":
+                new_report.write_text("not JSON")
+            _commit_reports(control)
+            if change == "inaccessible":
+                oid = _git(control, "rev-parse", f"HEAD:executions/T-1/{new}.json")
+                (control / ".git" / "objects" / oid[:2] / oid[2:]).unlink()
+            return
+        _git(control, "add", "-A", "executions")
+        _git(control, "commit", "-qm", "Invalid history change")
 
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
-    with pytest.raises(LogReaderError, match="evidence changed"):
+    _poll_steps(monkeypatch, advance)
+    message = (
+        "evidence changed" if change in {"alter", "remove"}
+        else "cannot read committed execution report"
+    )
+    with pytest.raises(LogReaderError, match=message):
         follow_ticket(state, "key", control, "T-1", 10,
                       {"accepted": "kanban/accepted"}, markers=False)
 
 
 @pytest.mark.parametrize("history", ["ambiguous", "missing"])
 def test_ticket_observation_revalidates_changed_git_history(tmp_path, history):
-    from devlegate.log_reader import _TicketReportObservation
+    from devlegate.log_reader import _TicketControlObservation
 
     control = tmp_path / "control"
+    _ticket(control, "T-1", "todo")
     first, second = "a" * 32, "b" * 32
     _report(control, first, ticket="T-1")
     _commit_reports(control)
@@ -843,121 +869,13 @@ def test_ticket_observation_revalidates_changed_git_history(tmp_path, history):
     _report(control, second, ticket="T-1")
     _commit_reports(control)
     final_tree = git("rev-parse", "HEAD^{tree}")
-    observation = _TicketReportObservation(control, "T-1")
-    try:
-        assert [r.execution_id for r in observation.observe(None)] == [first, second]
-        tree = final_tree if history == "ambiguous" else first_tree
-        new_head = git("commit-tree", tree, "-m", "rewritten history")
-        git("update-ref", "HEAD", new_head)
-        with pytest.raises(LogReaderError, match="execution chronology"):
-            observation.observe(None)
-    finally:
-        observation.close()
-
-
-def test_ticket_idle_observation_has_constant_evidence_probes(tmp_path, monkeypatch):
-    from devlegate.log_reader import _TicketReportObservation
-
-    control = tmp_path / "control"
-    for index in range(12):
-        _report(control, f"{index:032x}", ticket="T-1")
-        _commit_reports(control)
-    observation = _TicketReportObservation(control, "T-1")
-    try:
-        observation.observe(None)
-        calls = []
-        original = observation._stat
-        def counted(path):
-            calls.append(path)
-            return original(path)
-
-        monkeypatch.setattr(observation, "_stat", counted)
-        for _ in range(3):
-            observation.observe(None)
-        assert len(calls) == 9
-        assert all(path.suffix != ".json" for path in calls)
-    finally:
-        observation.close()
-
-
-def test_ticket_follow_resolution_costs(tmp_path, monkeypatch, capsys):
-    from devlegate import log_reader as reader
-
-    state, control = tmp_path / "state", tmp_path / "control"
-    _ticket(control, "T-1", "accepted")
-    for execution in ("a" * 32, "b" * 32):
-        _report(control, execution, ticket="T-1")
-        _commit_reports(control)
-        path = execution_log_path(state, "key", execution)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("line\n")
-    counts = dict(load=0, reports=0, history=0, head=0, stat=0, opens=0)
-    original_load = SQLiteRuntimeStore.load
-    original_reports = reader._ticket_reports
-    original_history = reader.history_changes
-    original_git = reader.run_git
-    original_stat = reader._TicketReportObservation._stat
-    original_open = Path.open
-
-    def load(*args):
-        counts["load"] += 1
-        return original_load(*args)
-
-    def reports(*args):
-        counts["reports"] += 1
-        return original_reports(*args)
-
-    def history(*args, **kwargs):
-        counts["history"] += 1
-        return original_history(*args, **kwargs)
-
-    def git(*args, **kwargs):
-        if args[1] == "rev-parse":
-            counts["head"] += 1
-        return original_git(*args, **kwargs)
-
-    def stat_path(path):
-        counts["stat"] += 1
-        return original_stat(path)
-
-    def open_path(path, *args, **kwargs):
-        if (path.parent.name == "executions" and path.suffix == ".log"
-                and args and args[0] == "rb"):
-            counts["opens"] += 1
-        return original_open(path, *args, **kwargs)
-
-    samples = []
-    def advance(_seconds):
-        samples.append(counts.copy())
-        if len(samples) == 2:
-            execution = "c" * 32
-            _report(control, execution, ticket="T-1")
-            _commit_reports(control)
-            execution_log_path(state, "key", execution).write_text("new\n")
-        elif len(samples) == 3:
-            (control / "kanban" / "done").mkdir()
-            (control / "kanban" / "accepted" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
-
-    monkeypatch.setattr(SQLiteRuntimeStore, "load", load)
-    monkeypatch.setattr(reader, "_ticket_reports", reports)
-    monkeypatch.setattr(reader, "history_changes", history)
-    monkeypatch.setattr(reader, "run_git", git)
-    monkeypatch.setattr(
-        reader._TicketReportObservation, "_stat", staticmethod(stat_path)
-    )
-    monkeypatch.setattr(Path, "open", open_path)
-    monkeypatch.setattr(reader.time, "sleep", advance)
-    assert follow_ticket(state, "key", control, "T-1", None,
-                         {"accepted": "kanban/accepted", "done": "kanban/done"},
-                         markers=False) == 0
-    assert capsys.readouterr().out == "line\nline\nnew\n"
-    assert samples == [
-        dict(load=2, reports=1, history=1, head=3, stat=19, opens=2),
-        dict(load=3, reports=1, history=1, head=4, stat=22, opens=2),
-        dict(load=4, reports=2, history=2, head=7, stat=45, opens=3),
-    ]
+    observation = _TicketControlObservation(control, "T-1", _WORKFLOW)
+    assert [r.execution_id for r in observation.observe()[1]] == [first, second]
+    tree = final_tree if history == "ambiguous" else first_tree
+    new_head = git("commit-tree", tree, "-m", "rewritten history")
+    git("update-ref", "HEAD", new_head)
+    with pytest.raises(LogReaderError, match="execution chronology|evidence changed"):
+        observation.observe()
 
 
 @pytest.mark.parametrize(
@@ -1002,12 +920,9 @@ def test_ticket_snapshot_follow_share_global_tail(
             active_path.write_text("active\nappend\n")
             _report(control, active, ticket="T-1")
         elif calls == 2:
-            (control / "kanban" / "done").mkdir()
-            (control / "kanban" / "todo" / "T-1.md").rename(
-                control / "kanban" / "done" / "T-1.md"
-            )
+            _move(control, "todo", "done")
 
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    monkeypatch.setattr("devlegate.log_reader._sleep", advance)
     assert follow_ticket(state, "key", control, "T-1", lines, paths, markers=False) == 0
     assert capsys.readouterr().out == expected + "append\n"
 
@@ -1197,6 +1112,7 @@ def _move(control, before, after):
     destination = control / _WORKFLOW[after]
     destination.mkdir(parents=True, exist_ok=True)
     (control / _WORKFLOW[before] / "T-1.md").rename(destination / "T-1.md")
+    _commit_ticket_state(control)
 
 
 def _admit_log(state, execution):
@@ -1209,7 +1125,7 @@ def _admit_log(state, execution):
     return path
 
 
-def _poll_steps(monkeypatch, *steps):
+def _poll_steps(monkeypatch, *steps, execution=False):
     remaining = iter(steps)
 
     def advance(_seconds):
@@ -1218,7 +1134,8 @@ def _poll_steps(monkeypatch, *steps):
             pytest.fail("follower kept waiting after the last lifecycle transition")
         step()
 
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", advance)
+    target = "time.sleep" if execution else "_sleep"
+    monkeypatch.setattr(f"devlegate.log_reader.{target}", advance)
 
 
 def test_ticket_follow_retry_reset_and_rework_after_reportless_execution(
@@ -1323,6 +1240,32 @@ def test_ticket_follow_late_report_between_replacement_and_log_creation(
     assert capsys.readouterr().out == "\n===== ticket T-1: abandoned =====\n"
 
 
+def test_ticket_follow_waits_for_log_of_newly_published_report(
+    tmp_path, monkeypatch, capsys,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    first, second = "a" * 32, "b" * 32
+    delayed = _admit_log(state, first)
+
+    def replace_and_publish():
+        _report(control, first, ticket="T-1")
+        _commit_reports(control)
+        _admit_log(state, second)
+
+    _poll_steps(
+        monkeypatch, replace_and_publish,
+        lambda: delayed.write_text("published but delayed\n"),
+        lambda: execution_log_path(state, "key", second).write_text("subsequent\n"),
+        lambda: _move(control, "todo", "done"),
+    )
+    assert follow_ticket(state, "key", control, "T-1", 0, _WORKFLOW) == 0
+    assert capsys.readouterr().out == (
+        f"\n===== execution {first} conclusion=failed =====\npublished but delayed\n"
+        f"\n===== execution {second} state=active =====\nsubsequent\n"
+    )
+
+
 @pytest.mark.parametrize("terminal", ["done", "abandoned"])
 @pytest.mark.parametrize("prior_report", [True, False])
 def test_ticket_follow_drains_on_terminal_transition(
@@ -1366,7 +1309,7 @@ def test_execution_follow_ends_reportless_without_switching(
             stream.write("drained\n")
         _admit_log(state, replacement).write_text("not selected\n")
 
-    _poll_steps(monkeypatch, depart, lambda: None)
+    _poll_steps(monkeypatch, depart, lambda: None, execution=True)
     with pytest.raises(LogReaderError, match="no longer active and has no report"):
         follow_execution(
             state, "key", control, first, 10, markers=True, ticket_id="T-1",
@@ -1377,13 +1320,15 @@ def test_execution_follow_ends_reportless_without_switching(
 def test_ticket_follow_survives_zero_and_double_location_scans(
     tmp_path, monkeypatch, capsys,
 ):
+    from devlegate import log_reader as reader
+
     state, control = tmp_path / "state", tmp_path / "control"
     _ticket(control, "T-1", "review")
     armed = None
     interleaved = []
     lstat = Path.lstat
 
-    def observe(path, *args, **kwargs):
+    def scan_path(path, *args, **kwargs):
         nonlocal armed
         if armed is None or path != control / _WORKFLOW[armed[0]] / "T-1.md":
             return lstat(path, *args, **kwargs)
@@ -1416,9 +1361,25 @@ def test_ticket_follow_survives_zero_and_double_location_scans(
         _move(control, "review", "todo")
         _admit_log(state, "b" * 32).write_text("after move\n")
 
-    monkeypatch.setattr(Path, "lstat", observe)
+    tree = reader._tree
+
+    def interleave(repo, revision, *paths):
+        if armed is not None:
+            error = "not found" if armed[0] == "backlog" else "ambiguous"
+            with monkeypatch.context() as patch:
+                patch.setattr(Path, "lstat", scan_path)
+                with pytest.raises(LogReaderError, match=error):
+                    reader._ticket_observation(control, "T-1", _WORKFLOW)
+        return tree(repo, revision, *paths)
+
+    def arm_on_new_head(step):
+        _git(control, "commit", "--allow-empty", "-qm", "Advance control generation")
+        step()
+
+    monkeypatch.setattr(reader, "_tree", interleave)
     _poll_steps(
-        monkeypatch, miss, start, double, retry, lambda: _move(control, "todo", "done"),
+        monkeypatch, lambda: arm_on_new_head(miss), start,
+        lambda: arm_on_new_head(double), retry, lambda: _move(control, "todo", "done"),
     )
     assert follow_ticket(state, "key", control, "T-1", 0, _WORKFLOW, markers=False) == 0
     assert interleaved == [("review", "backlog"), ("todo", "review")]
@@ -1427,6 +1388,7 @@ def test_ticket_follow_survives_zero_and_double_location_scans(
 
 def test_ticket_follow_reports_initial_unknown_ticket(tmp_path, monkeypatch):
     _poll_steps(monkeypatch)
+    _ticket(tmp_path / "control", "T-2", "todo")
     with pytest.raises(LogReaderError, match="ticket not found: T-1"):
         follow_ticket(
             tmp_path / "state", "key", tmp_path / "control", "T-1", 0, _WORKFLOW,
@@ -1445,7 +1407,7 @@ def test_ticket_follow_diagnoses_persistent_invalid_state(
     def invalidate(_seconds):
         nonlocal calls
         calls += 1
-        if calls > 30 or (invalid == "unsafe" and calls > 1):
+        if calls > 1:
             pytest.fail("persistent invalid state was not diagnosed")
         if calls == 1:
             if invalid == "ambiguous":
@@ -1454,13 +1416,13 @@ def test_ticket_follow_diagnoses_persistent_invalid_state(
                 ticket.unlink()
                 if invalid == "unsafe":
                     ticket.symlink_to(tmp_path / "missing")
+                _commit_ticket_state(control)
 
-    monkeypatch.setattr("devlegate.log_reader.time.sleep", invalidate)
-    expected = "not found" if invalid == "missing" else invalid
+    monkeypatch.setattr("devlegate.log_reader._sleep", invalidate)
+    expected = {"missing": "not found", "unsafe": "non-regular"}.get(invalid, invalid)
     with pytest.raises(LogReaderError, match=expected):
         follow_ticket(state, "key", control, "T-1", 0, _WORKFLOW)
-    if invalid != "unsafe":
-        assert calls > 1
+    assert calls == 1
 
 
 def test_ticket_follow_interrupt_keeps_output_and_runtime_revision(
@@ -1487,3 +1449,52 @@ def test_ticket_follow_interrupt_keeps_output_and_runtime_revision(
     assert store.observe() == before
     assert path.read_text() == "live\n"
     assert not (control / "executions").exists()
+
+
+@pytest.mark.parametrize("replace_directory", [False, True])
+def test_ticket_follow_survives_report_checkout_materialization(
+    tmp_path, monkeypatch, capsys, replace_directory,
+):
+    state, control = tmp_path / "state", tmp_path / "control"
+    _ticket(control, "T-1", "todo")
+    prior, older, running, replacement = (digit * 32 for digit in "fedc")
+    for execution in (prior, older):
+        _report(control, execution, ticket="T-1")
+        _commit_reports(control)
+    running_log = _admit_log(state, running)
+    running_log.write_text("live\n")
+    for execution, content in ((prior, "prior\n"), (older, "older\n")):
+        execution_log_path(state, "key", execution).write_text(content)
+
+    publisher = tmp_path / "publisher"
+    _git(tmp_path, "clone", str(control), str(publisher))
+    _report(publisher, running, ticket="T-1")
+    _commit_reports(publisher)
+    _git(control, "fetch", str(publisher), "HEAD")
+    directory = control / "executions" / "T-1"
+    cached = directory / f"{prior}.json"
+    before = cached.stat()
+    content = cached.read_bytes()
+
+    def synchronize():
+        with running_log.open("a") as stream:
+            stream.write("old final\n")
+        if replace_directory:
+            directory.rename(tmp_path / "prior-materialization")
+        else:
+            cached.rename(tmp_path / "prior-report")
+        _git(control, "checkout-index", "--force", "--all")
+        after = cached.stat()
+        assert (after.st_ino, after.st_ctime_ns) != (before.st_ino, before.st_ctime_ns)
+        assert cached.read_bytes() == content
+        _git(control, "merge", "--ff-only", "FETCH_HEAD")
+        _admit_log(state, replacement).write_text("replacement\n")
+
+    _poll_steps(monkeypatch, synchronize, lambda: _move(control, "todo", "done"))
+    assert follow_ticket(state, "key", control, "T-1", None, _WORKFLOW) == 0
+    assert capsys.readouterr().out == (
+        f"\n===== execution {prior} conclusion=failed =====\nprior\n"
+        f"\n===== execution {older} conclusion=failed =====\nolder\n"
+        f"\n===== execution {running} state=active =====\nlive\nold final\n"
+        f"\n===== execution {replacement} state=active =====\nreplacement\n"
+    )
