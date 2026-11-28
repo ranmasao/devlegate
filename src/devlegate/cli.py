@@ -1059,7 +1059,9 @@ def _matching_lifecycle_receipt(
     action: str,
     state: str,
 ) -> dict[str, object] | None:
-    receipt = read_lifecycle_receipt(locator)
+    receipt = read_lifecycle_receipt(
+        locator, instance_id=instance_id, request_id=request_id,
+    )
     if receipt is None:
         return None
     if (
@@ -1073,36 +1075,55 @@ def _matching_lifecycle_receipt(
 
 
 def _wait_for_service_stop(
-    locator: RuntimeLocator, request_id: str, instance_id: str
+    locator: RuntimeLocator, request_id: str, instance_id: str,
 ) -> None:
-    while locator.daemon_authority_present():
-        time.sleep(0.05)
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        if (
-            _matching_lifecycle_receipt(
-                locator, request_id, instance_id, "stop", "completed"
-            )
-            is not None
-        ):
+    deadline = None
+    while True:
+        owned = locator.daemon_authority_present()
+        failed = _matching_lifecycle_receipt(
+            locator, request_id, instance_id, "stop", "failed",
+        )
+        if failed is not None:
+            detail = failed.get("error", "unknown error")
+            raise DevlegateError(f"service stop blocked: {detail}")
+        completed = _matching_lifecycle_receipt(
+            locator, request_id, instance_id, "stop", "completed",
+        )
+        if completed is not None and not owned:
             return
+        if completed is not None or not owned:
+            if deadline is None:
+                deadline = time.monotonic() + 10
+            if time.monotonic() >= deadline:
+                if owned:
+                    raise DevlegateError(
+                        "service authority remains after stop retirement"
+                    )
+                raise DevlegateError(
+                    "service authority disappeared without stop completion; "
+                    "worker retirement is uncertain"
+                )
         time.sleep(0.05)
-    raise DevlegateError(
-        "service authority disappeared without graceful stop completion"
-    )
+
+
+@dataclasses.dataclass(frozen=True)
+class ManagedSystemdOwner:
+    """The verified managed systemd unit and the supervisor that operates it."""
+
+    supervisor: SystemdSupervisor
+    unit: str
 
 
 def _wait_for_service_restart(
-    locator: RuntimeLocator, request_id: str, old_instance: str
+    locator: RuntimeLocator, request_id: str, old_instance: str,
+    *, manager: ManagedSystemdOwner | None = None,
 ) -> None:
     readiness_deadline: float | None = None
     while True:
-        failed = read_lifecycle_receipt(locator)
-        if (
-            isinstance(failed, dict)
-            and failed.get("request_id") == request_id
-            and failed.get("state") == "failed"
-        ):
+        failed = _matching_lifecycle_receipt(
+            locator, request_id, old_instance, "restart", "failed",
+        )
+        if failed is not None:
             raise DevlegateError(
                 f"restart replacement failed: {failed.get('error', 'unknown error')}"
             )
@@ -1110,18 +1131,17 @@ def _wait_for_service_restart(
             locator, request_id, old_instance, "restart", "handoff"
         )
         completed = _matching_lifecycle_receipt(
-            locator, request_id, old_instance, "restart", "completed"
+            locator, request_id, old_instance, "restart",
+            "completed" if manager is None else "retired",
         )
         if handoff is not None or completed is not None:
             if readiness_deadline is None:
                 readiness_deadline = time.monotonic() + 10
         elif not locator.daemon_authority_present():
-            failed = read_lifecycle_receipt(locator)
-            if (
-                isinstance(failed, dict)
-                and failed.get("request_id") == request_id
-                and failed.get("state") == "failed"
-            ):
+            failed = _matching_lifecycle_receipt(
+                locator, request_id, old_instance, "restart", "failed",
+            )
+            if failed is not None:
                 raise DevlegateError(
                     "restart replacement failed: "
                     f"{failed.get('error', 'unknown error')}"
@@ -1129,7 +1149,7 @@ def _wait_for_service_restart(
             raise DevlegateError(
                 "service authority disappeared without restart handoff completion"
             )
-        if not locator.daemon_authority_present():
+        if manager is None and not locator.daemon_authority_present():
             raise DevlegateError("restart service authority was lost")
         try:
             response = request(locator.socket_path, "ping")
@@ -1146,12 +1166,23 @@ def _wait_for_service_restart(
             continue
         if (
             response.get("service") == "devlegate"
-            and response.get("instance_id") != old_instance
+            and isinstance(response.get("instance_id"), str)
+            and response["instance_id"] != old_instance
             and response.get("ready") is True
             and completed is not None
-            and response.get("instance_id") == completed.get("replacement_instance_id")
         ):
-            return
+            if manager is None:
+                if response["instance_id"] == completed.get("replacement_instance_id"):
+                    return
+            else:
+                fields = manager.supervisor.lifecycle_state(manager.unit)
+                if (
+                    fields["ActiveState"] == "active"
+                    and fields["MainPID"] == str(response.get("pid"))
+                    and fields["Job"] in {"", "0"}
+                    and locator.daemon_authority_present()
+                ):
+                    return
         if readiness_deadline is not None and time.monotonic() >= readiness_deadline:
             raise DevlegateError(
                 "replacement service did not become ready; "
@@ -1186,22 +1217,6 @@ def _host_installation_locked(*, required: bool = True) -> HostInstallation | No
     return installation
 
 
-def _wait_for_runtime_stop(locator: RuntimeLocator) -> None:
-    deadline = time.monotonic() + 10
-    while locator.daemon_authority_present():
-        if time.monotonic() >= deadline:
-            raise DevlegateError("service authority remains after systemd stop")
-        time.sleep(0.05)
-
-
-@dataclasses.dataclass(frozen=True)
-class ManagedSystemdOwner:
-    """The verified managed systemd unit and the supervisor that operates it."""
-
-    supervisor: SystemdSupervisor
-    unit: str
-
-
 def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | None:
     supervisor = SystemdSupervisor()
     try:
@@ -1213,22 +1228,12 @@ def _managed_systemd_owner(locator: RuntimeLocator) -> ManagedSystemdOwner | Non
             else None
         )
         if name is None:
-            finder = getattr(supervisor, "managed_unit_for", None)
-            if finder is None:
-                name = unit_name(locator)
-                if not supervisor.inspect(locator, allow_legacy=authority is not None):
-                    return None
-                if not supervisor.status(locator):
-                    return None
-                return ManagedSystemdOwner(supervisor, name)
-            existing = finder(locator)
+            existing = supervisor.managed_unit_for(locator)
             name = existing.name if existing is not None else None
-        if (
-            name is None
-            or not supervisor.inspect(
-                locator, name=name, allow_legacy=authority is not None
-            )
-            or not supervisor.status(locator, name=name)
+        # Manager queries can stall. Route from local registration and admit
+        # through the live IPC owner before consulting the manager.
+        if name is None or not supervisor.inspect(
+            locator, name=name, allow_legacy=authority is not None,
         ):
             return None
     except (RuntimeStoreError, SystemdSupervisorError) as error:
@@ -1353,139 +1358,93 @@ def _lifecycle_service(
         raise DevlegateError(str(error)) from error
     owner = _managed_systemd_owner(locator)
     if owner is not None:
-        if intent == "stop":
-            payload = {"force": True} if force else None
-            try:
-                response = request(
-                    locator.socket_path,
-                    "stop",
-                    payload=payload,
-                    mutable=True,
-                    request_id=uuid.uuid4().hex,
-                )
-            except IPCClientError as error:
-                if force and _force_payload_rejected(error):
-                    raise DevlegateError(
-                        "forced stop is unsupported by the running service; "
-                        "the installed CLI and daemon protocol versions differ"
-                    ) from error
-                raise DevlegateError(str(error)) from error
-            if response is not None and response.get("accepted") is not True:
-                raise DevlegateError(
-                    "service IPC returned invalid stop acknowledgement"
-                )
-            try:
-                owner.supervisor.stop(locator, name=owner.unit)
-            except SystemdSupervisorError as error:
-                raise DevlegateError(str(error)) from error
-            active = (
-                response.get("workers", {}).get("active", 0)
-                if isinstance(response, dict)
-                and isinstance(response.get("workers"), dict)
-                else 0
-            )
-            if active and not force:
-                print(
-                    f"stop requested; will stop at checkpoint ({active} worker active)"
-                )
-                return 0
-            _wait_for_runtime_stop(locator)
-            print("service stopped")
-            return 0
+        response = _request_lifecycle(locator, intent, force=force)
+        request_id, instance_id = _lifecycle_identity(response, intent)
         try:
-            if force:
-                request_id = uuid.uuid4().hex
-                try:
-                    response = request(
-                        locator.socket_path,
-                        "restart",
-                        payload={"force": True},
-                        mutable=True,
-                        request_id=request_id,
-                    )
-                except IPCClientError as error:
-                    if _force_payload_rejected(error):
-                        raise DevlegateError(
-                            "forced restart is unsupported by the running service; "
-                            "the installed CLI and daemon protocol versions differ"
-                        ) from error
-                    raise DevlegateError(str(error)) from error
-                if response is not None and response.get("accepted") is not True:
-                    raise DevlegateError(
-                        "service IPC returned invalid restart acknowledgement"
-                    )
-            owner.supervisor.restart(locator, name=owner.unit)
+            if intent == "restart":
+                _wait_for_service_restart(
+                    locator, request_id, instance_id, manager=owner,
+                )
+            else:
+                _submit_systemd_stop(locator, owner, request_id, instance_id, response)
+                if _announce_pending_stop(response, force=force):
+                    return 0
+                _wait_for_service_stop(locator, request_id, instance_id)
+                owner.supervisor.wait_stopped(owner.unit)
         except SystemdSupervisorError as error:
-            raise DevlegateError(str(error)) from error
-        result = {"result": "restarted", "service": "devlegate", "action": intent}
-        emit(result, output_format, "service restarted")
-        return 0
-    if not locator.daemon_authority_present():
+            raise DevlegateError(
+                f"service {intent} admitted ({request_id}); "
+                f"systemd outcome uncertain: {error}"
+            ) from error
+    elif not locator.daemon_authority_present():
         raise DevlegateError("service is not running")
-    if intent == "stop":
+    elif intent == "stop":
         response = _stop_runtime(locator, force=force)
-        workers = response.get("workers") if isinstance(response, dict) else None
-        active = workers.get("active", 0) if isinstance(workers, dict) else 0
-        if active and not force:
-            print(f"stop requested; will stop at checkpoint ({active} worker active)")
-        else:
-            print("service stopped")
+        if _announce_pending_stop(response, force=force):
+            return 0
     else:
-        if not locator.daemon_authority_present():
-            raise DevlegateError("service is not running")
-        request_id = uuid.uuid4().hex
-        try:
-            response = request(
-                locator.socket_path,
-                intent,
-                payload={"force": True} if force else None,
-                mutable=True,
-                request_id=request_id,
-            )
-        except IPCClientError as error:
-            if force and _force_payload_rejected(error):
-                raise DevlegateError(
-                    "forced restart is unsupported by the running service; "
-                    "the installed CLI and daemon protocol versions differ"
-                ) from error
-            raise DevlegateError(str(error)) from error
-        if response.get("accepted") is not True:
-            raise DevlegateError(
-                f"service IPC returned invalid {intent} acknowledgement"
-            )
-        instance_id = response.get("instance_id")
-        if not isinstance(instance_id, str) or not instance_id:
-            raise DevlegateError("service IPC returned no service instance identity")
-        authoritative_request_id = response.get("request_id", request_id)
-        if (
-            not isinstance(authoritative_request_id, str)
-            or not authoritative_request_id
-        ):
-            raise DevlegateError(
-                "service IPC returned no authoritative lifecycle request identity"
-            )
-        _wait_for_service_restart(locator, authoritative_request_id, instance_id)
+        response = _request_lifecycle(locator, intent, force=force)
+        request_id, instance_id = _lifecycle_identity(response, intent)
+        _wait_for_service_restart(locator, request_id, instance_id)
+    if intent == "stop":
+        print("service stopped")
+    else:
         result = {"result": "restarted", "service": "devlegate", "action": intent}
         emit(result, output_format, "service restarted")
     return 0
 
 
+def _submit_systemd_stop(
+    locator: RuntimeLocator, owner: ManagedSystemdOwner, request_id: str,
+    instance_id: str, response: dict[str, object],
+) -> None:
+    def settled() -> bool:
+        return read_lifecycle_receipt(
+            locator, instance_id=instance_id, request_id=request_id,
+        ) is not None
+
+    if settled():
+        return
+    fields = owner.supervisor.lifecycle_state(owner.unit)
+    if settled():
+        return  # The owner may have retired during the manager read.
+    if fields["MainPID"] != str(response.get("pid")):
+        raise SystemdSupervisorError("systemd owner identity changed before stop")
+    if fields["ActiveState"] != "deactivating":
+        owner.supervisor.stop(locator, name=owner.unit)
+
+
 def _stop_runtime(locator: RuntimeLocator, *, force: bool = False) -> dict[str, object]:
-    if not locator.daemon_authority_present():
-        return {}
-    request_id = uuid.uuid4().hex
+    response = _request_lifecycle(locator, "stop", force=force)
+    request_id, instance_id = _lifecycle_identity(response, "stop")
+    if not _draining_workers(response) or force:
+        _wait_for_service_stop(locator, request_id, instance_id)
+    return response
+
+
+def _request_lifecycle(
+    locator: RuntimeLocator, action: str, *, force: bool,
+) -> dict[str, object]:
     try:
-        response = request(
+        return request(
             locator.socket_path,
-            "stop",
+            action,
             payload={"force": True} if force else None,
             mutable=True,
-            request_id=request_id,
+            request_id=uuid.uuid4().hex,
         )
     except IPCClientError as error:
+        if force and _force_payload_rejected(error):
+            raise DevlegateError(
+                f"forced {action} is unsupported by the running service; "
+                "the installed CLI and daemon protocol versions differ"
+            ) from error
         raise DevlegateError(str(error)) from error
-    if response.get("accepted") is not True:
-        raise DevlegateError("service IPC returned invalid stop acknowledgement")
+
+
+def _lifecycle_identity(response: dict[str, object], action: str) -> tuple[str, str]:
+    if not isinstance(response, dict) or response.get("accepted") is not True:
+        raise DevlegateError(f"service IPC returned invalid {action} acknowledgement")
     instance_id = response.get("instance_id")
     if not isinstance(instance_id, str) or not instance_id:
         raise DevlegateError("service IPC returned no service instance identity")
@@ -1494,11 +1453,20 @@ def _stop_runtime(locator: RuntimeLocator, *, force: bool = False) -> dict[str, 
         raise DevlegateError(
             "service IPC returned no authoritative lifecycle request identity"
         )
+    return authoritative_request_id, instance_id
+
+
+def _draining_workers(response: dict[str, object]) -> int:
     workers = response.get("workers")
-    active = workers.get("active", 0) if isinstance(workers, dict) else 0
-    if not active or force:
-        _wait_for_service_stop(locator, authoritative_request_id, instance_id)
-    return response
+    return workers.get("active", 0) if isinstance(workers, dict) else 0
+
+
+def _announce_pending_stop(response: dict[str, object], *, force: bool) -> bool:
+    active = _draining_workers(response)
+    if active and not force:
+        print(f"stop requested; will stop at checkpoint ({active} worker active)")
+        return True
+    return False
 
 
 def _stop_service(env_file: Path, force: bool | str = False) -> int:

@@ -11,6 +11,7 @@ from _cli_support import *  # noqa: F403,F405
 from _cli_support import __version__
 from devlegate.execution_result import ExecutionReportStore
 from devlegate.implementation_transfer import source_resolution_digest
+from devlegate.systemd_supervisor import render_unit, unit_name
 
 
 def _authorize_product(service, config, pending, target, *, execution=None):
@@ -160,7 +161,7 @@ def test_restart_wait_requires_ready_replacement(monkeypatch):
         "action": "restart",
         "state": "completed",
     }
-    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: receipt)
+    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator, **_: receipt)
     monkeypatch.setattr(
         cli,
         "request",
@@ -402,20 +403,28 @@ def test_real_cli_force_stop_preserves_interrupted_execution(
             except (ProcessLookupError, ValueError):
                 pass
 
+@pytest.mark.parametrize("mode", ["direct", "internal"])
 def test_real_cli_force_stop_escalates_existing_graceful_lifecycle(
-    git_fixture, monkeypatch
+    git_fixture, monkeypatch, mode,
 ):
     monkeypatch.chdir(git_fixture["working"])
-    monkeypatch.setenv("DEVLEGATE_HOST_MODE", "internal")
+    monkeypatch.setenv("DEVLEGATE_HOST_MODE", mode)
     config = _recovery_config(git_fixture)
     _service_engine_with_control(git_fixture, config)
     _add_service_ticket(ServiceEngine(config))
     worker = git_fixture["tmp"] / "force-escalation-worker.py"
     pid_file = git_fixture["tmp"] / "force-escalation-worker.pid"
+    interrupted = pid_file.with_suffix(".interrupted")
+    release = pid_file.with_suffix(".release")
     worker.write_text(
         "#!/usr/bin/env python3\n"
-        "import os, pathlib, sys, time\n"
-        "workspace = pathlib.Path(sys.argv[sys.argv.index('--dir') + 1])\n"
+        "import os, pathlib, signal, time\n"
+        "def interrupt(*_):\n"
+        f"    pathlib.Path({str(interrupted)!r}).touch()\n"
+        f"    while not pathlib.Path({str(release)!r}).exists(): time.sleep(.01)\n"
+        "    raise SystemExit(1)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "signal.signal(signal.SIGINT, interrupt)\n"
         f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
         "time.sleep(60)\n"
     )
@@ -442,10 +451,27 @@ def test_real_cli_force_stop_escalates_existing_graceful_lifecycle(
         assert lifecycle["force"] is False
         assert lifecycle["phase"] == "draining"
 
-        forced = service.cli("stop", "--force", timeout=30)
-
-        assert forced.returncode == 0, (forced.stdout, forced.stderr)
+        started = time.monotonic()
+        first_force = ipc_request(
+            service.locator.socket_path, "stop", {"force": True},
+            mutable=True, request_id="force-one",
+        )
+        admitted = time.monotonic()
+        repeated = ipc_request(
+            service.locator.socket_path, "stop", {"force": True},
+            mutable=True, request_id="force-two",
+        )
+        assert first_force["request_id"] == repeated["request_id"] == first_request_id
+        assert repeated["force"] is True
+        service.wait_for(interrupted.exists)
+        state = _disk_state(config)
+        assert state["manual_retry_required"]["request_id"] == first_request_id
+        assert state["manual_retry_required"]["execution_id"] == state["execution_id"]
+        assert service.locator.daemon_authority_present()
+        release.touch()
         service.wait_exited(timeout=30)
+        print(f"held {mode}: force admission {admitted - started:.3f}s; "
+              f"owner exit {time.monotonic() - started:.3f}s")
         receipt_path = service.locator.state_dir / "lifecycle" / (
             f"{service.locator.state_key}.json"
         )
@@ -461,6 +487,106 @@ def test_real_cli_force_stop_escalates_existing_graceful_lifecycle(
                 os.kill(int(pid_file.read_text()), signal.SIGKILL)
             except (ProcessLookupError, ValueError):
                 pass
+
+@pytest.mark.skipif(
+    os.environ.get("DEVLEGATE_TEST_REAL_SYSTEMD") != "1",
+    reason="requires a user manager with writable cgroup v2 delegation",
+)
+@pytest.mark.parametrize("action", ["stop", "restart"])
+def test_real_systemd_lifecycle_escalation(git_fixture, monkeypatch, action):
+    monkeypatch.chdir(git_fixture["working"])
+    config = _recovery_config(git_fixture)
+    _service_engine_with_control(git_fixture, config)
+    _add_service_ticket(ServiceEngine(config))
+    worker = git_fixture["tmp"] / "systemd-worker"
+    pid_file = worker.with_suffix(".pid")
+    release = worker.with_suffix(".release")
+    worker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        f"while not pathlib.Path({str(release)!r}).exists(): time.sleep(.05)\n"
+    )
+    worker.chmod(0o755)
+    config.write_text(
+        config.read_text().replace("OPENCODE_BIN=true", f"OPENCODE_BIN={worker}")
+    )
+    service = LiveService(git_fixture["working"], config)
+    name = unit_name(service.locator, 32)
+    # Discovery uses a disposable registration; systemd itself owns the same
+    # uniquely named transient service, with no changes to installed units.
+    registration = service.registry_home / "systemd" / "user" / name
+    registration.parent.mkdir(parents=True)
+    registration.write_text(render_unit(service.locator, config))
+    before = subprocess.run(
+        ["systemctl", "--user", "show", "-p", "LoadState", "--value", name],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert before.stdout.strip() == "not-found"
+    subprocess.run(
+        ["systemd-run", "--user", f"--unit={name}",
+         "-p", "Type=notify", "-p", "Delegate=yes", "-p", "KillMode=mixed",
+         "-p", "TimeoutStopSec=infinity", "-p", "Restart=no",
+         "-E", "DEVLEGATE_HOST_MODE=external", "-E", "DEVLEGATE_REQUIRE_NOTIFY=1",
+         "-E", f"XDG_CONFIG_HOME={service.registry_home}",
+         f"--working-directory={service.cwd}",
+         sys.executable, "-m", "devlegate", "--env", str(config), "foreground"],
+        check=True, capture_output=True, text=True, timeout=20,
+    )
+    try:
+        service.wait_for(lambda: pid_file.exists() and (
+            _disk_state(config).get("execution_stage") == "worker-running"
+        ))
+        pid = int(pid_file.read_text())
+        membership = Path(f"/proc/{pid}/cgroup").read_text().strip()
+        cgroup = Path("/sys/fs/cgroup") / membership.split("::")[1].lstrip("/")
+        assert name in str(cgroup) and (cgroup / "cgroup.events").is_file()
+        if action == "stop":
+            graceful = service.cli("stop")
+            assert graceful.returncode == 0 and "stop requested" in graceful.stdout
+        else:
+            requester = service.start_cli("restart")
+            try:
+                service.wait_for(lambda: ipc_request(
+                    service.locator.socket_path, "ping",
+                )["lifecycle"]["intent"] == "restart")
+            finally:
+                requester.kill()
+                requester.communicate(timeout=5)
+        health = ipc_request(service.locator.socket_path, "ping")
+        canonical = health["lifecycle"]["request_id"]
+        if action == "stop":
+            state = subprocess.run(
+                ["systemctl", "--user", "is-active", name],
+                capture_output=True, text=True, timeout=5,
+            )
+            assert state.stdout.strip() == "deactivating"
+        forced = service.cli(action, "--force", timeout=30)
+        assert forced.returncode == 0, (forced.stdout, forced.stderr)
+        assert not cgroup.exists() and not Path(f"/proc/{pid}").exists()
+        receipt = cli.read_lifecycle_receipt(
+            service.locator, instance_id=health["instance_id"], request_id=canonical,
+        )
+        if action == "stop":
+            assert "service stopped" in forced.stdout
+            assert not service.locator.daemon_authority_present()
+            assert receipt["state"] == "completed"
+            hold = _disk_state(config)["manual_retry_required"]
+            assert hold["request_id"] == canonical
+        else:
+            assert "service restarted" in forced.stdout
+            assert receipt["state"] == "retired"
+            replacement = ipc_request(service.locator.socket_path, "ping")
+            assert replacement["instance_id"] != health["instance_id"]
+            assert replacement["ready"] is True
+    finally:
+        release.touch()
+        subprocess.run(
+            ["systemctl", "--user", "--no-block", "stop", name],
+            capture_output=True, timeout=5,
+        )
+
 
 def test_real_cli_force_restart_preserves_interrupted_execution(
     git_fixture, monkeypatch

@@ -179,7 +179,7 @@ class SystemdSupervisor:
                 text=True,
                 capture_output=True,
                 check=False,
-                timeout=None if "stop" in arguments else 5,
+                timeout=None if arguments[0] == "stop" else 5,
             )
         except OSError as error:
             raise SystemdSupervisorError(
@@ -385,6 +385,27 @@ class SystemdSupervisor:
         selected = unit_name(locator) if name is None else _validate_unit_name(name)
         self._run("--no-block", "stop", selected)
 
+    def wait_stopped(self, name: str) -> None:
+        """Check manager authority after the caller independently proves retirement."""
+        deadline = self._monotonic() + 10
+        while True:
+            fields = self.lifecycle_state(name)
+            if (
+                fields["MainPID"] == "0"
+                and fields["Job"] in {"", "0"}
+                and fields["ActiveState"] in {"inactive", "failed"}
+            ):
+                return
+            if self._monotonic() >= deadline:
+                raise SystemdSupervisorError(
+                    f"systemd stop job or owner remains for {name}"
+                )
+            self._sleep(0.05)
+
+    def submit_restart(self, name: str) -> None:
+        """Hand the already-retired external owner to its manager."""
+        self._run("--no-block", "restart", _validate_unit_name(name))
+
     def restart(
         self,
         locator: RuntimeLocator,
@@ -410,6 +431,13 @@ class SystemdSupervisor:
             "DropInPaths", "NeedDaemonReload", "ExecStart",
             "KillMode", "KillSignal", "TimeoutStopUSec", "Restart",
         )
+        return self._observe(name, properties)
+
+    def lifecycle_state(self, name: str) -> dict[str, str]:
+        """Observe manager authority even after an inactive unit is unloaded."""
+        return self._observe(name, ("LoadState", "ActiveState", "MainPID", "Job"))
+
+    def _observe(self, name: str, properties: tuple[str, ...]) -> dict[str, str]:
         self.probe_user_manager()
         result = self._run(
             "show", "--all", "--no-pager", "--property=" + ",".join(properties),

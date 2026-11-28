@@ -154,6 +154,7 @@ def dispatch_mutation(
         return {
             "accepted": True,
             "instance_id": _INSTANCE_ID,
+            "pid": os.getpid(),
             **lifecycle_result,
         }
     if request.method == "retry":

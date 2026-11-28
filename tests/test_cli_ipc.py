@@ -45,10 +45,10 @@ def test_stop_wait_requires_matching_completion_receipt(monkeypatch):
             return False
 
     locator = Locator()
-    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: None)
+    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator, **_: None)
     clock = iter((0.0, 11.0))
     monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
-    with pytest.raises(DevlegateError, match="without graceful stop completion"):
+    with pytest.raises(DevlegateError, match="without stop completion"):
         cli._wait_for_service_stop(locator, "request", "instance")
 
 def test_stop_wait_accepts_receipt_published_after_authority_release(monkeypatch):
@@ -65,13 +65,60 @@ def test_stop_wait_accepts_receipt_published_after_authority_release(monkeypatch
         "action": "stop",
         "state": "completed",
     }
-    receipts = iter((None, receipt))
-    monkeypatch.setattr(cli, "read_lifecycle_receipt", lambda _locator: next(receipts))
+    receipts = iter((None, None, receipt, receipt))
+    monkeypatch.setattr(
+        cli, "read_lifecycle_receipt", lambda _locator, **_: next(receipts),
+    )
     monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
     clock = iter((0.0, 1.0, 2.0))
     monkeypatch.setattr(cli.time, "monotonic", lambda: next(clock))
 
     cli._wait_for_service_stop(locator, "request", "instance")
+
+
+def test_systemd_no_reply_reports_uncertainty_after_force_admission(
+    git_fixture, monkeypatch, capsys,
+):
+    locator = RuntimeLocator.from_env(git_fixture["config"])
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command[2:])
+        if command[2] == "show":
+            return subprocess.CompletedProcess(
+                command, 0,
+                "LoadState=loaded\nActiveState=active\nMainPID=123\nJob=\n", "",
+            )
+        if command[2] == "--no-block":
+            assert kwargs["timeout"] == 5
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        assert command[2] == "show-environment"
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    name = cli.unit_name(locator)
+    supervisor = cli.SystemdSupervisor(runner=runner)
+    monkeypatch.setattr(
+        cli, "_managed_systemd_owner",
+        lambda _: cli.ManagedSystemdOwner(supervisor, name),
+    )
+
+    def admit(path, action, *, payload, **kwargs):
+        assert path == locator.socket_path and action == "stop" and kwargs["mutable"]
+        assert payload == {"force": True}
+        assert not calls
+        return {
+            "accepted": True, "request_id": "canonical", "instance_id": "old",
+            "pid": 123, "workers": {"active": 1}, "force": True,
+        }
+
+    monkeypatch.setattr(cli, "request", admit)
+    with pytest.raises(
+        DevlegateError, match=r"admitted \(canonical\).*outcome uncertain",
+    ):
+        cli._stop_service(git_fixture["config"], True)
+    assert calls[-1] == ["--no-block", "stop", name]
+    assert "service stopped" not in capsys.readouterr().out
+
 
 @pytest.mark.parametrize("replacement_id", ["T-1", "T-2"])
 def test_real_service_drop_retire_old_lineage_and_runs_fresh(

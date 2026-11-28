@@ -886,54 +886,69 @@ class ServiceEngine:
             raise DevlegateError(f"unsupported lifecycle intent: {intent}")
         with self._operator_command_lock:
             with self._lifecycle_lock:
-                if self._lifecycle_intent is not None:
-                    if self._lifecycle_intent != intent:
-                        raise DevlegateError(
-                            f"service {self._lifecycle_intent} is already accepted"
-                        )
-                    if force:
-                        self._lifecycle_force = True
-                        self._record_forced_lifecycle_abort()
-                        stop_event = self._stop_event
-                        if stop_event is not None:
-                            request_abort = getattr(stop_event, "request", None)
-                            if callable(request_abort):
-                                request_abort("operator_abort", source="operator_abort")
-                            else:
-                                stop_event.kind = "operator_abort"
-                                stop_event.source = "operator_abort"
-                                stop_event.set()
+                if self._lifecycle_intent not in {None, intent}:
+                    raise DevlegateError(
+                        f"service {self._lifecycle_intent} is already accepted"
+                    )
+                if self._lifecycle_phase == "settling":
+                    if self._lifecycle_intent is None:
+                        raise DevlegateError("service owner is already exiting")
                     return self.lifecycle_status_payload()
-                self._workers.begin_drain()
-                self._lifecycle_intent = intent
-                self._lifecycle_phase = "draining"
-                self._lifecycle_request_id = request_id
-                self._lifecycle_force = force
-                if force:
-                    self._record_forced_lifecycle_abort(request_id)
-                stop_event = self._stop_event
-                if force and stop_event is not None:
-                    request_abort = getattr(stop_event, "request", None)
-                    if callable(request_abort):
-                        request_abort("operator_abort", source="operator_abort")
-                    else:
-                        stop_event.kind = "operator_abort"
-                        stop_event.source = "operator_abort"
-                        stop_event.set()
-        self.wake()
-        return self.lifecycle_status_payload()
+                if self._lifecycle_intent is None:
+                    self._workers.begin_drain()
+                    self._lifecycle_intent = intent
+                    self._lifecycle_phase = "draining"
+                    self._lifecycle_request_id = request_id
+                    self.wake()
+                if force and not self._lifecycle_force:
+                    self._record_forced_lifecycle_abort()
+                    self._lifecycle_force = True
+                    self._publish_force_permission()
+                    self.wake()
+                return self.lifecycle_status_payload()
 
-    def _record_forced_lifecycle_abort(self, request_id: str | None = None) -> None:
+    def _publish_force_permission(self) -> None:
+        stop_event = self._stop_event
+        if stop_event is not None:
+            request_abort = getattr(stop_event, "request", None)
+            if callable(request_abort):
+                request_abort("operator_abort", source="force")
+            else:
+                stop_event.kind = "operator_abort"
+                stop_event.source = "force"
+                stop_event.set()
+
+    def _record_forced_lifecycle_abort(self) -> None:
         """Durably record forced worker interruption before signalling it."""
         with self._state_write_lock:
             if self._state_write_uncertain:
                 raise DevlegateError(
                     "runtime state write outcome uncertain; restart required"
                 )
-            self._record_forced_lifecycle_abort_locked(request_id)
+            self._record_forced_lifecycle_abort_locked()
 
-    def _record_forced_lifecycle_abort_locked(self, request_id: str | None) -> None:
+    def _record_forced_lifecycle_abort_locked(self) -> None:
+        if self._state.get("phase") == "agent_running" and self._state.get(
+            "execution_stage"
+        ) not in {"worker-launch", "worker-running"}:
+            # Force cannot retroactively cancel an already retired worker or
+            # reclassify an admitted checkpoint/publication effect.
+            return
         if self._state.get("phase") not in {"agent_pending", "agent_running"}:
+            analysis = self._state.get("abandonment_analysis")
+            if isinstance(analysis, dict) and analysis.get("stage") == "running":
+                admission = AbandonmentAdmission.restore(
+                    self._state.get("abandonment_admission")
+                ).as_dict()
+                identity = analysis.get("worker_identity")
+                if identity is not None and _worker_identity_from_value(
+                    identity, admission["execution_id"]
+                ) is None:
+                    raise DevlegateError("analysis cancellation identity is unproven")
+                self._save_state(
+                    "idle",
+                    abandonment_analysis={**analysis, "interruption": "operator_abort"},
+                )
             return
         if not all(
             isinstance(self._state.get(field), str) and self._state[field]
@@ -943,11 +958,11 @@ class ServiceEngine:
                 "execution_base_head",
             )
         ):
-            return
+            raise DevlegateError("forced cancellation execution identity is unproven")
         fields: dict[str, object] = {}
         if self._state.get("execution_interruption_kind") != "worker_stalled":
             fields["execution_interruption_kind"] = "operator_abort"
-        request_id = request_id or self._lifecycle_request_id
+        request_id = self._lifecycle_request_id
         if self._lifecycle_intent == "stop" and request_id is not None:
             # The low-level abort alone is not sufficient to infer operator
             # retry authority.
@@ -962,16 +977,14 @@ class ServiceEngine:
 
     def lifecycle_status_payload(self) -> dict[str, object]:
         with self._lifecycle_lock:
-            intent = self._lifecycle_intent
-            phase = self._lifecycle_phase
-        return {
-            "intent": intent or "none",
-            "phase": phase,
-            "ready": self._service_ready,
-            "request_id": self._lifecycle_request_id,
-            "workers": {"active": self._workers.active_count},
-            "force": self._lifecycle_force,
-        }
+            return {
+                "intent": self._lifecycle_intent or "none",
+                "phase": self._lifecycle_phase,
+                "ready": self._service_ready,
+                "request_id": self._lifecycle_request_id,
+                "workers": {"active": self._workers.active_count},
+                "force": self._lifecycle_force,
+            }
 
     def mark_service_ready(self) -> None:
         with self._lifecycle_lock:
@@ -986,18 +999,36 @@ class ServiceEngine:
             return self._lifecycle_intent is not None
 
     def _lifecycle_exit_ready(self) -> bool:
-        if not self._lifecycle_drain_pending() or self._workers.active_count:
-            return False
-        if self._owned_execution_id is None:
-            return True
-        if self._state.get("phase") != "agent_running":
-            return True
-        return self._state.get("execution_stage") in {
-            "post-checkpoint",
-            "publishing",
-            "post-publication",
-            "lifecycle",
-        }
+        return self._lifecycle_drain_pending() and not self._workers.active_count
+
+    def settle_lifecycle(self) -> dict[str, object]:
+        """Freeze admission after owner work returns, before testing retirement."""
+        with self._lifecycle_lock:
+            self._lifecycle_phase = "settling"
+            return self.lifecycle_status_payload()
+
+    def require_lifecycle_retirement(self) -> None:
+        """Require the settled worker WAL, independent of Python worker count."""
+        with self._state_write_lock:
+            if self._state_write_uncertain:
+                raise DevlegateError("runtime state write outcome uncertain")
+            if (
+                self._workers.active_count
+                or self._state.get("worker_identity") is not None
+            ):
+                raise DevlegateError("worker retirement is unproven")
+            if self._state.get("phase") == "agent_running":
+                if self._state.get("execution_stage") not in {
+                    "post-worker", "checkpointing", "post-checkpoint",
+                    "publishing", "post-publication", "lifecycle",
+                }:
+                    raise DevlegateError(
+                        "worker retirement is unproven: launch WAL remains"
+                    )
+                self._execution_generation_binding().require_worker_retirement()
+            analysis = self._state.get("abandonment_analysis")
+            if isinstance(analysis, dict) and analysis.get("stage") == "running":
+                raise DevlegateError("analysis worker retirement is unproven")
 
     def begin_hosted_owner(self) -> None:
         owner = threading.get_ident()
@@ -3245,12 +3276,16 @@ class ServiceEngine:
 
     @contextmanager
     def _stop_context(self, stop_event: threading.Event | None):
-        previous = self._stop_event
-        self._stop_event = stop_event
+        with self._lifecycle_lock:
+            previous = self._stop_event
+            self._stop_event = stop_event
+            if self._lifecycle_force:
+                self._publish_force_permission()
         try:
             yield
         finally:
-            self._stop_event = previous
+            with self._lifecycle_lock:
+                self._stop_event = previous
 
     def _stop_requested(self) -> bool:
         return self._stop_event is not None and self._stop_event.is_set()
@@ -11151,8 +11186,9 @@ class ServiceEngine:
 
             def persist(**changes: object) -> None:
                 nonlocal analysis
-                analysis = {**analysis, **changes}
-                self._save_state("idle", abandonment_analysis=analysis)
+                with self._state_write_lock:
+                    analysis = {**self._state["abandonment_analysis"], **changes}
+                    self._save_state("idle", abandonment_analysis=analysis)
 
             with EvidenceSocket(bundle, workspace.path / "read.sock") as evidence:
                 persist(stage="running", launch_evidence=(

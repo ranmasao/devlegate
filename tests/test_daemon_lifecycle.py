@@ -81,7 +81,7 @@ def test_force_lifecycle_promotes_existing_shutdown_intent(tmp_path, monkeypatch
     assert accepted["request_id"] == "force-request"
     assert accepted["force"] is True
     assert intent.kind == "operator_abort"
-    assert intent.source == "operator_abort"
+    assert intent.source == "force"
     assert intent.is_set()
 
 @pytest.mark.parametrize(

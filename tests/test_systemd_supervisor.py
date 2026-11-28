@@ -391,7 +391,7 @@ def test_deactivating_is_a_valid_stopping_status(tmp_path: Path) -> None:
     assert supervisor.status(item) is True
 
 
-def test_stop_is_nonblocking_and_has_no_subprocess_timeout(tmp_path: Path) -> None:
+def test_stop_submission_is_nonblocking_and_bounded(tmp_path: Path) -> None:
     item = locator(tmp_path)
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -410,7 +410,24 @@ def test_stop_is_nonblocking_and_has_no_subprocess_timeout(tmp_path: Path) -> No
         "stop",
         unit_name(item),
     ]
-    assert calls[1][1]["timeout"] is None
+    assert calls[1][1]["timeout"] == 5
+
+
+def test_stop_submission_times_out_without_bypassing_manager(tmp_path: Path) -> None:
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append(command[2:])
+        if command[2] == "--no-block":
+            assert kwargs["timeout"] == 5
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    item = locator(tmp_path)
+    supervisor = SystemdSupervisor(runner=runner)
+    with pytest.raises(SystemdSupervisorError, match="did not respond"):
+        supervisor.stop(item)
+    assert calls == [["show-environment"], ["--no-block", "stop", unit_name(item)]]
 
 
 def test_remove_cannot_cross_project_provenance(tmp_path: Path) -> None:

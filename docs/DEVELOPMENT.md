@@ -78,6 +78,74 @@ just to reproduce CI. Local tests are a cheap defect filter, not complete
 regression proof: hosted exact-checkpoint CI runs the complete configured suite
 with coverage and lint and is required for independent review and integration.
 
+### Lifecycle outcomes and quiescent upgrade
+
+`stop` and `restart` acknowledgements belong to the live IPC instance. While
+the owner drains, another request for the same action receives the original
+canonical request ID; the opposing action is refused. `stop requested` means
+admission only. A force acknowledgement with `force=true` means the runtime
+committed the applicable execution interruption and manual-stop retry hold
+before giving the worker supervisor permission. A failure or ambiguous write
+grants no such permission. A force received after worker retirement does not
+reclassify a checkpoint or publication already in progress.
+
+The host writes exact lifecycle evidence under `STATE_DIR/lifecycle`, keyed by
+the state key and a digest of the IPC instance and canonical request ID. The
+existing state-key-only file is the latest-outcome view used by native-install
+inventory. IPC acknowledgements and SIGTERM do not publish `accepted` files.
+`completed` for stop records proved worker retirement; the client separately
+requires release of the owner lock and, for a managed unit, manager inactivity
+with no main process or job. `failed` is a refusal, even if the endpoint and
+lock disappear. Missing or indeterminate proof is not success. Internal restart
+retains the authority descriptor through exec and pairs the old handoff with the
+replacement's readiness. A managed restart submits a bounded nonblocking job
+from the proved retiring owner, then the CLI checks the old `retired` outcome
+and a different ready instance matching the manager's new main process.
+Neither a manager job nor an empty Python worker registry is a retirement proof.
+
+Install matching CLI and daemon artifacts at a quiescent boundary:
+
+1. With the old matched installation, settle any outstanding stop or restart.
+   Gracefully stop the resulting owner and record its instance and request.
+   Require independent process/containment retirement evidence, the owner
+   lock released, and, for systemd, the registered unit inactive with `MainPID=0`
+   and no pending job. Socket absence alone is insufficient. Keep other starts
+   and manager/job changes out of the upgrade window.
+2. Refuse installation over an unresolved lifecycle, worker launch, containment,
+   or external effect. Preserve the runtime SQLite/WAL, generation and operation
+   receipts, refs/pins, reports and reviews. Resolve uncertain effects with their
+   normal observe-first recovery, not by deleting evidence or replaying a push
+   by hand. No state conversion is required or authorized by this change.
+3. Verify the installed CLI and service executable are from the same validated
+   artifact, then use the existing mode's startup command. Require the startup
+   report and a fresh `ping` instance with `ready=true` under the expected owner
+   lock and, for systemd, the expected active unit/main process with no pending
+   job. Confirm `service status` for the intended project, including any manual
+   stop hold or recovery blocker, before enabling normal scheduling activity.
+
+The held-worker IPC test measured force admission at roughly 0.09–0.10 s and
+owner exit at 1.6–1.8 s locally. A scheduler Git input barrier and a real
+`post-receive` barrier each admitted graceful plus force in about 3 ms, with
+authority still held until Git returned. Injected loss of the post-push read
+left the publication WAL intact; recovery observed the same remote checkpoint
+and acknowledgement without re-pushing the execution or launching a worker.
+The ordinary mutable validation and receipt barriers delayed force admission
+until the operator lock was released (0.10–0.17 s with a deliberate 0.10 s
+hold); replay preserved the original SQLite receipt. These are measurements,
+not latency guarantees. S2 candidates are the operator lock held across
+validation/receipt work, state writer contention during force admission, and
+remaining Git/effect latency after admission. A timed-out IPC acknowledgement
+can still be uncertain; inspect the live lifecycle and durable evidence.
+
+The fake-manager no-reply case tests the submission timeout and CLI refusal,
+not systemd or kernel signal behavior. To exercise the real manager and
+delegation, run `DEVLEGATE_TEST_REAL_SYSTEMD=1 ./dev test -q
+tests/test_cli_topology.py::test_real_systemd_lifecycle_escalation` on Linux with
+a user manager and writable cgroup v2 delegation. This uses uniquely named
+transient units and disposable repositories; it does not replace installed
+units. The topology checks deactivation, requester loss, the canonical
+outcomes, and release of the actual worker cgroup.
+
 The internal [implementation transfer contract](implementation-transfer.md)
 documents the isolated preparation, installation and replay boundary shared by
 REWORK and active reconciliation.

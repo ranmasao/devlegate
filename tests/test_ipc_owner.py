@@ -3,6 +3,12 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Real owner-thread handoff, mutation admission, and receipt semantics."""
 
+import os
+import shlex
+import signal
+import subprocess
+from pathlib import Path
+
 from _ipc_support import (
     DevlegateError,
     IPCProtocolError,
@@ -16,6 +22,7 @@ from _ipc_support import (
     cli,
     daemon,
     dispatch_mutation,
+    git,
     json,
     make_engine,
     persist_agent_running,
@@ -30,7 +37,9 @@ from _ipc_support import (
 from _ipc_support import running_server as running_server
 
 import devlegate.runtime as runtime
+from devlegate.execution_containment import DeterministicContainmentProvider
 from devlegate.execution_workspace import ExecutionWorkspaceManager
+from devlegate.runtime_store import RuntimeStoreError
 
 
 @pytest.mark.parametrize("pause_at", ["validation", "receipt"])
@@ -92,10 +101,22 @@ def test_timeout_waiting_for_owner_lock_returns_committed_admission(
     owner.start()
     drain_started = threading.Event()
     drain_finished = threading.Event()
+    drain_results = []
+    server = UnixIPCServer(
+        engine, engine.ipc_socket_path,
+        lifecycle=lambda intent, rid, force: engine.request_lifecycle(
+            intent, rid, force=force,
+        ),
+    )
+    server.start()
 
     def drain():
+        started = time.monotonic()
         drain_started.set()
-        engine.request_lifecycle("stop", "drain-race")
+        response = request(
+            engine.ipc_socket_path, "drain-race", "stop", {"force": True},
+        )
+        drain_results.append((response.result, time.monotonic() - started))
         drain_finished.set()
 
     drainer = threading.Thread(target=drain)
@@ -104,15 +125,19 @@ def test_timeout_waiting_for_owner_lock_returns_committed_admission(
         assert timed_out.wait(2)
         drainer.start()
         assert drain_started.wait(2)
-        assert not drain_finished.is_set()
+        assert not drain_finished.wait(0.1)
     finally:
         release.set()
         owner.join(5)
         client.join(5)
         if drainer.ident is not None:
             drainer.join(5)
+        server.stop()
     assert not owner.is_alive() and not client.is_alive() and not drainer.is_alive()
     assert drain_finished.is_set()
+    (force, elapsed), = drain_results
+    assert force["request_id"] == "drain-race" and force["force"] is True
+    print(f"operator {pause_at} lock: force admission {elapsed:.3f}s")
     assert result == [{"accepted": True, "ticket_id": "T-1"}]
     assert engine._mutable_receipt("race")["accepted"] is True
     restarted = ServiceEngine(engine.env_file)
@@ -160,65 +185,280 @@ def test_claimed_timeout_before_owner_admission_is_unknown(
     engine._release_operator_command()
 
 
-def test_stop_completed_receipt_cannot_overtake_accepted_receipt(
+def test_terminal_stop_survives_late_repeat_and_sigterm(
     tmp_path, monkeypatch, short_state_dir
 ):
     engine, _state = make_engine(tmp_path, monkeypatch, short_state_dir)
     original_write = daemon.write_lifecycle_receipt
-    accepted_entered = threading.Event()
-    completion_attempted = threading.Event()
-    release_accepted = threading.Event()
-    ordering = []
+    repeat_entered = threading.Event()
+    completion_written = threading.Event()
+    release_repeat = threading.Event()
     client_result = []
     helper_threads = []
+    original_request = engine.request_lifecycle
+
+    def gated_request(intent, request_id, *, force=False):
+        result = original_request(intent, request_id, force=force)
+        if request_id == "repeat":
+            repeat_entered.set()
+            assert release_repeat.wait(timeout=5)
+        return result
 
     def gated_write(locator, payload):
-        if payload.get("action") == "stop" and payload.get("state") == "accepted":
-            accepted_entered.set()
-            assert release_accepted.wait(timeout=5)
         original_write(locator, payload)
         if payload.get("action") == "stop" and payload.get("state") == "completed":
-            completion_attempted.set()
+            os.kill(os.getpid(), signal.SIGTERM)
+            completion_written.set()
 
     monkeypatch.setattr(daemon, "write_lifecycle_receipt", gated_write)
+    monkeypatch.setattr(engine, "request_lifecycle", gated_request)
     receipt_path = engine._locator.state_dir / "lifecycle" / (
         f"{engine._locator.state_key}.json"
     )
-    original_serve = daemon.ServiceHost._serve_engine
 
     def host(service_host, stop_intent, **kwargs):
+        client_result.append(request(engine.ipc_socket_path, "first", "stop"))
         client = threading.Thread(
             target=lambda: client_result.append(
-                request(engine.ipc_socket_path, "stop", "stop")
+                request(engine.ipc_socket_path, "repeat", "stop")
             )
         )
 
-        def release_after_owner_probe():
+        def release_after_completion():
             try:
-                assert accepted_entered.wait(timeout=5)
-                ordering.append(completion_attempted.wait(timeout=0.5))
+                assert completion_written.wait(timeout=5)
             finally:
-                release_accepted.set()
+                release_repeat.set()
 
-        watcher = threading.Thread(target=release_after_owner_probe)
+        watcher = threading.Thread(target=release_after_completion)
         helper_threads.extend((client, watcher))
         client.start()
         watcher.start()
-        accepted_entered.wait(timeout=5)
+        assert repeat_entered.wait(timeout=5)
         return 0
 
     monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", host)
     try:
         assert daemon.run_service(engine) == 0
     finally:
-        release_accepted.set()
+        release_repeat.set()
         for helper in helper_threads:
             helper.join(timeout=5)
-        monkeypatch.setattr(daemon.ServiceHost, "_serve_engine", original_serve)
 
     assert all(not helper.is_alive() for helper in helper_threads)
-    assert ordering == [False]
+    results = [response.result for response in client_result]
+    assert [result["request_id"] for result in results] == ["first", "first"]
+    assert results[0]["instance_id"] == results[1]["instance_id"]
     assert json.loads(receipt_path.read_text())["state"] == "completed"
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_force_write_failure_never_grants_signal_permission(
+    tmp_path, monkeypatch, short_state_dir, committed,
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    persist_agent_running(
+        engine, short_state_dir, execution_id="held-execution", record_start=True,
+    )
+    engine._save_state("agent_running", execution_stage="worker-running")
+    before = engine._runtime_store.load()
+    replace = engine._runtime_store.replace
+
+    def fail_replace(value):
+        assert value["manual_retry_required"]["request_id"] == "graceful"
+        if committed:
+            replace(value)
+        raise RuntimeStoreError("injected uncertain cancellation")
+
+    monkeypatch.setattr(engine._runtime_store, "replace", fail_replace)
+    intent = daemon.ShutdownIntent()
+    with engine._stop_context(intent):
+        engine.request_lifecycle("stop", "graceful")
+        with pytest.raises(DevlegateError, match="uncertain cancellation"):
+            engine.request_lifecycle("stop", "force", force=True)
+        with pytest.raises(DevlegateError, match="outcome uncertain"):
+            engine.request_lifecycle("stop", "force-repeat", force=True)
+        assert not intent.is_set()
+        assert engine.lifecycle_status_payload()["force"] is False
+        with pytest.raises(DevlegateError, match="already accepted"):
+            engine.request_lifecycle("restart", "conflict", force=True)
+        with pytest.raises(DevlegateError, match="outcome uncertain"):
+            engine.require_lifecycle_retirement()
+    after = engine._runtime_store.load()
+    assert after["execution_id"] == before["execution_id"]
+    assert (after.get("manual_retry_required") is not None) is committed
+
+
+def test_force_admitted_during_scheduler_git_but_cannot_finish_before_git(
+    tmp_path, monkeypatch, short_state_dir,
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    fifo = tmp_path / "scheduler-input"
+    os.mkfifo(fifo)
+    entered = threading.Event()
+    evidence = []
+
+    def iteration():
+        entered.set()
+        result = engine._git_runtime(engine.repo, "hash-object", str(fifo))
+        evidence.append(result.stdout.strip())
+        return 0
+
+    monkeypatch.setattr(engine, "run_iteration", iteration)
+
+    def client():
+        assert entered.wait(5)
+        # Open blocks until the real Git child has opened its input.
+        with fifo.open("wb") as pipe:
+            started = time.monotonic()
+            graceful = request(engine.ipc_socket_path, "git-stop", "stop").result
+            forced = request(
+                engine.ipc_socket_path, "git-force", "stop", {"force": True},
+            ).result
+            evidence.append((graceful, forced, time.monotonic() - started))
+            assert engine._locator.daemon_authority_present()
+            assert not (engine._locator.state_dir / "lifecycle").exists()
+            pipe.write(b"scheduler Git still owns its input\n")
+
+    thread = threading.Thread(target=client)
+    thread.start()
+    assert daemon.run_service(engine) == 0
+    thread.join(5)
+    assert not thread.is_alive()
+    (graceful, forced, elapsed), git_result = evidence
+    assert graceful["request_id"] == forced["request_id"] == "git-stop"
+    assert forced["force"] is True
+    assert len(git_result) == 40
+    assert not engine._locator.daemon_authority_present()
+    print(f"scheduler Git: graceful + force admission {elapsed:.3f}s before Git exit")
+
+
+def test_force_during_git_publication_preserves_unknown_effect_for_exact_replay(
+    tmp_path, monkeypatch, short_state_dir,
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    remote = git(engine.repo, "remote", "get-url", "origin").stdout.strip()
+    hook = Path(remote) / "hooks" / "post-receive"
+    effect = tmp_path / "publication-entered"
+    release = tmp_path / "publication-release"
+    hook.write_text(
+        "#!/bin/sh\nwhile read old new ref; do\n"
+        "case $ref in refs/devlegate/publication/*)\n"
+        f"touch {shlex.quote(str(effect))}\n"
+        f"while ! test -e {shlex.quote(str(release))}; do sleep .01; done;;\n"
+        "esac\ndone\n"
+    )
+    hook.chmod(0o755)
+
+    def worker(workspace, *_args, **_kwargs):
+        (workspace.path / "effect.txt").write_text("one exact checkpoint\n")
+        return WorkerRunResult(0, None, WorkerClaim("completed", "done", (), ()), None)
+
+    monkeypatch.setattr(engine._workers, "run", worker)
+    run_git = engine._git_runtime
+
+    def lose_observation(repo, *args, **kwargs):
+        if release.exists() and args[0] == "ls-remote" and any(
+            arg.startswith("refs/devlegate/publication/") for arg in args
+        ):
+            return subprocess.CompletedProcess(args, 1, "", "lost observation")
+        return run_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(engine, "_git_runtime", lose_observation)
+    admitted = []
+
+    def client():
+        try:
+            deadline = time.monotonic() + 20
+            while not effect.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert effect.exists()
+            started = time.monotonic()
+            stop = request(engine.ipc_socket_path, "publish-stop", "stop").result
+            force = request(
+                engine.ipc_socket_path, "publish-force", "stop", {"force": True},
+            ).result
+            admitted.append((stop, force, time.monotonic() - started))
+            assert engine._locator.daemon_authority_present()
+        finally:
+            release.touch()
+
+    thread = threading.Thread(target=client)
+    thread.start()
+    assert daemon.run_service(engine) == 0
+    thread.join(5)
+    (stop, force, elapsed), = admitted
+    assert stop["request_id"] == force["request_id"] == "publish-stop"
+    assert force["force"] is True
+    wal = engine._runtime_store.load()
+    assert wal["execution_stage"] == "publishing"
+    assert not wal.get("manual_retry_required")
+    ref = f"refs/heads/{wal['execution_branch']}"
+    published = git(engine.repo, "ls-remote", "origin", ref).stdout.split()[0]
+    outcome = cli.read_lifecycle_receipt(
+        engine._locator, instance_id=stop["instance_id"], request_id=stop["request_id"],
+    )
+    assert outcome["state"] == "completed"
+
+    recovered = ServiceEngine(engine.env_file)
+    monkeypatch.setattr(
+        recovered._workers, "run", lambda *_: pytest.fail("worker reran"),
+    )
+    recover_git = recovered._git_runtime
+    pushes = []
+
+    def trace_replay(repo, *args, **kwargs):
+        if args[0] == "push":
+            pushes.append(args)
+        return recover_git(repo, *args, **kwargs)
+
+    monkeypatch.setattr(recovered, "_git_runtime", trace_replay)
+    assert run_test_iteration(recovered) == 0
+    assert recovered._runtime_store.load()["phase"] == "idle"
+    assert all(ref not in arg for args in pushes for arg in args)
+    assert git(engine.repo, "ls-remote", "origin", ref).stdout.split()[0] == published
+    print(f"stalled publication: graceful + force admission {elapsed:.3f}s")
+
+
+@pytest.mark.parametrize("empty", [None, False])
+def test_stop_preserves_worker_wal_when_leader_exits_without_containment_proof(
+    tmp_path, monkeypatch, short_state_dir, empty,
+):
+    engine, _ = make_engine(tmp_path, monkeypatch, short_state_dir)
+    launch = engine._workers.containment_provider.create
+
+    def containment(execution_id):
+        boundary = launch(execution_id)
+        monkeypatch.setattr(boundary, "wait_empty", lambda _timeout: empty)
+        return boundary
+
+    monkeypatch.setattr(
+        DeterministicContainmentProvider, "create", lambda _, eid: containment(eid),
+    )
+    record_identity = engine._record_worker_identity
+    response = []
+
+    def record(identity, **kwargs):
+        record_identity(identity, **kwargs)
+        response.append(request(engine.ipc_socket_path, "contained-stop", "stop"))
+
+    monkeypatch.setattr(engine, "_record_worker_identity", record)
+    worker = tmp_path / "short-worker"
+    worker.write_text("#!/bin/sh\nsleep .3\nexit 1\n")
+    worker.chmod(0o755)
+    monkeypatch.setattr(engine._workers, "opencode_bin", str(worker))
+    with pytest.raises(DevlegateError, match="retirement is unproven"):
+        daemon.run_service(engine)
+    assert response[0].result["request_id"] == "contained-stop"
+    state = engine._runtime_store.load()
+    assert state["execution_stage"] == "worker-running"
+    assert state["worker_identity"] is not None
+    assert engine._workers.active_count == 0
+    with pytest.raises(DevlegateError, match="stop blocked: .*retirement is unproven"):
+        cli._wait_for_service_stop(
+            engine._locator, "contained-stop", response[0].result["instance_id"],
+        )
+
 
 def test_unknown_owner_command_fails_closed(running_server):
     engine, _state, _server = running_server

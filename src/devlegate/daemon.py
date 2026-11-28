@@ -19,6 +19,7 @@ from devlegate.platform_support import HOSTED_RUNTIME_ERROR, hosted_runtime_supp
 from devlegate.runtime import DevlegateError
 from devlegate.service import ServiceEngine
 from devlegate.service_diagnostics import clear, create, write
+from devlegate.systemd_supervisor import SystemdSupervisor, SystemdSupervisorError
 
 
 class ShutdownIntent:
@@ -127,8 +128,9 @@ class ServiceHost:
             raise DevlegateError(HOSTED_RUNTIME_ERROR)
         stop_intent = ShutdownIntent()
         authority = self._acquire_authority()
-        restart_requested = False
-        lifecycle_receipt_ready = threading.Event()
+        outcome: dict[str, object] | None = None
+        reexec = False
+        managed_restart: tuple[SystemdSupervisor, str] | None = None
 
         def record_failure(error: BaseException, stage: str) -> None:
             try:
@@ -141,30 +143,44 @@ class ServiceHost:
         def request_lifecycle(
             intent: str, request_id: str, force: bool = False
         ) -> dict[str, object]:
+            nonlocal managed_restart
+            if (
+                intent == "restart"
+                and self.host_mode is HostingMode.EXTERNAL
+                and os.environ.get("INVOCATION_ID")
+                and managed_restart is None
+            ):
+                # Manager discovery is local; the on-disk registration alone
+                # does not authorize a job against the loaded unit.
+                supervisor = SystemdSupervisor()
+                try:
+                    unit = supervisor.managed_unit_for(self.engine._locator)
+                    if unit is not None:
+                        managed_restart = (supervisor, unit.name)
+                except SystemdSupervisorError as error:
+                    raise DevlegateError(str(error)) from error
             if (
                 intent == "restart"
                 and not force
                 and self.host_mode is not HostingMode.INTERNAL
+                and managed_restart is None
             ):
                 raise DevlegateError(
                     "restart is available only for internally hosted services"
                 )
-            service_log(f"lifecycle {intent} accepted through devlegate {intent}")
             result = self.engine.request_lifecycle(intent, request_id, force=force)
-            if force:
-                stop_intent.request("operator_abort", source="force")
-                self.engine.wake()
-            write_lifecycle_receipt(
-                self.engine._locator,
-                {
-                    "request_id": result["request_id"],
-                    "instance_id": _INSTANCE_ID,
-                    "action": intent,
-                    "state": "accepted",
-                },
-            )
-            lifecycle_receipt_ready.set()
+            service_log(f"lifecycle {intent} accepted: {result['request_id']}")
             return result
+
+        def settle() -> dict[str, object] | None:
+            status = self.engine.settle_lifecycle()
+            if status["intent"] == "none":
+                return None
+            return {
+                "request_id": status["request_id"],
+                "instance_id": _INSTANCE_ID,
+                "action": status["intent"],
+            }
 
         server = UnixIPCServer(
             self.engine,
@@ -180,6 +196,11 @@ class ServiceHost:
                     prepare_views()
                 if self.startup_report is not None:
                     self.startup_report()
+                mark_ready = getattr(self.engine, "mark_service_ready", None)
+                if mark_ready is not None:
+                    mark_ready()
+                if self.readiness_report is not None:
+                    self.readiness_report()
                 if self._handoff_request_id is not None:
                     if self._handoff_instance_id is None:
                         raise DevlegateError(
@@ -195,11 +216,6 @@ class ServiceHost:
                             "state": "completed",
                         },
                     )
-                mark_ready = getattr(self.engine, "mark_service_ready", None)
-                if mark_ready is not None:
-                    mark_ready()
-                if self.readiness_report is not None:
-                    self.readiness_report()
                 _notify_startup(self.startup_fd, "READY")
                 self.startup_fd = None
                 ready = True
@@ -207,28 +223,31 @@ class ServiceHost:
                     clear(self.engine._locator)
                 except BaseException as error:
                     service_log(f"service failure diagnostic clear failed: {error}")
-                result = self._serve_engine(
-                    stop_intent, lock_handle=authority
-                )
-                restart_requested = self.engine.lifecycle_intent() == "restart"
-                if self.engine.lifecycle_intent() == "stop":
-                    request_id = self.engine.lifecycle_status_payload()["request_id"]
-                    if not isinstance(request_id, str):
-                        raise DevlegateError(
-                            "stop lifecycle has no request identity"
-                        )
-                    if not lifecycle_receipt_ready.wait(timeout=10):
-                        raise DevlegateError(
-                            "stop lifecycle acceptance was not persisted"
-                        )
+                result = self._serve_engine(stop_intent, lock_handle=authority)
+                outcome = settle()
+                if outcome is not None:
+                    self.engine.require_lifecycle_retirement()
+                    if outcome["action"] == "restart" and managed_restart is not None:
+                        supervisor, unit = managed_restart
+                        try:
+                            fields = supervisor.lifecycle_state(unit)
+                            if fields["MainPID"] != str(os.getpid()):
+                                raise SystemdSupervisorError(
+                                    "systemd owner identity changed"
+                                )
+                            supervisor.submit_restart(unit)
+                        except SystemdSupervisorError as error:
+                            raise DevlegateError(
+                                f"systemd restart submission uncertain: {error}"
+                            ) from error
+                    reexec = (
+                        outcome["action"] == "restart"
+                        and self.host_mode is HostingMode.INTERNAL
+                    )
+                    state = "completed" if outcome["action"] == "stop" else "retired"
                     write_lifecycle_receipt(
                         self.engine._locator,
-                        {
-                            "request_id": request_id,
-                            "instance_id": _INSTANCE_ID,
-                            "action": "stop",
-                            "state": "completed",
-                        },
+                        {**outcome, "state": "handoff" if reexec else state},
                     )
             if stop_intent.is_set():
                 source = stop_intent.source or "signal"
@@ -239,6 +258,13 @@ class ServiceHost:
                 )
             return result
         except BaseException as error:
+            reexec = False
+            outcome = outcome or settle()
+            if outcome is not None:
+                write_lifecycle_receipt(
+                    self.engine._locator,
+                    {**outcome, "state": "failed", "error": str(error)},
+                )
             if self._handoff_request_id is not None and not ready:
                 write_lifecycle_receipt(
                     self.engine._locator,
@@ -261,73 +287,29 @@ class ServiceHost:
                 _notify_startup(
                     self.startup_fd, "FAILED service startup did not complete"
                 )
-            server.stop()
-            end_owner = getattr(self.engine, "end_hosted_owner", None)
-            if end_owner is not None:
-                end_owner()
-            if restart_requested:
-                if self.host_mode is not HostingMode.INTERNAL:
-                    force_restart = (
-                        self.engine.lifecycle_status_payload().get("force") is True
-                    )
-                    authority.close()
-                    if not force_restart:
-                        raise DevlegateError(
-                            "non-internal hosting cannot self-reexec for restart"
-                        )
-                    return result
-                request_id = self._handoff_request_id or ""
-                try:
-                    lifecycle_request_id = self.engine.lifecycle_status_payload()[
-                        "request_id"
-                    ]
-                    if not isinstance(lifecycle_request_id, str):
-                        raise DevlegateError(
-                            "restart lifecycle has no request identity"
-                        )
-                    request_id = lifecycle_request_id
+            try:
+                server.stop()
+                end_owner = getattr(self.engine, "end_hosted_owner", None)
+                if end_owner is not None:
+                    end_owner()
+                if reexec and outcome is not None:
+                    self._reexec(authority, str(outcome["request_id"]))
+                    raise DevlegateError("restart exec returned without replacement")
+            except BaseException as error:
+                if reexec and outcome is not None:
                     write_lifecycle_receipt(
                         self.engine._locator,
-                        {
-                            "request_id": request_id,
-                            "instance_id": _INSTANCE_ID,
-                            "action": "restart",
-                            "state": "handoff",
-                        },
-                    )
-                    self._reexec(authority, request_id)
-                except BaseException as error:
-                    write_lifecycle_receipt(
-                        self.engine._locator,
-                        {
-                            "request_id": request_id,
-                            "instance_id": _INSTANCE_ID,
-                            "action": "restart",
-                            "state": "failed",
-                            "error": str(error),
-                        },
+                        {**outcome, "state": "failed", "error": str(error)},
                     )
                     record_failure(error, "restart")
-                    authority.close()
-                    raise
-            else:
+                raise
+            finally:
                 authority.close()
 
     def _acquire_authority(self):
         if self._handoff_authority_fd is None:
             return self.engine._lock()
         if self._handoff_authority_key != self.engine._locator.state_key:
-            if self._handoff_request_id is not None:
-                write_lifecycle_receipt(
-                    self.engine._locator,
-                    {
-                        "request_id": self._handoff_request_id,
-                        "instance_id": self._handoff_instance_id,
-                        "action": "restart",
-                        "state": "failed",
-                        "error": "restart authority key does not match this runtime",
-                    },
-                )
             raise DevlegateError("restart authority key does not match this runtime")
         try:
             fd = int(self._handoff_authority_fd)
@@ -344,17 +326,6 @@ class ServiceHost:
             os.environ.pop("DEVLEGATE_RESTART_AUTHORITY_KEY", None)
             return handle
         except (ValueError, OSError) as error:
-            if self._handoff_request_id is not None:
-                write_lifecycle_receipt(
-                    self.engine._locator,
-                    {
-                        "request_id": self._handoff_request_id,
-                        "instance_id": self._handoff_instance_id,
-                        "action": "restart",
-                        "state": "failed",
-                        "error": str(error),
-                    },
-                )
             raise DevlegateError(f"cannot adopt restart authority: {error}") from error
 
     @contextmanager
