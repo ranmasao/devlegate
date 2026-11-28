@@ -1,0 +1,30 @@
+{
+  "code_base_head": "fb135883ef3ec584f456fddedc8daf7f723f2553",
+  "conclusion": "completed",
+  "control_head": "0ecfdfc65e0b52fc916dce0700e2a353ff412fb9",
+  "egress_error": null,
+  "egress_ok": true,
+  "execution_branch": "devlegate/work/TASK-207",
+  "execution_id": "9947ef6652e5493ea9a524e03e4c01a8",
+  "execution_path": "/home/ranma/.local/state/devlegate/worktrees/152fb81d6b3e50a37e3c9bc909e8c5ea46be263a6e716799c728420c5b697d91/work/TASK-207",
+  "process_returncode": 0,
+  "process_started": true,
+  "questions": [],
+  "reason": "valid worker claim",
+  "remaining": [],
+  "report_artifact": "executions/TASK-207/9947ef6652e5493ea9a524e03e4c01a8.md",
+  "report_sha256": "1997ed1ae5043b2f24d0f5c487439fd082c97bcf9ff1ef0b508385e97123eff3",
+  "resource_generation": "2cce09787c9369bd9f774360eb685688ed2405cc0c27d0b246735e701bbbf6c2",
+  "schema": "devlegate.execution-report.v1",
+  "ticket_id": "TASK-207",
+  "transport_error": null,
+  "transport_ok": true,
+  "worker_claim": {
+    "outcome": "completed",
+    "questions": [],
+    "remaining": [],
+    "report": "Focused lifecycle, IPC, daemon, systemd, snapshot and topology regressions pass; Ruff and git diff --check pass. A single long full topology run timed out and hit a reconciliation case that passed in isolation and as its full parametrized group. The opt-in real systemd topology test remains skipped locally, with its limitations documented in docs/DEVELOPMENT.md.",
+    "summary": "Hardened lifecycle retirement proof to accept only durable WAL retirement, exact identity/containment absence, or a WAL showing no launch, while refusing unproven containment. Narrowed force reclassification to admitted checkpoint/publication stages and documented the resulting evidence contract. Updated the snapshot callback expectation for the force signal source."
+  },
+  "workspace_head": "548857c5987d875be6411030f2d3347782655305"
+}
